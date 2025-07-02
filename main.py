@@ -172,7 +172,10 @@ app = FastAPI(
     title="Claude Code OpenAI API Wrapper",
     description="OpenAI-compatible API for Claude Code",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=None,  # Disable default docs
+    redoc_url=None,  # Disable default redoc
+    openapi_url=None  # We'll provide our own
 )
 
 # Configure CORS
@@ -608,19 +611,53 @@ async def health_check():
 async def swagger_ui():
     """Serve Swagger UI for API documentation."""
     try:
-        with open("swagger-ui.html", "r") as f:
+        # Try standalone version first
+        with open("swagger-ui-standalone.html", "r") as f:
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Swagger UI not found")
+        try:
+            # Fall back to simple version
+            with open("swagger-ui.html", "r") as f:
+                return HTMLResponse(content=f.read())
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Swagger UI not found")
 
 
 @app.get("/openapi.yaml", response_class=FileResponse)
-async def openapi_spec():
-    """Serve OpenAPI specification."""
+async def openapi_spec_yaml():
+    """Serve OpenAPI specification in YAML format."""
     try:
         return FileResponse("openapi.yaml", media_type="application/x-yaml")
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="OpenAPI specification not found")
+
+
+@app.get("/openapi.json")
+async def openapi_spec_json():
+    """Serve OpenAPI specification in JSON format."""
+    import yaml
+    try:
+        with open("openapi.yaml", "r") as f:
+            openapi_dict = yaml.safe_load(f)
+        return JSONResponse(content=openapi_dict)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="OpenAPI specification not found")
+    except Exception as e:
+        logger.error(f"Error converting OpenAPI spec to JSON: {e}")
+        raise HTTPException(status_code=500, detail="Error processing OpenAPI specification")
+
+
+@app.get("/openapi-fastapi.json")
+async def openapi_fastapi():
+    """Get FastAPI's auto-generated OpenAPI schema."""
+    from fastapi.openapi.utils import get_openapi
+    
+    return get_openapi(
+        title="Claude Code OpenAI API Wrapper",
+        version="1.0.0",
+        description="OpenAI-compatible API wrapper for Claude Code with session management and tool support",
+        routes=app.routes,
+    )
 
 
 @app.post("/v1/debug/request")
