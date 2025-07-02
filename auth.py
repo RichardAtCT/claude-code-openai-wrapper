@@ -32,6 +32,17 @@ class ClaudeCodeAuthManager:
     
     def _detect_auth_method(self) -> str:
         """Detect which Claude Code authentication method is configured."""
+        # Check for explicit AUTH_METHOD environment variable (for Docker)
+        auth_method = os.getenv("AUTH_METHOD")
+        if auth_method in ["browser", "api_key", "bedrock", "vertex"]:
+            if auth_method == "api_key":
+                return "anthropic"
+            elif auth_method == "browser":
+                return "browser"
+            else:
+                return auth_method
+        
+        # Fall back to original detection logic
         if os.getenv("CLAUDE_CODE_USE_BEDROCK") == "1":
             return "bedrock"
         elif os.getenv("CLAUDE_CODE_USE_VERTEX") == "1":
@@ -60,6 +71,8 @@ class ClaudeCodeAuthManager:
             status.update(self._validate_vertex_auth())
         elif method == "claude_cli":
             status.update(self._validate_claude_cli_auth())
+        elif method == "browser":
+            status.update(self._validate_browser_auth())
         else:
             status["errors"].append("No Claude Code authentication method configured")
         
@@ -166,6 +179,42 @@ class ClaudeCodeAuthManager:
             }
         }
     
+    def _validate_browser_auth(self) -> Dict[str, Any]:
+        """Validate browser-based authentication (for Docker)."""
+        # Check if we're in a Docker environment
+        is_docker = os.path.exists('/.dockerenv') or os.getenv('DOCKER_CONTAINER') == '1'
+        
+        if not is_docker:
+            return {
+                "valid": False,
+                "errors": ["Browser authentication is only supported in Docker environments"],
+                "config": {}
+            }
+        
+        # Check if auth has been completed
+        auth_verified = os.path.exists('/config/claude/.auth_verified')
+        
+        if auth_verified:
+            return {
+                "valid": True,
+                "errors": [],
+                "config": {
+                    "method": "Browser authentication",
+                    "note": "Authentication completed via browser",
+                    "docker_environment": True
+                }
+            }
+        else:
+            return {
+                "valid": False,
+                "errors": ["Browser authentication not yet completed. Please access the web GUI to authenticate."],
+                "config": {
+                    "method": "Browser authentication",
+                    "note": "Pending authentication via browser",
+                    "docker_environment": True
+                }
+            }
+    
     def get_claude_code_env_vars(self) -> Dict[str, str]:
         """Get environment variables needed for Claude Code SDK."""
         env_vars = {}
@@ -196,6 +245,11 @@ class ClaudeCodeAuthManager:
             # For CLI auth, don't set any environment variables
             # Let Claude Code SDK use the existing CLI authentication
             pass
+        
+        elif self.auth_method == "browser":
+            # For browser auth in Docker, we rely on the auth handler
+            # to manage the authentication process
+            env_vars["DOCKER_CONTAINER"] = "1"
         
         return env_vars
 

@@ -1,0 +1,13 @@
+{
+  "id": "docker-unraid-gui",
+  "started": "2025-07-02T13:12:00Z",
+  "lastUpdated": "2025-07-02T13:15:00Z",
+  "status": "active",
+  "phase": "complete",
+  "progress": {
+    "discovery": { "answered": 5, "total": 5 },
+    "detail": { "answered": 5, "total": 5 }
+  },
+  "contextFiles": ["auth.py", "claude_cli.py", "main.py", "pyproject.toml", "README.md"],
+  "relatedFeatures": ["docker", "gui", "authentication", "unraid"]
+}

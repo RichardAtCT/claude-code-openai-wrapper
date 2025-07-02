@@ -498,6 +498,136 @@ All tests should show:
 - **Real cost tracking** (e.g., $0.001-0.005 per test call)
 - **Accurate token counts** from SDK metadata
 
+## Docker Deployment 🐳
+
+### Quick Start with Docker
+
+The wrapper includes full Docker support with Ubuntu GUI for browser-based Claude authentication:
+
+```bash
+# Clone the repository
+git clone https://github.com/RichardAtCT/claude-code-openai-wrapper
+cd claude-code-openai-wrapper
+
+# Build and run with docker-compose
+docker-compose up -d
+
+# Access the services:
+# - API: http://localhost:8000
+# - Desktop GUI: http://localhost:6080 (for authentication)
+```
+
+### Docker Features
+
+- **Ubuntu Desktop Environment**: XFCE desktop accessible via web browser
+- **Automatic Authentication**: Browser opens automatically when auth is needed
+- **Persistent Storage**: Authentication tokens survive container restarts
+- **Multiple Auth Methods**: Browser, API key, Bedrock, or Vertex AI
+- **noVNC Web Access**: No VNC client needed - access desktop through browser
+
+### First-Time Setup
+
+1. **Access the Desktop**: Navigate to http://localhost:6080
+2. **Complete Authentication**: 
+   - Firefox will open automatically if authentication is needed
+   - Log in to Claude when prompted
+   - Authentication is saved persistently
+3. **Use the API**: Once authenticated, the API is available at http://localhost:8000
+
+### Docker Configuration
+
+#### Environment Variables
+
+```env
+# Display settings
+VNC_PASSWORD=changeme        # Change this!
+RESOLUTION=1920x1080x24      # Desktop resolution
+
+# Authentication method
+AUTH_METHOD=browser          # Options: browser, api_key, bedrock, vertex
+ANTHROPIC_API_KEY=           # For api_key method
+
+# API protection (optional)
+API_KEY=                     # Protect wrapper endpoints
+```
+
+#### Volumes
+
+The container uses these persistent volumes:
+- `/config/claude`: Authentication data
+- `/config/api`: API configuration
+- `/data`: User projects/data
+- `/var/log/supervisor`: Logs
+
+#### Building from Source
+
+```bash
+# Build the image
+docker build -f docker/Dockerfile -t claude-code-wrapper .
+
+# Run with custom settings
+docker run -d \
+  -p 8000:8000 \
+  -p 6080:6080 \
+  -e VNC_PASSWORD=mysecurepassword \
+  -v claude_auth:/config/claude \
+  claude-code-wrapper
+```
+
+### Unraid Deployment
+
+For Unraid users, a Community App template is included:
+
+1. **Add Template Repository** (if not using Community Apps):
+   ```
+   https://github.com/RichardAtCT/claude-code-openai-wrapper/tree/main/docker/unraid
+   ```
+
+2. **Install from Community Apps**:
+   - Search for "Claude Code Wrapper"
+   - Configure paths and passwords
+   - Start the container
+
+3. **Default Paths**:
+   - Config: `/mnt/user/appdata/claude-code-wrapper/`
+   - Ports: 8000 (API), 6080 (GUI)
+
+### Security Considerations
+
+- **Change VNC Password**: Always set a secure VNC password
+- **API Protection**: Use `API_KEY` environment variable for endpoint security
+- **Network Isolation**: Consider using Docker networks for additional security
+- **Volume Permissions**: Ensure proper permissions on mounted volumes
+
+### Troubleshooting Docker
+
+1. **Authentication Issues**:
+   ```bash
+   # Check auth handler logs
+   docker-compose logs -f claude-code-wrapper | grep auth-handler
+   
+   # Manually trigger auth check
+   docker exec claude-code-wrapper touch /tmp/need_auth
+   ```
+
+2. **Desktop Not Loading**:
+   ```bash
+   # Check VNC password was set correctly
+   docker-compose exec claude-code-wrapper cat /root/.vnc/passwd
+   
+   # Restart desktop services
+   docker-compose exec claude-code-wrapper supervisorctl restart desktop:*
+   ```
+
+3. **Container Health**:
+   ```bash
+   # Check container status
+   docker-compose ps
+   
+   # View all logs
+   docker-compose logs -f
+   ```
+
 ## License
 
 MIT License

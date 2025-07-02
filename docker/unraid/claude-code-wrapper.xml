@@ -1,0 +1,129 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>claude-code-wrapper</Name>
+  <Repository>your-dockerhub-username/claude-code-wrapper</Repository>
+  <Registry>https://hub.docker.com/r/your-dockerhub-username/claude-code-wrapper</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/RichardAtCT/claude-code-openai-wrapper/issues</Support>
+  <Project>https://github.com/RichardAtCT/claude-code-openai-wrapper</Project>
+  <Overview>Claude Code OpenAI API Wrapper with GUI authentication support.&#xD;
+&#xD;
+An OpenAI API-compatible wrapper for Claude Code that runs in Docker with a built-in Ubuntu desktop for browser-based authentication.&#xD;
+&#xD;
+Features:&#xD;
+- OpenAI-compatible API on port 8000&#xD;
+- Web-based desktop access via noVNC on port 6080&#xD;
+- Automatic Claude browser authentication&#xD;
+- Persistent authentication storage&#xD;
+- Support for multiple auth methods (Browser, API Key, Bedrock, Vertex)&#xD;
+&#xD;
+First Run:&#xD;
+1. Access the desktop at http://[IP]:6080&#xD;
+2. Complete Claude authentication in Firefox&#xD;
+3. API will be available at http://[IP]:8000&#xD;
+&#xD;
+Default VNC password: changeme (change this!)&#xD;
+</Overview>
+  <Category>Tools: Productivity:</Category>
+  <WebUI>http://[IP]:[PORT:6080]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/RichardAtCT/claude-code-openai-wrapper/main/docker/unraid/claude-code-wrapper.xml</TemplateURL>
+  <Icon>https://www.anthropic.com/favicon.ico</Icon>
+  <ExtraParams>--shm-size=1gb --security-opt seccomp=unconfined</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled></DateInstalled>
+  <DonateText>If you find this useful, consider starring the GitHub repo!</DonateText>
+  <DonateLink>https://github.com/RichardAtCT/claude-code-openai-wrapper</DonateLink>
+  <Description>Claude Code OpenAI-compatible API wrapper with browser authentication support</Description>
+  <Networking>
+    <Mode>bridge</Mode>
+    <Publish>
+      <Port>
+        <HostPort>8000</HostPort>
+        <ContainerPort>8000</ContainerPort>
+        <Protocol>tcp</Protocol>
+      </Port>
+      <Port>
+        <HostPort>6080</HostPort>
+        <ContainerPort>6080</ContainerPort>
+        <Protocol>tcp</Protocol>
+      </Port>
+    </Publish>
+  </Networking>
+  <Data>
+    <Volume>
+      <HostDir>/mnt/user/appdata/claude-code-wrapper/auth</HostDir>
+      <ContainerDir>/config/claude</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/appdata/claude-code-wrapper/api</HostDir>
+      <ContainerDir>/config/api</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/appdata/claude-code-wrapper/data</HostDir>
+      <ContainerDir>/data</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/appdata/claude-code-wrapper/logs</HostDir>
+      <ContainerDir>/var/log/supervisor</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+  </Data>
+  <Environment>
+    <Variable>
+      <Value>changeme</Value>
+      <Name>VNC_PASSWORD</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>1920x1080x24</Value>
+      <Name>RESOLUTION</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>browser</Value>
+      <Name>AUTH_METHOD</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value></Value>
+      <Name>ANTHROPIC_API_KEY</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value></Value>
+      <Name>API_KEY</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>600000</Value>
+      <Name>MAX_TIMEOUT</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>["*"]</Value>
+      <Name>CORS_ORIGINS</Name>
+      <Mode/>
+    </Variable>
+  </Environment>
+  <Labels/>
+  <Config Name="API Port" Target="8000" Default="8000" Mode="tcp" Description="OpenAI-compatible API endpoint" Type="Port" Display="always" Required="true" Mask="false">8000</Config>
+  <Config Name="noVNC Port" Target="6080" Default="6080" Mode="tcp" Description="Web-based desktop access" Type="Port" Display="always" Required="true" Mask="false">6080</Config>
+  <Config Name="Authentication Data" Target="/config/claude" Default="/mnt/user/appdata/claude-code-wrapper/auth" Mode="rw" Description="Persistent Claude authentication storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/claude-code-wrapper/auth</Config>
+  <Config Name="API Configuration" Target="/config/api" Default="/mnt/user/appdata/claude-code-wrapper/api" Mode="rw" Description="API configuration storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/claude-code-wrapper/api</Config>
+  <Config Name="User Data" Target="/data" Default="/mnt/user/appdata/claude-code-wrapper/data" Mode="rw" Description="User data and projects" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/claude-code-wrapper/data</Config>
+  <Config Name="Logs" Target="/var/log/supervisor" Default="/mnt/user/appdata/claude-code-wrapper/logs" Mode="rw" Description="Application logs" Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/claude-code-wrapper/logs</Config>
+  <Config Name="VNC Password" Target="VNC_PASSWORD" Default="changeme" Mode="" Description="Password for VNC/noVNC access" Type="Variable" Display="always" Required="true" Mask="true">changeme</Config>
+  <Config Name="Screen Resolution" Target="RESOLUTION" Default="1920x1080x24" Mode="" Description="Desktop resolution (WIDTHxHEIGHTxDEPTH)" Type="Variable" Display="always" Required="true" Mask="false">1920x1080x24</Config>
+  <Config Name="Authentication Method" Target="AUTH_METHOD" Default="browser" Mode="" Description="Authentication method: browser, api_key, bedrock, or vertex" Type="Variable" Display="always" Required="true" Mask="false">browser</Config>
+  <Config Name="Anthropic API Key" Target="ANTHROPIC_API_KEY" Default="" Mode="" Description="Direct API key (optional - for api_key auth method)" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="API Protection Key" Target="API_KEY" Default="" Mode="" Description="Optional API key to protect the wrapper endpoints" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Max Timeout" Target="MAX_TIMEOUT" Default="600000" Mode="" Description="Maximum timeout in milliseconds" Type="Variable" Display="advanced" Required="false" Mask="false">600000</Config>
+  <Config Name="CORS Origins" Target="CORS_ORIGINS" Default='["*"]' Mode="" Description="CORS allowed origins" Type="Variable" Display="advanced" Required="false" Mask="false">["*"]</Config>
+</Container>

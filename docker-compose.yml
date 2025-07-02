@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  claude-code-wrapper:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: claude-code-wrapper
+    restart: unless-stopped
+    
+    # Ports
+    ports:
+      - "8000:8000"     # API server
+      - "6080:6080"     # noVNC web interface
+    
+    # Environment variables
+    environment:
+      # Display settings
+      - DISPLAY=:1
+      - RESOLUTION=1920x1080x24
+      - VNC_PASSWORD=${VNC_PASSWORD:-changeme}
+      - NOVNC_PORT=6080
+      
+      # API settings
+      - API_PORT=8000
+      - API_KEY=${API_KEY:-}
+      - MAX_TIMEOUT=600000
+      - CORS_ORIGINS=["*"]
+      
+      # Authentication method (browser, api_key, bedrock, vertex)
+      - AUTH_METHOD=${AUTH_METHOD:-browser}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - AUTO_LOGIN=true
+      
+      # Optional: AWS Bedrock settings
+      - CLAUDE_CODE_USE_BEDROCK=${CLAUDE_CODE_USE_BEDROCK:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_REGION=${AWS_REGION:-}
+      
+      # Optional: Google Vertex AI settings
+      - CLAUDE_CODE_USE_VERTEX=${CLAUDE_CODE_USE_VERTEX:-}
+      - ANTHROPIC_VERTEX_PROJECT_ID=${ANTHROPIC_VERTEX_PROJECT_ID:-}
+      - CLOUD_ML_REGION=${CLOUD_ML_REGION:-}
+    
+    # Volumes for persistence
+    volumes:
+      # Claude authentication data
+      - claude_auth:/config/claude
+      # API configuration
+      - api_config:/config/api
+      # User data/projects
+      - user_data:/data
+      # Logs
+      - logs:/var/log/supervisor
+    
+    # Security options (needed for some GUI apps)
+    security_opt:
+      - seccomp:unconfined
+    
+    # Shared memory size (for browser)
+    shm_size: 1gb
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+# Named volumes
+volumes:
+  claude_auth:
+    driver: local
+  api_config:
+    driver: local
+  user_data:
+    driver: local
+  logs:
+    driver: local
