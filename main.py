@@ -350,6 +350,9 @@ async def generate_streaming_response(
         
         # Run Claude Code
         chunks_buffer = []
+        role_sent = False  # Track if we've sent the initial role chunk
+        content_sent = False  # Track if we've sent any content
+        
         async for chunk in claude_cli.run_completion(
             prompt=prompt,
             system_prompt=system_prompt,
@@ -362,43 +365,108 @@ async def generate_streaming_response(
             chunks_buffer.append(chunk)
             
             # Check if we have an assistant message
+            # Handle both old format (type/message structure) and new format (direct content)
+            content = None
             if chunk.get("type") == "assistant" and "message" in chunk:
+                # Old format: {"type": "assistant", "message": {"content": [...]}}
                 message = chunk["message"]
                 if isinstance(message, dict) and "content" in message:
                     content = message["content"]
+            elif "content" in chunk and isinstance(chunk["content"], list):
+                # New format: {"content": [TextBlock(...)]}  (converted AssistantMessage)
+                content = chunk["content"]
+            
+            if content is not None:
+                # Send initial role chunk if we haven't already
+                if not role_sent:
+                    initial_chunk = ChatCompletionStreamResponse(
+                        id=request_id,
+                        model=request.model,
+                        choices=[StreamChoice(
+                            index=0,
+                            delta={"role": "assistant", "content": ""},
+                            finish_reason=None
+                        )]
+                    )
+                    yield f"data: {initial_chunk.model_dump_json()}\n\n"
+                    role_sent = True
+                
+                # Handle content blocks
+                if isinstance(content, list):
+                    for block in content:
+                        # Handle TextBlock objects from Claude Code SDK
+                        if hasattr(block, 'text'):
+                            raw_text = block.text
+                        # Handle dictionary format for backward compatibility
+                        elif isinstance(block, dict) and block.get("type") == "text":
+                            raw_text = block.get("text", "")
+                        else:
+                            continue
+                            
+                        # Filter out tool usage and thinking blocks
+                        filtered_text = MessageAdapter.filter_content(raw_text)
+                            
+                        if filtered_text and not filtered_text.isspace():
+                            # Create streaming chunk
+                            stream_chunk = ChatCompletionStreamResponse(
+                                id=request_id,
+                                model=request.model,
+                                choices=[StreamChoice(
+                                    index=0,
+                                    delta={"content": filtered_text},
+                                    finish_reason=None
+                                )]
+                            )
+                            
+                            yield f"data: {stream_chunk.model_dump_json()}\n\n"
+                            content_sent = True
+                
+                elif isinstance(content, str):
+                    # Filter out tool usage and thinking blocks
+                    filtered_content = MessageAdapter.filter_content(content)
                     
-                    # Handle content blocks
-                    if isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                text = block.get("text", "")
-                                
-                                # Create streaming chunk
-                                stream_chunk = ChatCompletionStreamResponse(
-                                    id=request_id,
-                                    model=request.model,
-                                    choices=[StreamChoice(
-                                        index=0,
-                                        delta={"content": text},
-                                        finish_reason=None
-                                    )]
-                                )
-                                
-                                yield f"data: {stream_chunk.model_dump_json()}\n\n"
-                    
-                    elif isinstance(content, str):
+                    if filtered_content and not filtered_content.isspace():
                         # Create streaming chunk
                         stream_chunk = ChatCompletionStreamResponse(
                             id=request_id,
                             model=request.model,
                             choices=[StreamChoice(
                                 index=0,
-                                delta={"content": content},
+                                delta={"content": filtered_content},
                                 finish_reason=None
                             )]
                         )
                         
                         yield f"data: {stream_chunk.model_dump_json()}\n\n"
+                        content_sent = True
+        
+        # Handle case where no role was sent (send at least role chunk)
+        if not role_sent:
+            # Send role chunk with empty content if we never got any assistant messages
+            initial_chunk = ChatCompletionStreamResponse(
+                id=request_id,
+                model=request.model,
+                choices=[StreamChoice(
+                    index=0,
+                    delta={"role": "assistant", "content": ""},
+                    finish_reason=None
+                )]
+            )
+            yield f"data: {initial_chunk.model_dump_json()}\n\n"
+            role_sent = True
+        
+        # If we sent role but no content, send a minimal response
+        if role_sent and not content_sent:
+            fallback_chunk = ChatCompletionStreamResponse(
+                id=request_id,
+                model=request.model,
+                choices=[StreamChoice(
+                    index=0,
+                    delta={"content": "I'm unable to provide a response at the moment."},
+                    finish_reason=None
+                )]
+            )
+            yield f"data: {fallback_chunk.model_dump_json()}\n\n"
         
         # Extract assistant response from all chunks for session storage
         if actual_session_id and chunks_buffer:
@@ -531,10 +599,13 @@ async def chat_completions(
                 chunks.append(chunk)
             
             # Extract assistant message
-            assistant_content = claude_cli.parse_claude_message(chunks)
+            raw_assistant_content = claude_cli.parse_claude_message(chunks)
             
-            if not assistant_content:
+            if not raw_assistant_content:
                 raise HTTPException(status_code=500, detail="No response from Claude Code")
+            
+            # Filter out tool usage and thinking blocks
+            assistant_content = MessageAdapter.filter_content(raw_assistant_content)
             
             # Add assistant response to session if using session mode
             if actual_session_id:
