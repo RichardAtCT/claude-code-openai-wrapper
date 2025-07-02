@@ -411,6 +411,10 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 
 ## API Documentation (Swagger/OpenAPI)
 
+### 🌐 Interactive Documentation
+
+Access the interactive Swagger UI at: **http://localhost:8000/docs** (or http://192.168.1.11:8000/docs for Docker)
+
 ### 📋 Complete API Reference
 
 #### **POST /v1/chat/completions**

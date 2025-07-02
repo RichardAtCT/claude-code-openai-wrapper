@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from dotenv import load_dotenv
@@ -602,6 +602,25 @@ async def check_compatibility(request_body: ChatCompletionRequest):
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy", "service": "claude-code-openai-wrapper"}
+
+
+@app.get("/docs", response_class=HTMLResponse)
+async def swagger_ui():
+    """Serve Swagger UI for API documentation."""
+    try:
+        with open("swagger-ui.html", "r") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Swagger UI not found")
+
+
+@app.get("/openapi.yaml", response_class=FileResponse)
+async def openapi_spec():
+    """Serve OpenAPI specification."""
+    try:
+        return FileResponse("openapi.yaml", media_type="application/x-yaml")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="OpenAPI specification not found")
 
 
 @app.post("/v1/debug/request")

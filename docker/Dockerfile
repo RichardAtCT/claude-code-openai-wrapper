@@ -79,6 +79,10 @@ COPY examples ./examples/
 # Copy README.md if it exists (needed by poetry)
 COPY README.m[d] ./
 
+# Copy API documentation files
+COPY openapi.yaml ./
+COPY swagger-ui.html ./
+
 # Install Python dependencies
 ENV PATH="/root/.local/bin:$PATH"
 RUN poetry config virtualenvs.create false && \
