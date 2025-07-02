@@ -506,7 +506,7 @@ The wrapper includes full Docker support with Ubuntu GUI for browser-based Claud
 
 ```bash
 # Clone the repository
-git clone https://github.com/RichardAtCT/claude-code-openai-wrapper
+git clone https://github.com/jorge123255/claude-code-openai-wrapper
 cd claude-code-openai-wrapper
 
 # Build and run with docker-compose
@@ -516,6 +516,22 @@ docker-compose up -d
 # - API: http://localhost:8000
 # - Desktop GUI: http://localhost:6080 (for authentication)
 ```
+
+### Important Notes for Docker Setup
+
+**Node.js Version**: The container requires Node.js 20+ for Claude CLI. The Dockerfile automatically installs the correct version.
+
+**First Run Authentication**:
+1. Access the desktop at http://localhost:6080 (default VNC password: `changeme`)
+2. Open a terminal in the desktop
+3. Run `claude auth login` 
+4. Copy the URL and paste it into Firefox to complete authentication
+5. Start the API server: `echo "n" | python3 /app/main.py &`
+
+**Known Issues & Solutions**:
+- If you get syntax errors with f-strings, the main.py file has been fixed
+- The API server prompts for API key protection - answer "n" for no protection or set `API_KEY=""` environment variable
+- Browser authentication requires manual intervention on first run
 
 ### Docker Features
 
@@ -580,8 +596,12 @@ For Unraid users, a Community App template is included:
 
 1. **Add Template Repository** (if not using Community Apps):
    ```
-   https://github.com/RichardAtCT/claude-code-openai-wrapper/tree/main/docker/unraid
+   https://github.com/jorge123255/claude-code-openai-wrapper/tree/main/docker/unraid
    ```
+   
+2. **Network Configuration**: 
+   - Use bridge network with custom IP (e.g., 192.168.1.11)
+   - Or use `br0` network type for direct LAN access
 
 2. **Install from Community Apps**:
    - Search for "Claude Code Wrapper"

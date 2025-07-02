@@ -1,0 +1,41 @@
+# Slimmer version for faster builds - API key authentication only
+FROM python:3.11-slim
+
+# Install basic dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    nodejs \
+    npm \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# Install Poetry
+RUN curl -sSL https://install.python-poetry.org | python3 -
+
+# Set up working directory
+WORKDIR /app
+
+# Copy application files
+COPY pyproject.toml ./
+COPY poetry.loc[k] ./
+COPY *.py ./
+COPY examples ./examples/
+COPY README.m[d] ./
+
+# Install Python dependencies
+ENV PATH="/root/.local/bin:$PATH"
+RUN poetry config virtualenvs.create false && \
+    poetry install --no-interaction --no-ansi --no-root
+
+# Environment variables
+ENV API_PORT=8000
+ENV AUTH_METHOD=api_key
+
+# Expose port
+EXPOSE 8000
+
+# Run the API server
+CMD ["python", "main.py"]

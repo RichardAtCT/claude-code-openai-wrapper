@@ -1,10 +1,4 @@
-# Multi-stage build for Claude Code OpenAI Wrapper with GUI support
-
-# Stage 1: Build Claude CLI
-FROM node:20-alpine AS claude-cli
-RUN npm install -g @anthropic-ai/claude-code
-
-# Stage 2: Main container with Ubuntu GUI
+# Dockerfile for Claude Code OpenAI Wrapper with GUI support
 FROM ubuntu:22.04
 
 # Prevent interactive prompts during installation
@@ -19,8 +13,9 @@ RUN apt-get update && apt-get install -y \
     xfce4 \
     xfce4-terminal \
     dbus-x11 \
-    # Web browser for authentication
-    firefox \
+    # Snap support for Firefox
+    snapd \
+    squashfs-tools \
     # VNC and noVNC
     novnc \
     websockify \
@@ -38,22 +33,35 @@ RUN apt-get update && apt-get install -y \
     git \
     nano \
     htop \
-    # Node.js (for Claude CLI)
-    nodejs \
-    npm \
+    software-properties-common \
     # Dependencies for browser automation
     libgtk-3-0 \
     libgbm-dev \
     libnss3 \
     libxss1 \
     libasound2 \
+    # Browser alternatives
+    chromium-browser \
     # Clean up
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Claude CLI from stage 1
-COPY --from=claude-cli /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code
-COPY --from=claude-cli /usr/local/bin/claude /usr/local/bin/claude
+# Install Firefox via Mozilla PPA as a fallback
+RUN add-apt-repository -y ppa:mozillateam/ppa && \
+    echo 'Package: *\nPin: release o=LP-PPA-mozillateam\nPin-Priority: 1001' | tee /etc/apt/preferences.d/mozilla-firefox && \
+    apt-get update && \
+    apt-get install -y firefox && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20 from NodeSource
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Claude CLI directly in this stage
+RUN npm install -g @anthropic-ai/claude-code
 
 # Install Poetry
 RUN curl -sSL https://install.python-poetry.org | python3 -
@@ -62,14 +70,19 @@ RUN curl -sSL https://install.python-poetry.org | python3 -
 WORKDIR /app
 
 # Copy application files
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml ./
+# Copy poetry.lock if it exists (make it optional for now)
+COPY poetry.loc[k] ./
 COPY *.py ./
 COPY examples ./examples/
+
+# Copy README.md if it exists (needed by poetry)
+COPY README.m[d] ./
 
 # Install Python dependencies
 ENV PATH="/root/.local/bin:$PATH"
 RUN poetry config virtualenvs.create false && \
-    poetry install --no-interaction --no-ansi
+    poetry install --no-interaction --no-ansi --no-root
 
 # Copy Docker-specific files
 COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf

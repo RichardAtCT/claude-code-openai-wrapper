@@ -106,14 +106,30 @@ class DockerAuthHandler:
             # Wait a bit for the process to output the URL
             time.sleep(2)
             
-            # Launch Firefox
-            logger.info("Opening Firefox...")
-            subprocess.Popen(
-                ["firefox", "--new-window"],
-                env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+            # Try to launch a browser
+            browsers = ["firefox", "chromium-browser", "google-chrome"]
+            browser_launched = False
+            
+            for browser in browsers:
+                try:
+                    logger.info(f"Trying to open {browser}...")
+                    subprocess.Popen(
+                        [browser, "--new-window"],
+                        env=env,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    browser_launched = True
+                    logger.info(f"Successfully launched {browser}")
+                    break
+                except FileNotFoundError:
+                    logger.warning(f"{browser} not found, trying next...")
+                except Exception as e:
+                    logger.warning(f"Error launching {browser}: {e}")
+            
+            if not browser_launched:
+                logger.error("No browser could be launched! Please install Firefox or Chromium.")
+                return False
             
             # Monitor for successful authentication
             logger.info("Waiting for authentication to complete...")
