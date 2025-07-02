@@ -185,57 +185,66 @@ app.add_middleware(
 )
 
 # Add debug logging middleware
-@app.middleware("http")
-async def debug_logging_middleware(request: Request, call_next):
-    """Log request/response details when debug mode is enabled."""
-    if not (DEBUG_MODE or VERBOSE):
-        return await call_next(request)
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class DebugLoggingMiddleware(BaseHTTPMiddleware):
+    """ASGI-compliant middleware for logging request/response details when debug mode is enabled."""
     
-    # Log request details
-    start_time = asyncio.get_event_loop().time()
-    
-    # Log basic request info
-    logger.debug(f"🔍 Incoming request: {request.method} {request.url}")
-    logger.debug(f"🔍 Headers: {dict(request.headers)}")
-    
-    # Log request body for POST requests
-    if request.method == "POST" and request.url.path.startswith("/v1/"):
+    async def dispatch(self, request: Request, call_next):
+        if not (DEBUG_MODE or VERBOSE):
+            return await call_next(request)
+        
+        # Log request details
+        start_time = asyncio.get_event_loop().time()
+        
+        # Log basic request info
+        logger.debug(f"🔍 Incoming request: {request.method} {request.url}")
+        logger.debug(f"🔍 Headers: {dict(request.headers)}")
+        
+        # For POST requests, try to log body (but don't break if we can't)
+        body_logged = False
+        if request.method == "POST" and request.url.path.startswith("/v1/"):
+            try:
+                # Only attempt to read body if it's reasonable size and content-type
+                content_length = request.headers.get("content-length")
+                if content_length and int(content_length) < 100000:  # Less than 100KB
+                    body = await request.body()
+                    if body:
+                        try:
+                            import json as json_lib
+                            parsed_body = json_lib.loads(body.decode())
+                            logger.debug(f"🔍 Request body: {json_lib.dumps(parsed_body, indent=2)}")
+                            body_logged = True
+                        except:
+                            logger.debug(f"🔍 Request body (raw): {body.decode()[:500]}...")
+                            body_logged = True
+            except Exception as e:
+                logger.debug(f"🔍 Could not read request body: {e}")
+        
+        if not body_logged and request.method == "POST":
+            logger.debug("🔍 Request body: [not logged - streaming or large payload]")
+        
+        # Process the request
         try:
-            body = await request.body()
-            if body:
-                # Decode and parse JSON to log it nicely
-                try:
-                    import json as json_lib
-                    parsed_body = json_lib.loads(body.decode())
-                    logger.debug(f"🔍 Request body: {json_lib.dumps(parsed_body, indent=2)}")
-                except:
-                    logger.debug(f"🔍 Request body (raw): {body.decode()}")
-                
-                # Recreate request with the body we consumed
-                async def receive():
-                    return {"type": "http.request", "body": body}
-                request._receive = receive
+            response = await call_next(request)
+            
+            # Log response details
+            end_time = asyncio.get_event_loop().time()
+            duration = (end_time - start_time) * 1000  # Convert to milliseconds
+            
+            logger.debug(f"🔍 Response: {response.status_code} in {duration:.2f}ms")
+            
+            return response
+            
         except Exception as e:
-            logger.debug(f"🔍 Could not read request body: {e}")
-    
-    # Process the request
-    try:
-        response = await call_next(request)
-        
-        # Log response details
-        end_time = asyncio.get_event_loop().time()
-        duration = (end_time - start_time) * 1000  # Convert to milliseconds
-        
-        logger.debug(f"🔍 Response: {response.status_code} in {duration:.2f}ms")
-        
-        return response
-        
-    except Exception as e:
-        end_time = asyncio.get_event_loop().time()
-        duration = (end_time - start_time) * 1000
-        
-        logger.debug(f"🔍 Request failed after {duration:.2f}ms: {e}")
-        raise
+            end_time = asyncio.get_event_loop().time()
+            duration = (end_time - start_time) * 1000
+            
+            logger.debug(f"🔍 Request failed after {duration:.2f}ms: {e}")
+            raise
+
+# Add the debug middleware
+app.add_middleware(DebugLoggingMiddleware)
 
 
 # Custom exception handler for 422 validation errors
