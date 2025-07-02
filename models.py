@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Any, Union, Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import datetime
 import uuid
 import logging
@@ -7,10 +7,33 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class ContentPart(BaseModel):
+    """Content part for multimodal messages (OpenAI format)."""
+    type: Literal["text"]
+    text: str
+
+
 class Message(BaseModel):
     role: Literal["system", "user", "assistant"]
-    content: str
+    content: Union[str, List[ContentPart]]
     name: Optional[str] = None
+    
+    @model_validator(mode='after')
+    def normalize_content(self):
+        """Convert array content to string for Claude Code compatibility."""
+        if isinstance(self.content, list):
+            # Extract text from content parts and concatenate
+            text_parts = []
+            for part in self.content:
+                if isinstance(part, ContentPart) and part.type == "text":
+                    text_parts.append(part.text)
+                elif isinstance(part, dict) and part.get("type") == "text":
+                    text_parts.append(part.get("text", ""))
+            
+            # Join all text parts with newlines
+            self.content = "\n".join(text_parts) if text_parts else ""
+            
+        return self
 
 
 class ChatCompletionRequest(BaseModel):
