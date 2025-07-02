@@ -409,6 +409,249 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 - `DELETE /v1/sessions/{session_id}` - Delete a specific session
 - `GET /v1/sessions/stats` - Get session manager statistics
 
+## API Documentation (Swagger/OpenAPI)
+
+### 📋 Complete API Reference
+
+#### **POST /v1/chat/completions**
+Create a chat completion (OpenAI-compatible)
+
+**Request Body:**
+```json
+{
+  "model": "claude-3-5-sonnet-20241022",  // Required
+  "messages": [                           // Required
+    {
+      "role": "system|user|assistant",    // Required
+      "content": "string",                // Required
+      "name": "string"                    // Optional
+    }
+  ],
+  "temperature": 0.7,                     // Optional (0-2, default: 1.0)
+  "top_p": 1.0,                          // Optional (0-1, default: 1.0)
+  "n": 1,                                // Optional (must be 1)
+  "stream": false,                       // Optional (default: false)
+  "stop": ["string"],                    // Optional
+  "max_tokens": null,                    // Optional (not supported by Claude Code)
+  "presence_penalty": 0,                 // Optional (-2 to 2, default: 0)
+  "frequency_penalty": 0,                // Optional (-2 to 2, default: 0)
+  "logit_bias": {},                      // Optional (not supported)
+  "user": "string",                      // Optional
+  "session_id": "string",                // Optional (for conversation continuity)
+  "enable_tools": false                  // Optional (enable Claude Code tools)
+}
+```
+
+**Response (non-streaming):**
+```json
+{
+  "id": "chatcmpl-123",
+  "object": "chat.completion",
+  "created": 1677652288,
+  "model": "claude-3-5-sonnet-20241022",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "Hello! How can I help you?",
+      "name": null
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 20,
+    "total_tokens": 30
+  },
+  "system_fingerprint": null
+}
+```
+
+**Response (streaming):**
+```
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"claude-3-5-sonnet-20241022","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"claude-3-5-sonnet-20241022","choices":[{"index":0,"delta":{"content":" there!"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"claude-3-5-sonnet-20241022","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
+#### **GET /v1/models**
+List available models
+
+**Response:**
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "claude-sonnet-4-20250514",
+      "object": "model",
+      "owned_by": "anthropic"
+    },
+    {
+      "id": "claude-opus-4-20250514",
+      "object": "model",
+      "owned_by": "anthropic"
+    },
+    {
+      "id": "claude-3-5-sonnet-20241022",
+      "object": "model",
+      "owned_by": "anthropic"
+    }
+  ]
+}
+```
+
+#### **GET /health**
+Health check endpoint
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "service": "claude-code-openai-wrapper"
+}
+```
+
+#### **GET /v1/auth/status**
+Check authentication status
+
+**Response:**
+```json
+{
+  "claude_code_auth": {
+    "method": "browser|api_key|bedrock|vertex|claude_cli",
+    "status": {
+      "valid": true,
+      "errors": [],
+      "config": {
+        "method": "Browser authentication",
+        "note": "Authentication completed via browser"
+      }
+    },
+    "environment_variables": ["DOCKER_CONTAINER"]
+  },
+  "server_info": {
+    "api_key_required": false,
+    "api_key_source": "none",
+    "version": "1.0.0"
+  }
+}
+```
+
+#### **GET /v1/sessions**
+List all active sessions
+
+**Response:**
+```json
+{
+  "sessions": [
+    {
+      "session_id": "my-session-123",
+      "created_at": "2024-03-20T10:30:00Z",
+      "last_active": "2024-03-20T11:45:00Z",
+      "message_count": 5,
+      "expires_at": "2024-03-20T12:45:00Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+#### **GET /v1/sessions/{session_id}**
+Get session details
+
+**Response:**
+```json
+{
+  "session_id": "my-session-123",
+  "conversation": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      },
+      {
+        "role": "assistant", 
+        "content": "Hi! How can I help?"
+      }
+    ]
+  },
+  "metadata": {
+    "created_at": "2024-03-20T10:30:00Z",
+    "last_active": "2024-03-20T11:45:00Z",
+    "message_count": 2,
+    "expires_at": "2024-03-20T12:45:00Z"
+  }
+}
+```
+
+#### **DELETE /v1/sessions/{session_id}**
+Delete a session
+
+**Response:**
+```json
+{
+  "message": "Session deleted successfully",
+  "session_id": "my-session-123"
+}
+```
+
+#### **GET /v1/sessions/stats**
+Get session statistics
+
+**Response:**
+```json
+{
+  "active_sessions": 3,
+  "total_messages": 45,
+  "memory_usage_mb": 2.5,
+  "oldest_session": "2024-03-20T09:00:00Z",
+  "newest_session": "2024-03-20T11:30:00Z"
+}
+```
+
+### 🔐 Authentication
+
+If API key protection is enabled (via `API_KEY` environment variable), include the API key in the Authorization header:
+
+```bash
+curl -H "Authorization: Bearer your-api-key" http://localhost:8000/v1/models
+```
+
+### 🎯 Available Models
+
+- `claude-sonnet-4-20250514` - Latest and most capable
+- `claude-opus-4-20250514` - Most intelligent model
+- `claude-3-7-sonnet-20250219` - Extended context window
+- `claude-3-5-sonnet-20241022` - Fast and capable
+- `claude-3-5-haiku-20241022` - Fastest response times
+
+### 💡 Special Features
+
+#### Enable Claude Code Tools
+Add `"enable_tools": true` to use Claude Code's file operations:
+```json
+{
+  "model": "claude-3-5-sonnet-20241022",
+  "messages": [{"role": "user", "content": "List files in current directory"}],
+  "enable_tools": true
+}
+```
+
+#### Session Continuity
+Add `"session_id": "your-session-id"` to maintain conversation context:
+```json
+{
+  "model": "claude-3-5-sonnet-20241022",
+  "messages": [{"role": "user", "content": "Continue our discussion"}],
+  "session_id": "my-conversation-123"
+}
+```
+
 ## Limitations & Roadmap
 
 ### 🚫 **Current Limitations**
