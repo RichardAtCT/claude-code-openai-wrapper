@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from dotenv import load_dotenv
@@ -145,7 +145,8 @@ async def lifespan(app: FastAPI):
         logger.debug(f"   DEBUG_MODE: {DEBUG_MODE}")
         logger.debug(f"   VERBOSE: {VERBOSE}")
         logger.debug(f"   PORT: {os.getenv('PORT', '8000')}")
-        logger.debug(f"   CORS_ORIGINS: {os.getenv('CORS_ORIGINS', '[\"*\"]')}")
+        cors_origins = os.getenv('CORS_ORIGINS', '["*"]')
+        logger.debug(f"   CORS_ORIGINS: {cors_origins}")
         logger.debug(f"   MAX_TIMEOUT: {os.getenv('MAX_TIMEOUT', '600000')}")
         logger.debug(f"   CLAUDE_CWD: {os.getenv('CLAUDE_CWD', 'Not set')}")
         logger.debug(f"🔧 Available endpoints:")
@@ -171,7 +172,10 @@ app = FastAPI(
     title="Claude Code OpenAI API Wrapper",
     description="OpenAI-compatible API for Claude Code",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=None,  # Disable default docs
+    redoc_url=None,  # Disable default redoc
+    openapi_url=None  # We'll provide our own
 )
 
 # Configure CORS
@@ -681,6 +685,59 @@ async def check_compatibility(request_body: ChatCompletionRequest):
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy", "service": "claude-code-openai-wrapper"}
+
+
+@app.get("/docs", response_class=HTMLResponse)
+async def swagger_ui():
+    """Serve Swagger UI for API documentation."""
+    try:
+        # Try standalone version first
+        with open("swagger-ui-standalone.html", "r") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        try:
+            # Fall back to simple version
+            with open("swagger-ui.html", "r") as f:
+                return HTMLResponse(content=f.read())
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Swagger UI not found")
+
+
+@app.get("/openapi.yaml", response_class=FileResponse)
+async def openapi_spec_yaml():
+    """Serve OpenAPI specification in YAML format."""
+    try:
+        return FileResponse("openapi.yaml", media_type="application/x-yaml")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="OpenAPI specification not found")
+
+
+@app.get("/openapi.json")
+async def openapi_spec_json():
+    """Serve OpenAPI specification in JSON format."""
+    import yaml
+    try:
+        with open("openapi.yaml", "r") as f:
+            openapi_dict = yaml.safe_load(f)
+        return JSONResponse(content=openapi_dict)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="OpenAPI specification not found")
+    except Exception as e:
+        logger.error(f"Error converting OpenAPI spec to JSON: {e}")
+        raise HTTPException(status_code=500, detail="Error processing OpenAPI specification")
+
+
+@app.get("/openapi-fastapi.json")
+async def openapi_fastapi():
+    """Get FastAPI's auto-generated OpenAPI schema."""
+    from fastapi.openapi.utils import get_openapi
+    
+    return get_openapi(
+        title="Claude Code OpenAI API Wrapper",
+        version="1.0.0",
+        description="OpenAI-compatible API wrapper for Claude Code with session management and tool support",
+        routes=app.routes,
+    )
 
 
 @app.post("/v1/debug/request")

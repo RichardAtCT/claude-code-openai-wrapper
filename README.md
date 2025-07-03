@@ -409,6 +409,253 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 - `DELETE /v1/sessions/{session_id}` - Delete a specific session
 - `GET /v1/sessions/stats` - Get session manager statistics
 
+## API Documentation (Swagger/OpenAPI)
+
+### 🌐 Interactive Documentation
+
+Access the interactive Swagger UI at: **http://localhost:8000/docs** (or http://192.168.1.11:8000/docs for Docker)
+
+### 📋 Complete API Reference
+
+#### **POST /v1/chat/completions**
+Create a chat completion (OpenAI-compatible)
+
+**Request Body:**
+```json
+{
+  "model": "claude-3-5-sonnet-20241022",  // Required
+  "messages": [                           // Required
+    {
+      "role": "system|user|assistant",    // Required
+      "content": "string",                // Required
+      "name": "string"                    // Optional
+    }
+  ],
+  "temperature": 0.7,                     // Optional (0-2, default: 1.0)
+  "top_p": 1.0,                          // Optional (0-1, default: 1.0)
+  "n": 1,                                // Optional (must be 1)
+  "stream": false,                       // Optional (default: false)
+  "stop": ["string"],                    // Optional
+  "max_tokens": null,                    // Optional (not supported by Claude Code)
+  "presence_penalty": 0,                 // Optional (-2 to 2, default: 0)
+  "frequency_penalty": 0,                // Optional (-2 to 2, default: 0)
+  "logit_bias": {},                      // Optional (not supported)
+  "user": "string",                      // Optional
+  "session_id": "string",                // Optional (for conversation continuity)
+  "enable_tools": false                  // Optional (enable Claude Code tools)
+}
+```
+
+**Response (non-streaming):**
+```json
+{
+  "id": "chatcmpl-123",
+  "object": "chat.completion",
+  "created": 1677652288,
+  "model": "claude-3-5-sonnet-20241022",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "Hello! How can I help you?",
+      "name": null
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 20,
+    "total_tokens": 30
+  },
+  "system_fingerprint": null
+}
+```
+
+**Response (streaming):**
+```
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"claude-3-5-sonnet-20241022","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"claude-3-5-sonnet-20241022","choices":[{"index":0,"delta":{"content":" there!"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"claude-3-5-sonnet-20241022","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
+#### **GET /v1/models**
+List available models
+
+**Response:**
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "claude-sonnet-4-20250514",
+      "object": "model",
+      "owned_by": "anthropic"
+    },
+    {
+      "id": "claude-opus-4-20250514",
+      "object": "model",
+      "owned_by": "anthropic"
+    },
+    {
+      "id": "claude-3-5-sonnet-20241022",
+      "object": "model",
+      "owned_by": "anthropic"
+    }
+  ]
+}
+```
+
+#### **GET /health**
+Health check endpoint
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "service": "claude-code-openai-wrapper"
+}
+```
+
+#### **GET /v1/auth/status**
+Check authentication status
+
+**Response:**
+```json
+{
+  "claude_code_auth": {
+    "method": "browser|api_key|bedrock|vertex|claude_cli",
+    "status": {
+      "valid": true,
+      "errors": [],
+      "config": {
+        "method": "Browser authentication",
+        "note": "Authentication completed via browser"
+      }
+    },
+    "environment_variables": ["DOCKER_CONTAINER"]
+  },
+  "server_info": {
+    "api_key_required": false,
+    "api_key_source": "none",
+    "version": "1.0.0"
+  }
+}
+```
+
+#### **GET /v1/sessions**
+List all active sessions
+
+**Response:**
+```json
+{
+  "sessions": [
+    {
+      "session_id": "my-session-123",
+      "created_at": "2024-03-20T10:30:00Z",
+      "last_active": "2024-03-20T11:45:00Z",
+      "message_count": 5,
+      "expires_at": "2024-03-20T12:45:00Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+#### **GET /v1/sessions/{session_id}**
+Get session details
+
+**Response:**
+```json
+{
+  "session_id": "my-session-123",
+  "conversation": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      },
+      {
+        "role": "assistant", 
+        "content": "Hi! How can I help?"
+      }
+    ]
+  },
+  "metadata": {
+    "created_at": "2024-03-20T10:30:00Z",
+    "last_active": "2024-03-20T11:45:00Z",
+    "message_count": 2,
+    "expires_at": "2024-03-20T12:45:00Z"
+  }
+}
+```
+
+#### **DELETE /v1/sessions/{session_id}**
+Delete a session
+
+**Response:**
+```json
+{
+  "message": "Session deleted successfully",
+  "session_id": "my-session-123"
+}
+```
+
+#### **GET /v1/sessions/stats**
+Get session statistics
+
+**Response:**
+```json
+{
+  "active_sessions": 3,
+  "total_messages": 45,
+  "memory_usage_mb": 2.5,
+  "oldest_session": "2024-03-20T09:00:00Z",
+  "newest_session": "2024-03-20T11:30:00Z"
+}
+```
+
+### 🔐 Authentication
+
+If API key protection is enabled (via `API_KEY` environment variable), include the API key in the Authorization header:
+
+```bash
+curl -H "Authorization: Bearer your-api-key" http://localhost:8000/v1/models
+```
+
+### 🎯 Available Models
+
+- `claude-sonnet-4-20250514` - Latest and most capable
+- `claude-opus-4-20250514` - Most intelligent model
+- `claude-3-7-sonnet-20250219` - Extended context window
+- `claude-3-5-sonnet-20241022` - Fast and capable
+- `claude-3-5-haiku-20241022` - Fastest response times
+
+### 💡 Special Features
+
+#### Enable Claude Code Tools
+Add `"enable_tools": true` to use Claude Code's file operations:
+```json
+{
+  "model": "claude-3-5-sonnet-20241022",
+  "messages": [{"role": "user", "content": "List files in current directory"}],
+  "enable_tools": true
+}
+```
+
+#### Session Continuity
+Add `"session_id": "your-session-id"` to maintain conversation context:
+```json
+{
+  "model": "claude-3-5-sonnet-20241022",
+  "messages": [{"role": "user", "content": "Continue our discussion"}],
+  "session_id": "my-conversation-123"
+}
+```
+
 ## Limitations & Roadmap
 
 ### 🚫 **Current Limitations**
@@ -497,6 +744,156 @@ All tests should show:
 - **Authentication method detected** (claude_cli, anthropic, bedrock, or vertex)
 - **Real cost tracking** (e.g., $0.001-0.005 per test call)
 - **Accurate token counts** from SDK metadata
+
+## Docker Deployment 🐳
+
+### Quick Start with Docker
+
+The wrapper includes full Docker support with Ubuntu GUI for browser-based Claude authentication:
+
+```bash
+# Clone the repository
+git clone https://github.com/jorge123255/claude-code-openai-wrapper
+cd claude-code-openai-wrapper
+
+# Build and run with docker-compose
+docker-compose up -d
+
+# Access the services:
+# - API: http://localhost:8000
+# - Desktop GUI: http://localhost:6080 (for authentication)
+```
+
+### Important Notes for Docker Setup
+
+**Node.js Version**: The container requires Node.js 20+ for Claude CLI. The Dockerfile automatically installs the correct version.
+
+**First Run Authentication**:
+1. Access the desktop at http://localhost:6080 (default VNC password: `changeme`)
+2. Open a terminal in the desktop
+3. Run `claude auth login` 
+4. Copy the URL and paste it into Firefox to complete authentication
+5. Start the API server: `echo "n" | python3 /app/main.py &`
+
+**Known Issues & Solutions**:
+- If you get syntax errors with f-strings, the main.py file has been fixed
+- The API server prompts for API key protection - answer "n" for no protection or set `API_KEY=""` environment variable
+- Browser authentication requires manual intervention on first run
+
+### Docker Features
+
+- **Ubuntu Desktop Environment**: XFCE desktop accessible via web browser
+- **Automatic Authentication**: Browser opens automatically when auth is needed
+- **Persistent Storage**: Authentication tokens survive container restarts
+- **Multiple Auth Methods**: Browser, API key, Bedrock, or Vertex AI
+- **noVNC Web Access**: No VNC client needed - access desktop through browser
+
+### First-Time Setup
+
+1. **Access the Desktop**: Navigate to http://localhost:6080
+2. **Complete Authentication**: 
+   - Firefox will open automatically if authentication is needed
+   - Log in to Claude when prompted
+   - Authentication is saved persistently
+3. **Use the API**: Once authenticated, the API is available at http://localhost:8000
+
+### Docker Configuration
+
+#### Environment Variables
+
+```env
+# Display settings
+VNC_PASSWORD=changeme        # Change this!
+RESOLUTION=1920x1080x24      # Desktop resolution
+
+# Authentication method
+AUTH_METHOD=browser          # Options: browser, api_key, bedrock, vertex
+ANTHROPIC_API_KEY=           # For api_key method
+
+# API protection (optional)
+API_KEY=                     # Protect wrapper endpoints
+```
+
+#### Volumes
+
+The container uses these persistent volumes:
+- `/config/claude`: Authentication data
+- `/config/api`: API configuration
+- `/data`: User projects/data
+- `/var/log/supervisor`: Logs
+
+#### Building from Source
+
+```bash
+# Build the image
+docker build -f docker/Dockerfile -t claude-code-wrapper .
+
+# Run with custom settings
+docker run -d \
+  -p 8000:8000 \
+  -p 6080:6080 \
+  -e VNC_PASSWORD=mysecurepassword \
+  -v claude_auth:/config/claude \
+  claude-code-wrapper
+```
+
+### Unraid Deployment
+
+For Unraid users, a Community App template is included:
+
+1. **Add Template Repository** (if not using Community Apps):
+   ```
+   https://github.com/jorge123255/claude-code-openai-wrapper/tree/main/docker/unraid
+   ```
+   
+2. **Network Configuration**: 
+   - Use bridge network with custom IP (e.g., 192.168.1.11)
+   - Or use `br0` network type for direct LAN access
+
+2. **Install from Community Apps**:
+   - Search for "Claude Code Wrapper"
+   - Configure paths and passwords
+   - Start the container
+
+3. **Default Paths**:
+   - Config: `/mnt/user/appdata/claude-code-wrapper/`
+   - Ports: 8000 (API), 6080 (GUI)
+
+### Security Considerations
+
+- **Change VNC Password**: Always set a secure VNC password
+- **API Protection**: Use `API_KEY` environment variable for endpoint security
+- **Network Isolation**: Consider using Docker networks for additional security
+- **Volume Permissions**: Ensure proper permissions on mounted volumes
+
+### Troubleshooting Docker
+
+1. **Authentication Issues**:
+   ```bash
+   # Check auth handler logs
+   docker-compose logs -f claude-code-wrapper | grep auth-handler
+   
+   # Manually trigger auth check
+   docker exec claude-code-wrapper touch /tmp/need_auth
+   ```
+
+2. **Desktop Not Loading**:
+   ```bash
+   # Check VNC password was set correctly
+   docker-compose exec claude-code-wrapper cat /root/.vnc/passwd
+   
+   # Restart desktop services
+   docker-compose exec claude-code-wrapper supervisorctl restart desktop:*
+   ```
+
+3. **Container Health**:
+   ```bash
+   # Check container status
+   docker-compose ps
+   
+   # View all logs
+   docker-compose logs -f
+   ```
 
 ## License
 

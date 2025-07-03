@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+ENV/
+env/
+
+# Poetry
+poetry.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+.env
+.env.*
+!.env.example
+logs/
+*.log
+test_*.py
+tests/
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Requirements folder (development only)
+requirements/

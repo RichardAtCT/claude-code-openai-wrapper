@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Claude Code OpenAI Wrapper - API Documentation</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui.css">
+    <style>
+        html {
+            box-sizing: border-box;
+            overflow: -moz-scrollbars-vertical;
+            overflow-y: scroll;
+        }
+        *, *:before, *:after {
+            box-sizing: inherit;
+        }
+        body {
+            margin: 0;
+            background: #fafafa;
+        }
+        .info {
+            margin: 20px;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .info h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        .info ul {
+            line-height: 1.8;
+        }
+        .info code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="info">
+        <h1>🚀 Claude Code OpenAI Wrapper API</h1>
+        <p>Welcome to the interactive API documentation! This wrapper provides OpenAI-compatible endpoints for Claude Code.</p>
+        
+        <h2>🔑 Key Features:</h2>
+        <ul>
+            <li><strong>OpenAI Compatible</strong> - Works with any OpenAI client library</li>
+            <li><strong>Streaming Support</strong> - Real-time responses with <code>stream: true</code></li>
+            <li><strong>Session Continuity</strong> - Maintain conversation context with <code>session_id</code></li>
+            <li><strong>Tool Support</strong> - Enable Claude Code tools with <code>enable_tools: true</code></li>
+            <li><strong>Multiple Models</strong> - Claude Sonnet 4, Opus 4, and more</li>
+        </ul>
+
+        <h2>📝 Quick Examples:</h2>
+        <h3>Basic Chat Completion:</h3>
+        <pre><code>curl -X POST http://192.168.1.11:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-3-5-sonnet-20241022",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'</code></pre>
+
+        <h3>Streaming Response:</h3>
+        <pre><code>curl -X POST http://192.168.1.11:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-3-5-sonnet-20241022",
+    "messages": [{"role": "user", "content": "Tell me a story"}],
+    "stream": true
+  }' -N</code></pre>
+
+        <h3>With Tools Enabled:</h3>
+        <pre><code>curl -X POST http://192.168.1.11:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-3-5-sonnet-20241022",
+    "messages": [{"role": "user", "content": "List files in current directory"}],
+    "enable_tools": true
+  }'</code></pre>
+    </div>
+    
+    <div id="swagger-ui"></div>
+    
+    <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-bundle.js"></script>
+    <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-standalone-preset.js"></script>
+    <script>
+        window.onload = function() {
+            window.ui = SwaggerUIBundle({
+                urls: [
+                    {url: "/openapi.yaml", name: "Detailed API Specification"},
+                    {url: "/openapi-fastapi.json", name: "FastAPI Generated"}
+                ],
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis,
+                    SwaggerUIStandalonePreset
+                ],
+                plugins: [
+                    SwaggerUIBundle.plugins.DownloadUrl
+                ],
+                layout: "StandaloneLayout",
+                defaultModelsExpandDepth: 1,
+                defaultModelExpandDepth: 1,
+                docExpansion: "list",
+                filter: true,
+                showExtensions: true,
+                showCommonExtensions: true,
+                customSiteTitle: "Claude Code API Documentation",
+                tryItOutEnabled: true,
+                supportedSubmitMethods: ['get', 'post', 'put', 'delete', 'patch'],
+                onComplete: function() {
+                    console.log("Swagger UI loaded successfully");
+                }
+            });
+        };
+    </script>
+</body>
+</html>
