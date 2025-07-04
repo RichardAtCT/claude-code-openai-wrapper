@@ -1,0 +1,19 @@
+{
+  "id": "improve-vision-face-recognition",
+  "started": "2025-01-02T23:44:00Z",
+  "lastUpdated": "2025-01-02T23:52:00Z",
+  "status": "complete",
+  "phase": "complete",
+  "progress": {
+    "discovery": { "answered": 5, "total": 5 },
+    "detail": { "answered": 5, "total": 5 }
+  },
+  "contextFiles": [
+    "/mcp_tools/jarvis_pure_adaptive_claude_launcher.py",
+    "/mcp_tools/tools/vision/vision_tool.py", 
+    "/mcp_tools/tools/face_recognition/face_recognition_tool.py",
+    "/mcp_tools/face_recognition_server.py",
+    "/mcp_tools/tools/unifi_protect/unifi_protect_tool.py"
+  ],
+  "relatedFeatures": ["vision-tool", "face-recognition", "unifi-protect", "claude-vision-enhancement"]
+}

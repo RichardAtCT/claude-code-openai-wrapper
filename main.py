@@ -356,8 +356,47 @@ async def generate_streaming_response(
         ):
             chunks_buffer.append(chunk)
             
-            # Check if we have an assistant message
-            if chunk.get("type") == "assistant" and "message" in chunk:
+            # Debug logging for chunk structure
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Streaming chunk type: {type(chunk)}")
+                logger.debug(f"Streaming chunk keys: {chunk.keys() if isinstance(chunk, dict) else 'Not a dict'}")
+                if isinstance(chunk, dict):
+                    logger.debug(f"Chunk content type: {type(chunk.get('content')) if 'content' in chunk else 'No content'}")
+            
+            # NEW: Check for direct content (new SDK format)
+            if isinstance(chunk, dict) and "content" in chunk and isinstance(chunk["content"], list):
+                # This is the new SDK format where content is directly in the chunk
+                for block in chunk["content"]:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "")
+                        if text:  # Only send if there's actual text
+                            stream_chunk = ChatCompletionStreamResponse(
+                                id=request_id,
+                                model=request.model,
+                                choices=[StreamChoice(
+                                    index=0,
+                                    delta={"content": text},
+                                    finish_reason=None
+                                )]
+                            )
+                            yield f"data: {stream_chunk.model_dump_json()}\n\n"
+                    # Handle TextBlock objects
+                    elif hasattr(block, 'text'):
+                        text = block.text
+                        if text:
+                            stream_chunk = ChatCompletionStreamResponse(
+                                id=request_id,
+                                model=request.model,
+                                choices=[StreamChoice(
+                                    index=0,
+                                    delta={"content": text},
+                                    finish_reason=None
+                                )]
+                            )
+                            yield f"data: {stream_chunk.model_dump_json()}\n\n"
+            
+            # EXISTING: Check for old format (assistant message)
+            elif chunk.get("type") == "assistant" and "message" in chunk:
                 message = chunk["message"]
                 if isinstance(message, dict) and "content" in message:
                     content = message["content"]
@@ -367,21 +406,21 @@ async def generate_streaming_response(
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "text":
                                 text = block.get("text", "")
-                                
-                                # Create streaming chunk
-                                stream_chunk = ChatCompletionStreamResponse(
-                                    id=request_id,
-                                    model=request.model,
-                                    choices=[StreamChoice(
-                                        index=0,
-                                        delta={"content": text},
-                                        finish_reason=None
-                                    )]
-                                )
-                                
-                                yield f"data: {stream_chunk.model_dump_json()}\n\n"
+                                if text:  # Only send if there's actual text
+                                    # Create streaming chunk
+                                    stream_chunk = ChatCompletionStreamResponse(
+                                        id=request_id,
+                                        model=request.model,
+                                        choices=[StreamChoice(
+                                            index=0,
+                                            delta={"content": text},
+                                            finish_reason=None
+                                        )]
+                                    )
+                                    
+                                    yield f"data: {stream_chunk.model_dump_json()}\n\n"
                     
-                    elif isinstance(content, str):
+                    elif isinstance(content, str) and content:
                         # Create streaming chunk
                         stream_chunk = ChatCompletionStreamResponse(
                             id=request_id,
