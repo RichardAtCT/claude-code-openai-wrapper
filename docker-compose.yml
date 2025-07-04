@@ -18,7 +18,9 @@ services:
       # Display settings
       - DISPLAY=:1
       - RESOLUTION=1920x1080x24
-      - VNC_PASSWORD=${VNC_PASSWORD:-changeme}
+      # SECURITY: VNC password is required - no default provided
+      # Set this in your .env file (see .env.example)
+      - VNC_PASSWORD=${VNC_PASSWORD:?Error: Please set VNC_PASSWORD in .env file}
       - NOVNC_PORT=6080
       
       # API settings

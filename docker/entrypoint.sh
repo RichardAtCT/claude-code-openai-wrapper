@@ -6,7 +6,19 @@ echo "Starting Claude Code OpenAI Wrapper Docker Container..."
 # Create VNC password directory
 mkdir -p /root/.vnc
 
-# Set VNC password
+# Validate and set VNC password
+if [ -z "${VNC_PASSWORD}" ]; then
+    echo "ERROR: VNC_PASSWORD environment variable is not set!"
+    echo ""
+    echo "Please set a secure VNC password in your .env file:"
+    echo "  VNC_PASSWORD=your-secure-password-here"
+    echo ""
+    echo "Or generate a random password with:"
+    echo "  openssl rand -base64 12"
+    echo ""
+    exit 1
+fi
+
 if [ ! -f /root/.vnc/passwd ]; then
     echo "Setting VNC password..."
     x11vnc -storepasswd "${VNC_PASSWORD}" /root/.vnc/passwd
@@ -25,6 +37,7 @@ fi
 # Set up environment for Claude CLI
 export CLAUDE_HOME=/config/claude
 export HOME=/root
+export DOCKER_CONTAINER=1
 
 # Configure API settings from environment
 if [ -n "${API_KEY}" ]; then

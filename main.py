@@ -66,6 +66,14 @@ def prompt_for_api_protection() -> Optional[str]:
     if os.getenv("API_KEY"):
         return None
     
+    # Detect if we're running in Docker
+    is_docker = os.path.exists('/.dockerenv') or os.getenv('DOCKER_CONTAINER') == '1'
+    
+    # Skip prompt in Docker environment
+    if is_docker:
+        logger.info("Running in Docker without API key protection (set API_KEY env var to enable)")
+        return None
+    
     print("\n" + "="*60)
     print("🔐 API Endpoint Security Configuration")
     print("="*60)

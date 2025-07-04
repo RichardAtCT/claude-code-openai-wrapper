@@ -756,12 +756,16 @@ The wrapper includes full Docker support with Ubuntu GUI for browser-based Claud
 git clone https://github.com/jorge123255/claude-code-openai-wrapper
 cd claude-code-openai-wrapper
 
+# IMPORTANT: Set up security first
+cp .env.example .env
+# Edit .env to set a secure VNC_PASSWORD (required!)
+
 # Build and run with docker-compose
 docker-compose up -d
 
 # Access the services:
 # - API: http://localhost:8000
-# - Desktop GUI: http://localhost:6080 (for authentication)
+# - Desktop GUI: http://localhost:6080 (requires VNC password)
 ```
 
 ### Important Notes for Docker Setup
@@ -769,16 +773,15 @@ docker-compose up -d
 **Node.js Version**: The container requires Node.js 20+ for Claude CLI. The Dockerfile automatically installs the correct version.
 
 **First Run Authentication**:
-1. Access the desktop at http://localhost:6080 (default VNC password: `changeme`)
-2. Open a terminal in the desktop
-3. Run `claude auth login` 
-4. Copy the URL and paste it into Firefox to complete authentication
-5. Start the API server: `echo "n" | python3 /app/main.py &`
+1. Access the desktop at http://localhost:6080 (enter your VNC password from .env)
+2. The authentication handler will automatically open Firefox if needed
+3. Complete the Claude login in the browser
+4. The API server starts automatically once authenticated
 
-**Known Issues & Solutions**:
-- If you get syntax errors with f-strings, the main.py file has been fixed
-- The API server prompts for API key protection - answer "n" for no protection or set `API_KEY=""` environment variable
-- Browser authentication requires manual intervention on first run
+**Security Notes**:
+- VNC password is **required** - no default password for security
+- Set `API_KEY` in .env to protect API endpoints
+- The container runs without API key prompts in Docker mode
 
 ### Docker Features
 
@@ -802,15 +805,18 @@ docker-compose up -d
 #### Environment Variables
 
 ```env
+# SECURITY: VNC password is REQUIRED - generate a secure one:
+# openssl rand -base64 12
+VNC_PASSWORD=your-secure-password-here
+
 # Display settings
-VNC_PASSWORD=changeme        # Change this!
 RESOLUTION=1920x1080x24      # Desktop resolution
 
 # Authentication method
 AUTH_METHOD=browser          # Options: browser, api_key, bedrock, vertex
 ANTHROPIC_API_KEY=           # For api_key method
 
-# API protection (optional)
+# API protection (recommended for remote access)
 API_KEY=                     # Protect wrapper endpoints
 ```
 
@@ -859,12 +865,27 @@ For Unraid users, a Community App template is included:
    - Config: `/mnt/user/appdata/claude-code-wrapper/`
    - Ports: 8000 (API), 6080 (GUI)
 
-### Security Considerations
+### Security Best Practices 🔒
 
-- **Change VNC Password**: Always set a secure VNC password
-- **API Protection**: Use `API_KEY` environment variable for endpoint security
-- **Network Isolation**: Consider using Docker networks for additional security
-- **Volume Permissions**: Ensure proper permissions on mounted volumes
+1. **VNC Password** (REQUIRED):
+   - Generate a strong password: `openssl rand -base64 12`
+   - Never use default passwords
+   - Container will refuse to start without VNC_PASSWORD set
+
+2. **API Protection**:
+   - Set `API_KEY` in .env for remote access
+   - Use HTTPS reverse proxy for production
+   - Consider IP whitelisting for sensitive deployments
+
+3. **Network Security**:
+   - Use Docker networks to isolate containers
+   - Limit port exposure to localhost only if possible
+   - Consider VPN access for remote management
+
+4. **Authentication**:
+   - Browser auth tokens are stored in persistent volumes
+   - Use API key method for headless deployments
+   - Rotate credentials regularly
 
 ### Troubleshooting Docker
 
