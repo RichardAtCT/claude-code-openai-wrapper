@@ -57,3 +57,17 @@ test_debug_*.py
 test_performance_*.py
 test_user_*.py
 test_new_*.py
+
+# Database files
+*.db
+data/*.db
+
+# Config files that shouldn't be tracked
+config/phase2_config.json
+
+# Requirements working directory
+requirements/
+.current-requirement
+
+# Jarvis related files
+jarvis_learning.db
