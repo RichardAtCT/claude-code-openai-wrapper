@@ -26,13 +26,17 @@ from models import (
     ErrorResponse,
     ErrorDetail,
     SessionInfo,
-    SessionListResponse
+    SessionListResponse,
+    ToolCall,
+    FunctionCall
 )
 from claude_cli import ClaudeCodeCLI
 from message_adapter import MessageAdapter
 from auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
 from parameter_validator import ParameterValidator, CompatibilityReporter
 from session_manager import session_manager
+from tool_handler import tool_handler
+from tools import tool_registry
 
 # Load environment variables
 load_dotenv()
@@ -547,17 +551,31 @@ async def chat_completions(
             if claude_options.get('model'):
                 ParameterValidator.validate_model(claude_options['model'])
             
-            # Handle tools - disabled by default for OpenAI compatibility
-            if not request_body.enable_tools:
-                # Set disallowed_tools to all available tools to disable them
+            # Handle tools based on request
+            tools_enabled = tool_handler.should_enable_tools(request_body.model_dump())
+            
+            if tools_enabled:
+                # Get tool configuration
+                allowed_tools, disallowed_tools = tool_handler.get_tool_config(request_body.model_dump())
+                
+                if allowed_tools is not None:
+                    claude_options['allowed_tools'] = allowed_tools
+                if disallowed_tools is not None:
+                    claude_options['disallowed_tools'] = disallowed_tools
+                    
+                # Inject tool context into messages if using OpenAI format
+                if request_body.tools:
+                    all_messages = tool_handler.inject_tool_context(all_messages, request_body.tools)
+                    
+                logger.info(f"Tools enabled with config: allowed={allowed_tools}, disallowed={disallowed_tools}")
+            else:
+                # Disable all tools for OpenAI compatibility
                 disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
                                     'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
                                     'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
                 claude_options['disallowed_tools'] = disallowed_tools
                 claude_options['max_turns'] = 1  # Single turn for Q&A
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
-            else:
-                logger.info("Tools enabled by user request")
             
             # Collect all chunks
             chunks = []
@@ -587,14 +605,31 @@ async def chat_completions(
             prompt_tokens = MessageAdapter.estimate_tokens(prompt)
             completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
             
+            # Check for tool calls in the response
+            tool_calls = None
+            finish_reason = "stop"
+            
+            if tools_enabled:
+                # Extract tool calls from Claude's response
+                tool_calls = tool_handler.extract_tool_calls_from_message({"content": assistant_content})
+                if tool_calls:
+                    finish_reason = "tool_calls"
+            
+            # Create message with optional tool calls
+            response_message = Message(
+                role="assistant",
+                content=assistant_content if not tool_calls else None,
+                tool_calls=tool_calls
+            )
+            
             # Create response
             response = ChatCompletionResponse(
                 id=request_id,
                 model=request_body.model,
                 choices=[Choice(
                     index=0,
-                    message=Message(role="assistant", content=assistant_content),
-                    finish_reason="stop"
+                    message=response_message,
+                    finish_reason=finish_reason
                 )],
                 usage=Usage(
                     prompt_tokens=prompt_tokens,
@@ -610,6 +645,19 @@ async def chat_completions(
     except Exception as e:
         logger.error(f"Chat completion error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/tools")
+async def list_tools(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
+    """List available tools/functions."""
+    await verify_api_key(None, credentials)
+    
+    return {
+        "object": "list",
+        "data": tool_registry.format_for_openai()
+    }
 
 
 @app.get("/v1/models")

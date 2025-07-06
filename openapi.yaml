@@ -102,16 +102,38 @@ paths:
                     type: object
                     required:
                       - role
-                      - content
                     properties:
                       role:
                         type: string
-                        enum: [system, user, assistant]
+                        enum: [system, user, assistant, tool]
                       content:
                         type: string
+                        nullable: true
+                        description: Message content (required for all roles except tool calls in assistant messages)
                       name:
                         type: string
                         nullable: true
+                      tool_calls:
+                        type: array
+                        description: Tool calls (only for assistant messages)
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            type:
+                              type: string
+                              enum: [function]
+                            function:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                arguments:
+                                  type: string
+                      tool_call_id:
+                        type: string
+                        description: ID of the tool call this message is responding to (only for tool messages)
                 temperature:
                   type: number
                   minimum: 0
@@ -162,6 +184,79 @@ paths:
                   type: boolean
                   default: false
                   description: Enable Claude Code tools (Read, Write, Bash, etc.)
+                tools:
+                  type: array
+                  description: List of tools/functions available to the model (OpenAI format)
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - function
+                    properties:
+                      type:
+                        type: string
+                        enum: [function]
+                      function:
+                        type: object
+                        required:
+                          - name
+                          - description
+                          - parameters
+                        properties:
+                          name:
+                            type: string
+                            example: read_file
+                          description:
+                            type: string
+                            example: Read the contents of a file
+                          parameters:
+                            type: object
+                            description: JSON Schema for function parameters
+                            example:
+                              type: object
+                              properties:
+                                path:
+                                  type: string
+                                  description: Path to the file to read
+                              required: [path]
+                tool_choice:
+                  oneOf:
+                    - type: string
+                      enum: [none, auto]
+                    - type: object
+                      properties:
+                        type:
+                          type: string
+                          enum: [function]
+                        function:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                  description: Controls which (if any) function is called by the model
+                functions:
+                  type: array
+                  description: List of functions (legacy format, use 'tools' instead)
+                  deprecated: true
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      description:
+                        type: string
+                      parameters:
+                        type: object
+                function_call:
+                  oneOf:
+                    - type: string
+                      enum: [none, auto]
+                    - type: object
+                      properties:
+                        name:
+                          type: string
+                  description: Controls function calling (legacy format, use 'tool_choice' instead)
+                  deprecated: true
       responses:
         '200':
           description: Successful completion
@@ -353,6 +448,46 @@ paths:
                   newest_session:
                     type: string
                     format: date-time
+  
+  /v1/tools:
+    get:
+      summary: List available tools
+      description: Get a list of all available tools/functions that can be used with Claude
+      tags:
+        - Tools
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: List of available tools
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object:
+                    type: string
+                    example: list
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          enum: [function]
+                        function:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                              example: read_file
+                            description:
+                              type: string
+                              example: Read the contents of a file
+                            parameters:
+                              type: object
+                              description: JSON Schema for function parameters
 
 components:
   securitySchemes:
@@ -388,11 +523,33 @@ components:
                     type: string
                   content:
                     type: string
+                    nullable: true
                   name:
                     type: string
                     nullable: true
+                  tool_calls:
+                    type: array
+                    nullable: true
+                    description: Tool/function calls made by the assistant
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        type:
+                          type: string
+                          enum: [function]
+                        function:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                            arguments:
+                              type: string
+                              description: JSON string of function arguments
               finish_reason:
                 type: string
+                enum: [stop, length, content_filter, null, tool_calls, function_call]
         usage:
           type: object
           properties:
@@ -447,6 +604,8 @@ tags:
     description: Model management
   - name: Chat
     description: Chat completion endpoints
+  - name: Tools
+    description: Tool and function management
   - name: Authentication
     description: Authentication status
   - name: Sessions

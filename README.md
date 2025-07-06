@@ -8,6 +8,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - ✅ Chat completions endpoint with **official Claude Code Python SDK**
 - ✅ Streaming and non-streaming responses  
 - ✅ Full OpenAI SDK compatibility
+- ✅ **OpenAI Function Calling** - Complete support for tools via OpenAI format! 🎉
 - ✅ **Multi-provider authentication** (API key, Bedrock, Vertex AI, CLI auth)
 - ✅ **System prompt support** via SDK options
 - ✅ Model selection support with validation
@@ -26,6 +27,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - Support for both streaming and non-streaming responses
 - Compatible with OpenAI Python SDK and all OpenAI client libraries
 - Automatic model validation and selection
+- **OpenAI Function Calling support** 🆕 - Use Claude's tools via OpenAI's function calling format
 
 ### 🛠 **Claude Code SDK Integration**
 - **Official Claude Code Python SDK** integration (v0.0.14)
@@ -275,6 +277,32 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 # Output: Claude will actually read your directory and list the files!
 
+# Use OpenAI Function Calling format
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "list_directory",
+        "description": "List contents of a directory",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory path"}
+            }
+        }
+    }
+}]
+
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[{"role": "user", "content": "List files in the current directory"}],
+    tools=tools,
+    tool_choice="auto"
+)
+
+# Check if Claude wants to use tools
+if response.choices[0].message.tool_calls:
+    print("Claude wants to call:", response.choices[0].message.tool_calls[0].function.name)
+
 # Check real costs and tokens
 print(f"Cost: ${response.usage.total_tokens * 0.000003:.6f}")  # Real cost tracking
 print(f"Tokens: {response.usage.total_tokens} ({response.usage.prompt_tokens} + {response.usage.completion_tokens})")
@@ -302,6 +330,111 @@ for chunk in stream:
 - `claude-3-5-haiku-20241022`
 
 The model parameter is passed to Claude Code via the `--model` flag.
+
+## Function Calling / Tools 🆕
+
+The wrapper now supports OpenAI's function calling format, allowing you to use Claude's powerful tools (file operations, web search, command execution) through the standard OpenAI API.
+
+### Three Ways to Use Tools
+
+1. **OpenAI Function Calling Format** (Recommended for compatibility):
+```python
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "read_file",
+        "description": "Read the contents of a file",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path"}
+            },
+            "required": ["path"]
+        }
+    }
+}]
+
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[{"role": "user", "content": "Read the README.md file"}],
+    tools=tools,
+    tool_choice="auto"  # or "none", or specific function
+)
+```
+
+2. **Enable All Claude Tools** (Simple but Claude-specific):
+```python
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[{"role": "user", "content": "What's in this directory?"}],
+    extra_body={"enable_tools": True}
+)
+```
+
+3. **Legacy Function Format** (For older OpenAI clients):
+```python
+functions = [{
+    "name": "get_weather",
+    "description": "Get weather for a location",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "location": {"type": "string"}
+        }
+    }
+}]
+
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[{"role": "user", "content": "What's the weather?"}],
+    functions=functions,
+    function_call="auto"
+)
+```
+
+### Available Tools
+
+- **read_file** - Read file contents
+- **write_file** - Write content to files
+- **edit_file** - Edit files by replacing text
+- **run_command** - Execute bash commands
+- **list_directory** - List directory contents
+- **search_files** - Search for files by pattern
+- **search_in_files** - Search within file contents
+- **web_search** - Search the web
+- **fetch_url** - Fetch content from URLs
+
+### Tool Response Handling
+
+When Claude uses a tool, you'll receive a response with `tool_calls`:
+
+```python
+message = response.choices[0].message
+if message.tool_calls:
+    for tool_call in message.tool_calls:
+        print(f"Tool: {tool_call.function.name}")
+        print(f"Arguments: {tool_call.function.arguments}")
+        
+        # Execute the tool and continue the conversation
+        tool_result = execute_tool(tool_call)  # Your implementation
+        
+        messages.append(message)  # Add assistant message with tool calls
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "content": json.dumps(tool_result)
+        })
+        
+        # Get final response
+        final_response = client.chat.completions.create(
+            model="claude-3-5-sonnet-20241022",
+            messages=messages
+        )
+```
+
+### Examples
+
+See `examples/tools_example.py` for complete examples of using tools with the OpenAI SDK.
 
 ## Session Continuity 🆕
 
@@ -398,8 +531,9 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 ## API Endpoints
 
 ### Core Endpoints
-- `POST /v1/chat/completions` - OpenAI-compatible chat completions (supports `session_id`)
+- `POST /v1/chat/completions` - OpenAI-compatible chat completions (supports `session_id` and `tools`)
 - `GET /v1/models` - List available models
+- `GET /v1/tools` - List available tools/functions 🆕
 - `GET /v1/auth/status` - Check authentication status and configuration
 - `GET /health` - Health check endpoint
 
@@ -660,7 +794,6 @@ Add `"session_id": "your-session-id"` to maintain conversation context:
 
 ### 🚫 **Current Limitations**
 - **Images in messages** are converted to text placeholders
-- **Function calling** not supported (tools work automatically based on prompts)
 - **OpenAI parameters** not yet mapped: `temperature`, `top_p`, `max_tokens`, `logit_bias`, `presence_penalty`, `frequency_penalty`
 - **Multiple responses** (`n > 1`) not supported
 
@@ -671,6 +804,7 @@ Add `"session_id": "your-session-id"` to maintain conversation context:
 - [ ] **MCP integration** - Model Context Protocol server support
 
 ### ✅ **Recent Improvements**
+- **✅ Function Calling**: Full OpenAI function calling support with all Claude tools! 🎉
 - **✅ SDK Integration**: Official Python SDK replaces subprocess calls
 - **✅ Real Metadata**: Accurate costs and token counts from SDK
 - **✅ Multi-auth**: Support for CLI, API key, Bedrock, and Vertex AI authentication  
