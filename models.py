@@ -13,10 +13,25 @@ class ContentPart(BaseModel):
     text: str
 
 
+class FunctionCall(BaseModel):
+    """Function call in assistant message."""
+    name: str
+    arguments: str  # JSON string of arguments
+
+
+class ToolCall(BaseModel):
+    """Tool call in assistant message."""
+    id: str
+    type: str = "function"
+    function: FunctionCall
+
+
 class Message(BaseModel):
-    role: Literal["system", "user", "assistant"]
-    content: Union[str, List[ContentPart]]
+    role: Literal["system", "user", "assistant", "tool"]
+    content: Union[str, List[ContentPart], None]
     name: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = None
+    tool_call_id: Optional[str] = None  # For tool response messages
     
     @model_validator(mode='after')
     def normalize_content(self):
@@ -51,6 +66,12 @@ class ChatCompletionRequest(BaseModel):
     user: Optional[str] = None
     session_id: Optional[str] = Field(default=None, description="Optional session ID for conversation continuity")
     enable_tools: Optional[bool] = Field(default=False, description="Enable Claude Code tools (Read, Write, Bash, etc.) - disabled by default for OpenAI compatibility")
+    
+    # OpenAI function calling parameters
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None  # "none", "auto", or specific function
+    functions: Optional[List[Dict[str, Any]]] = None  # Legacy format
+    function_call: Optional[Union[str, Dict[str, Any]]] = None  # Legacy format
     
     @field_validator('n')
     @classmethod
@@ -109,7 +130,7 @@ class ChatCompletionRequest(BaseModel):
 class Choice(BaseModel):
     index: int
     message: Message
-    finish_reason: Optional[Literal["stop", "length", "content_filter", "null"]] = None
+    finish_reason: Optional[Literal["stop", "length", "content_filter", "null", "tool_calls", "function_call"]] = None
 
 
 class Usage(BaseModel):
