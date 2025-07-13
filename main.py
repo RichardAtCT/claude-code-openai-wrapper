@@ -339,6 +339,7 @@ async def generate_streaming_response(
         # Handle tools - disabled by default for OpenAI compatibility
         if not request.enable_tools:
             # Set disallowed_tools to all available tools to disable them
+            
             disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
                                 'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
                                 'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']

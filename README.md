@@ -44,6 +44,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 ### ⚡ **Advanced Features**
 - **System prompt support** via SDK options
 - **Optional tool usage** - Enable Claude Code tools (Read, Write, Bash, etc.) when needed
+  - **⚠️ Roo Code Users**: Must set `enable_tools: true` for file operations and commands
 - **Fast default mode** - Tools disabled by default for OpenAI API compatibility
 - **Development mode** with auto-reload (`uvicorn --reload`)
 - **Interactive API key protection** - Optional security with auto-generated tokens
@@ -64,13 +65,13 @@ claude auth login  # Recommended for development
 # 3. Clone and setup the wrapper
 git clone https://github.com/RichardAtCT/claude-code-openai-wrapper
 cd claude-code-openai-wrapper
-poetry install
+poetry install  # or: uv sync (for UV users)
 
 # 4. Start the server
-poetry run uvicorn main:app --reload --port 8000
+poetry run uvicorn main:app --reload --port 8000  # or: uv run uvicorn main:app --reload --port 8000
 
 # 5. Test it works
-poetry run python test_endpoints.py
+poetry run python test_endpoints.py  # or: uv run python test_endpoints.py
 ```
 
 🎉 **That's it!** Your OpenAI-compatible Claude Code API is running on `http://localhost:8000`
@@ -96,10 +97,18 @@ poetry run python test_endpoints.py
 
 3. **Python 3.10+**: Required for the server
 
-4. **Poetry**: For dependency management
+4. **Poetry or UV**: For dependency management
+   
+   **Option A: Poetry** (traditional)
    ```bash
-   # Install Poetry (if not already installed)
+   # Install Poetry
    curl -sSL https://install.python-poetry.org | python3 -
+   ```
+   
+   **Option B: UV** (modern, faster)
+   ```bash
+   # Install UV
+   curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 
 ## Installation
@@ -110,12 +119,28 @@ poetry run python test_endpoints.py
    cd claude-code-openai-wrapper
    ```
 
-2. Install dependencies with Poetry:
+2. Install dependencies:
+
+   **Option A: Using Poetry (traditional method)**
    ```bash
    poetry install
    ```
 
-   This will create a virtual environment and install all dependencies.
+   **Option B: Using UV (faster, modern Python package manager)**
+   ```bash
+   # Create virtual environment
+   uv venv
+   
+   # Activate virtual environment (Linux/macOS)
+   source .venv/bin/activate
+   # Or on Windows:
+   # .venv\Scripts\activate
+   
+   # Install dependencies
+   uv sync
+   ```
+
+   Both methods will create a virtual environment and install all dependencies.
 
 3. Configure environment:
    ```bash
@@ -195,20 +220,34 @@ poetry run python main.py
 2. Start the server:
 
    **Development mode (recommended - auto-reloads on changes):**
+   
+   Using Poetry:
    ```bash
    poetry run uvicorn main:app --reload --port 8000
    ```
+   
+   Using UV:
+   ```bash
+   uv run uvicorn main:app --reload --port 8000
+   ```
 
    **Production mode:**
+   
+   Using Poetry:
    ```bash
    poetry run python main.py
+   ```
+   
+   Using UV:
+   ```bash
+   uv run python main.py
    ```
 
    **Port Options for production mode:**
    - Default: Uses port 8000 (or PORT from .env)
    - If port is in use, automatically finds next available port
-   - Specify custom port: `poetry run python main.py 9000`
-   - Set in environment: `PORT=9000 poetry run python main.py`
+   - Specify custom port: `poetry run python main.py 9000` or `uv run python main.py 9000`
+   - Set in environment: `PORT=9000 poetry run python main.py` or `PORT=9000 uv run python main.py`
 
 ## Usage Examples
 
@@ -265,6 +304,7 @@ print(response.choices[0].message.content)
 # Output: Fast response without tool usage (default behavior)
 
 # Enable tools when you need them (e.g., to read files)
+# IMPORTANT: When using with Roo Code, always set enable_tools=True to enable file operations and commands
 response = client.chat.completions.create(
     model="claude-3-5-sonnet-20241022",
     messages=[
@@ -272,6 +312,27 @@ response = client.chat.completions.create(
     ],
     extra_body={"enable_tools": True}  # Enable tools for file access
 )
+### 🤖 **Using with Roo Code**
+
+**IMPORTANT**: When using this wrapper with Roo Code, you must **always enable tools** by setting `enable_tools: true` in your requests. Roo Code requires tool access for file operations, command execution, and other core functionality.
+
+```python
+# Example: Enabling tools for Roo Code
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[
+        {"role": "user", "content": "Create a Python web application"}
+    ],
+    extra_body={"enable_tools": True}  # REQUIRED for Roo Code functionality
+)
+```
+
+Without `enable_tools: true`, Roo Code will be limited to simple Q&A responses and won't be able to:
+- Read or write files
+- Execute commands
+- Browse the web
+- Perform any file system operations
+
 print(response.choices[0].message.content)
 # Output: Claude will actually read your directory and list the files!
 
@@ -457,17 +518,18 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 Test all endpoints with a simple script:
 ```bash
 # Make sure server is running first
-poetry run python test_endpoints.py
+poetry run python test_endpoints.py  # or: uv run python test_endpoints.py
 ```
 
 ### 📝 **Basic Test Suite**
 Run the comprehensive test suite:
 ```bash
 # Make sure server is running first  
-poetry run python test_basic.py
+poetry run python test_basic.py  # or: uv run python test_basic.py
 
 # With API key protection enabled, set TEST_API_KEY:
 TEST_API_KEY=your-generated-key poetry run python test_basic.py
+# or: TEST_API_KEY=your-generated-key uv run python test_basic.py
 ```
 
 The test suite automatically detects whether API key protection is enabled and provides helpful guidance for providing the necessary authentication.
@@ -481,13 +543,13 @@ curl http://localhost:8000/v1/auth/status | python -m json.tool
 ### ⚙️ **Development Tools**
 ```bash
 # Install development dependencies
-poetry install --with dev
+poetry install --with dev  # or: uv sync --with dev
 
 # Format code
-poetry run black .
+poetry run black .  # or: uv run black .
 
 # Run full tests (when implemented)
-poetry run pytest tests/
+poetry run pytest tests/  # or: uv run pytest tests/
 ```
 
 ### ✅ **Expected Results**

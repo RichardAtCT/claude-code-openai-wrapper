@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8002:8000"
+    environment:
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      - PORT=8000
+      - VERBOSE=true
+      - DEBUG_MODE=false
+    volumes:
+      - ~/.claude:/home/appuser/.claude:rw
+    restart: unless-stopped
