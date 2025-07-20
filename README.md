@@ -186,6 +186,38 @@ poetry run python main.py
 - 🌐 **Remote access** - Secure with generated tokens
 - 🔒 **VPN/Tailscale** - Add security layer for remote endpoints
 
+### 🛡️ **Rate Limiting**
+
+Built-in rate limiting protects against abuse and ensures fair usage:
+
+- **Chat Completions** (`/v1/chat/completions`): 10 requests/minute
+- **Debug Requests** (`/v1/debug/request`): 2 requests/minute
+- **Auth Status** (`/v1/auth/status`): 10 requests/minute
+- **Health Check** (`/health`): 30 requests/minute
+
+Rate limits are applied per IP address using a fixed window algorithm. When exceeded, the API returns HTTP 429 with a structured error response:
+
+```json
+{
+  "error": {
+    "message": "Rate limit exceeded. Try again in 60 seconds.",
+    "type": "rate_limit_exceeded",
+    "code": "too_many_requests",
+    "retry_after": 60
+  }
+}
+```
+
+Configure rate limiting through environment variables:
+
+```bash
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_CHAT_PER_MINUTE=10
+RATE_LIMIT_DEBUG_PER_MINUTE=2
+RATE_LIMIT_AUTH_PER_MINUTE=10
+RATE_LIMIT_HEALTH_PER_MINUTE=30
+```
+
 ## Running the Server
 
 1. Verify Claude Code is installed and working:

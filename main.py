@@ -37,6 +37,7 @@ from parameter_validator import ParameterValidator, CompatibilityReporter
 from session_manager import session_manager
 from tool_handler import tool_handler
 from tools import tool_registry
+from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
 
 # Load environment variables
 load_dotenv()
@@ -187,6 +188,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add rate limiting error handler
+if limiter:
+    app.state.limiter = limiter
+    app.add_exception_handler(429, rate_limit_exceeded_handler)
 
 # Add debug logging middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -504,6 +510,7 @@ async def generate_streaming_response(
 
 
 @app.post("/v1/chat/completions")
+@rate_limit_endpoint("chat")
 async def chat_completions(
     request_body: ChatCompletionRequest,
     request: Request,
@@ -726,12 +733,14 @@ async def check_compatibility(request_body: ChatCompletionRequest):
 
 
 @app.get("/health")
-async def health_check():
+@rate_limit_endpoint("health")
+async def health_check(request: Request):
     """Health check endpoint."""
     return {"status": "healthy", "service": "claude-code-openai-wrapper"}
 
 
 @app.post("/v1/debug/request")
+@rate_limit_endpoint("debug")
 async def debug_request_validation(request: Request):
     """Debug endpoint to test request validation and see what's being sent."""
     try:
@@ -800,7 +809,8 @@ async def debug_request_validation(request: Request):
 
 
 @app.get("/v1/auth/status")
-async def get_auth_status():
+@rate_limit_endpoint("auth")
+async def get_auth_status(request: Request):
     """Get Claude Code authentication status."""
     from auth import auth_manager
     
