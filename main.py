@@ -33,6 +33,7 @@ from message_adapter import MessageAdapter
 from auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
 from parameter_validator import ParameterValidator, CompatibilityReporter
 from session_manager import session_manager
+from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
 
 # Load environment variables
 load_dotenv()
@@ -183,6 +184,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add rate limiting error handler
+if limiter:
+    app.state.limiter = limiter
+    app.add_exception_handler(429, rate_limit_exceeded_handler)
 
 # Add debug logging middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -500,6 +506,7 @@ async def generate_streaming_response(
 
 
 @app.post("/v1/chat/completions")
+@rate_limit_endpoint("chat")
 async def chat_completions(
     request_body: ChatCompletionRequest,
     request: Request,
@@ -642,8 +649,14 @@ async def chat_completions(
 
 
 @app.get("/v1/models")
-async def list_models():
+async def list_models(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     """List available models."""
+    # Check FastAPI API key if configured
+    await verify_api_key(request, credentials)
+    
     return {
         "object": "list",
         "data": [
@@ -678,12 +691,14 @@ async def check_compatibility(request_body: ChatCompletionRequest):
 
 
 @app.get("/health")
-async def health_check():
+@rate_limit_endpoint("health")
+async def health_check(request: Request):
     """Health check endpoint."""
     return {"status": "healthy", "service": "claude-code-openai-wrapper"}
 
 
 @app.post("/v1/debug/request")
+@rate_limit_endpoint("debug")
 async def debug_request_validation(request: Request):
     """Debug endpoint to test request validation and see what's being sent."""
     try:
@@ -752,7 +767,8 @@ async def debug_request_validation(request: Request):
 
 
 @app.get("/v1/auth/status")
-async def get_auth_status():
+@rate_limit_endpoint("auth")
+async def get_auth_status(request: Request):
     """Get Claude Code authentication status."""
     from auth import auth_manager
     
