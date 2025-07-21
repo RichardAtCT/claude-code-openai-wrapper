@@ -16,6 +16,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - ✅ **Real-time cost and token tracking** from SDK
 - ✅ **Session continuity** with conversation history across requests 🆕
 - ✅ **Session management endpoints** for full session control 🆕
+- ✅ **Chat mode** for sandboxed, secure chat-only operation 🔒
 - ✅ Health, auth status, and models endpoints
 - ✅ **Development mode** with auto-reload
 
@@ -45,6 +46,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - **System prompt support** via SDK options
 - **Optional tool usage** - Enable Claude Code tools (Read, Write, Bash, etc.) when needed
 - **Fast default mode** - Tools disabled by default for OpenAI API compatibility
+- **Chat mode** - Sandboxed execution with no file system access for secure chat APIs
 - **Development mode** with auto-reload (`uvicorn --reload`)
 - **Interactive API key protection** - Optional security with auto-generated tokens
 - **Comprehensive logging** and debugging capabilities
@@ -143,6 +145,9 @@ MAX_TIMEOUT=600000
 
 # CORS origins
 CORS_ORIGINS=["*"]
+
+# Chat mode - enables sandboxed execution with no file access
+# CHAT_MODE=false
 ```
 
 ### 🔐 **API Security Configuration**
@@ -362,6 +367,7 @@ Env vars override defaults and can be set at runtime with `-e` flags or in `dock
 
 - **Security and API Protection**:
   - `API_KEYS=key1,key2`: Comma-separated list of API keys required for endpoint access (clients must send `Authorization: Bearer <key>`).
+  - `CHAT_MODE=true`: Enable chat mode for sandboxed execution with no file system access (disables sessions, restricts tools).
 
 - **Custom/Advanced Vars**:
   - `MAX_THINKING_TOKENS=4096`: Custom token budget for extended thinking (if implemented in code; e.g., for `budget_tokens` in SDK calls).
@@ -644,6 +650,95 @@ curl -X DELETE http://localhost:8000/v1/sessions/my-session
 ### Examples
 
 See `examples/session_continuity.py` for comprehensive Python examples and `examples/session_curl_example.sh` for curl examples.
+
+## Chat Mode 🔒
+
+The wrapper supports a secure **chat mode** that transforms Claude Code into a sandboxed, chat-only AI with no file system access. This mode is perfect for exposing Claude as a general-purpose chat API while ensuring complete security isolation.
+
+### Enabling Chat Mode
+
+Set the `CHAT_MODE` environment variable to enable secure chat mode:
+
+```bash
+# Enable chat mode
+export CHAT_MODE=true
+python main.py
+```
+
+### Chat Mode Features
+
+When chat mode is enabled:
+
+- **No File System Access**: All file operations are completely blocked
+- **Limited Tools**: Only WebSearch, WebFetch, and Task tools are available
+- **Sandboxed Execution**: Each request runs in an isolated temporary directory
+- **No Sessions**: Sessions are automatically disabled (clients should manage conversation state)
+- **Format Support**: Automatic detection and support for XML tool formats and JSON responses
+- **Prompt Engineering**: Multiple system prompts ensure chat-only behavior
+
+### Security Properties
+
+- **Complete Isolation**: Each request is stateless and runs in a fresh sandbox
+- **Path Hiding**: Environment variables that could reveal system paths are removed
+- **Tool Restrictions**: Only web-based tools allowed, no local system access
+- **Automatic Cleanup**: Temporary directories are cleaned up after each request
+
+### Important Notes
+
+- **Sessions Disabled**: When chat mode is active, all session endpoints return errors
+- **Client Responsibility**: Chat clients should handle their own conversation continuity
+- **No Persistence**: Nothing is saved between requests
+- **Tool Override**: The `enable_tools` parameter is ignored; only chat mode tools are available
+
+### Example Usage
+
+```python
+# Chat mode automatically handles format detection for compatibility
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="your-api-key"
+)
+
+# Simple chat request - runs in complete isolation
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[
+        {"role": "user", "content": "Write a Python function to calculate fibonacci numbers"}
+    ]
+)
+# Claude will output the code in markdown blocks, cannot create files
+
+# XML tool format automatically detected and supported
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[
+        {"role": "system", "content": "Tool uses are formatted using XML-style tags..."},
+        {"role": "user", "content": "Search for information about Python asyncio"}
+    ]
+)
+# Claude will use the XML format if provided by the client
+```
+
+### Chat Mode vs Normal Mode
+
+| Feature | Normal Mode | Chat Mode |
+|---------|------------|-----------|
+| File Operations | ✅ Available (when enabled) | ❌ Blocked |
+| System Commands | ✅ Available (when enabled) | ❌ Blocked |
+| Web Tools | ✅ Available | ✅ Available |
+| Sessions | ✅ Supported | ❌ Disabled |
+| Working Directory | Project directory | Temporary sandbox |
+| Environment | Full environment | Sanitized environment |
+
+### Use Cases
+
+Chat mode is ideal for:
+- **Public APIs**: Safely expose Claude as a chat service
+- **Chat Applications**: Integration with chat clients that manage their own state
+- **Restricted Environments**: When you need Claude's capabilities without system access
+- **Multi-tenant Services**: Ensure complete isolation between requests
 
 ## API Endpoints
 

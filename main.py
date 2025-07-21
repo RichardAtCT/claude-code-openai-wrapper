@@ -34,6 +34,7 @@ from auth import verify_api_key, security, validate_claude_code_auth, get_claude
 from parameter_validator import ParameterValidator, CompatibilityReporter
 from session_manager import session_manager
 from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
+from chat_mode import ChatMode, get_chat_mode_info
 
 # Load environment variables
 load_dotenv()
@@ -52,6 +53,11 @@ logger = logging.getLogger(__name__)
 
 # Global variable to store runtime-generated API key
 runtime_api_key = None
+
+# Check if chat mode is enabled
+CHAT_MODE = ChatMode.is_enabled()
+if CHAT_MODE:
+    logger.info("🔒 Chat mode enabled - sessions disabled, sandboxed execution active")
 
 def generate_secure_token(length: int = 32) -> str:
     """Generate a secure random token for API authentication."""
@@ -157,14 +163,18 @@ async def lifespan(app: FastAPI):
         logger.debug(f"   GET  /health - Health check")
         logger.debug(f"🔧 API Key protection: {'Enabled' if (os.getenv('API_KEY') or runtime_api_key) else 'Disabled'}")
     
-    # Start session cleanup task
-    session_manager.start_cleanup_task()
+    # Start session cleanup task only if not in chat mode
+    if not CHAT_MODE:
+        session_manager.start_cleanup_task()
+    else:
+        logger.info("Session manager disabled in chat mode")
     
     yield
     
     # Cleanup on shutdown
-    logger.info("Shutting down session manager...")
-    session_manager.shutdown()
+    if not CHAT_MODE:
+        logger.info("Shutting down session manager...")
+        session_manager.shutdown()
 
 
 # Create FastAPI app
@@ -318,10 +328,16 @@ async def generate_streaming_response(
 ) -> AsyncGenerator[str, None]:
     """Generate SSE formatted streaming response."""
     try:
-        # Process messages with session management
-        all_messages, actual_session_id = session_manager.process_messages(
-            request.messages, request.session_id
-        )
+        # In chat mode, skip session management
+        if CHAT_MODE:
+            all_messages = request.messages  # Keep as Message objects
+            actual_session_id = None
+            logger.info("Chat mode active - sessions disabled")
+        else:
+            # Process messages with session management
+            all_messages, actual_session_id = session_manager.process_messages(
+                request.messages, request.session_id
+            )
         
         # Convert messages to prompt
         prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
@@ -343,7 +359,13 @@ async def generate_streaming_response(
             ParameterValidator.validate_model(claude_options['model'])
         
         # Handle tools - disabled by default for OpenAI compatibility
-        if not request.enable_tools:
+        if CHAT_MODE:
+            # Chat mode overrides all tool settings
+            logger.info("Chat mode: using restricted tool set")
+            claude_options['allowed_tools'] = ChatMode.get_allowed_tools()
+            claude_options['disallowed_tools'] = None
+            claude_options['max_turns'] = claude_options.get('max_turns', 10)
+        elif not request.enable_tools:
             # Set disallowed_tools to all available tools to disable them
             disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
                                 'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
@@ -366,7 +388,8 @@ async def generate_streaming_response(
             max_turns=claude_options.get('max_turns', 10),
             allowed_tools=claude_options.get('allowed_tools'),
             disallowed_tools=claude_options.get('disallowed_tools'),
-            stream=True
+            stream=True,
+            messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]  # Convert to dicts for format detection
         ):
             chunks_buffer.append(chunk)
             
@@ -554,12 +577,18 @@ async def chat_completions(
             )
         else:
             # Non-streaming response
-            # Process messages with session management
-            all_messages, actual_session_id = session_manager.process_messages(
-                request_body.messages, request_body.session_id
-            )
-            
-            logger.info(f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}")
+            # In chat mode, skip session management
+            if CHAT_MODE:
+                all_messages = request_body.messages  # Keep as Message objects
+                actual_session_id = None
+                logger.info("Chat mode active - sessions disabled")
+            else:
+                # Process messages with session management
+                all_messages, actual_session_id = session_manager.process_messages(
+                    request_body.messages, request_body.session_id
+                )
+                
+                logger.info(f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}")
             
             # Convert messages to prompt
             prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
@@ -581,7 +610,13 @@ async def chat_completions(
                 ParameterValidator.validate_model(claude_options['model'])
             
             # Handle tools - disabled by default for OpenAI compatibility
-            if not request_body.enable_tools:
+            if CHAT_MODE:
+                # Chat mode overrides all tool settings
+                logger.info("Chat mode: using restricted tool set")
+                claude_options['allowed_tools'] = ChatMode.get_allowed_tools()
+                claude_options['disallowed_tools'] = None
+                claude_options['max_turns'] = claude_options.get('max_turns', 10)
+            elif not request_body.enable_tools:
                 # Set disallowed_tools to all available tools to disable them
                 disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
                                     'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
@@ -601,7 +636,8 @@ async def chat_completions(
                 max_turns=claude_options.get('max_turns', 10),
                 allowed_tools=claude_options.get('allowed_tools'),
                 disallowed_tools=claude_options.get('disallowed_tools'),
-                stream=False
+                stream=False,
+                messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]  # Convert to dicts for format detection
             ):
                 chunks.append(chunk)
             
@@ -780,7 +816,8 @@ async def get_auth_status(request: Request):
         "server_info": {
             "api_key_required": bool(active_api_key),
             "api_key_source": "environment" if os.getenv("API_KEY") else ("runtime" if runtime_api_key else "none"),
-            "version": "1.0.0"
+            "version": "1.0.0",
+            "chat_mode": get_chat_mode_info()
         }
     }
 
@@ -790,6 +827,17 @@ async def get_session_stats(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Get session manager statistics."""
+    if CHAT_MODE:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "message": "Sessions are disabled in chat mode. Conversation continuity should be handled by your chat client.",
+                    "type": "invalid_request_error",
+                    "code": "chat_mode_active"
+                }
+            }
+        )
     stats = session_manager.get_stats()
     return {
         "session_stats": stats,
@@ -803,6 +851,17 @@ async def list_sessions(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """List all active sessions."""
+    if CHAT_MODE:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "message": "Sessions are disabled in chat mode. Conversation continuity should be handled by your chat client.",
+                    "type": "invalid_request_error",
+                    "code": "chat_mode_active"
+                }
+            }
+        )
     sessions = session_manager.list_sessions()
     return SessionListResponse(sessions=sessions, total=len(sessions))
 
@@ -813,6 +872,17 @@ async def get_session(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Get information about a specific session."""
+    if CHAT_MODE:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "message": "Sessions are disabled in chat mode. Conversation continuity should be handled by your chat client.",
+                    "type": "invalid_request_error",
+                    "code": "chat_mode_active"
+                }
+            }
+        )
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -826,6 +896,17 @@ async def delete_session(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Delete a specific session."""
+    if CHAT_MODE:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "message": "Sessions are disabled in chat mode. Conversation continuity should be handled by your chat client.",
+                    "type": "invalid_request_error",
+                    "code": "chat_mode_active"
+                }
+            }
+        )
     deleted = session_manager.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")

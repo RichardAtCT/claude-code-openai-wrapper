@@ -7,13 +7,28 @@ import logging
 
 from claude_code_sdk import query, ClaudeCodeOptions, Message
 
+# Import chat mode utilities
+from chat_mode import ChatMode
+from prompts import ChatModePrompts, FormatDetector, inject_prompts
+
 logger = logging.getLogger(__name__)
 
 
 class ClaudeCodeCLI:
     def __init__(self, timeout: int = 600000, cwd: Optional[str] = None):
         self.timeout = timeout / 1000  # Convert ms to seconds
-        self.cwd = Path(cwd) if cwd else Path.cwd()
+        
+        # Check if chat mode is enabled
+        self.chat_mode = ChatMode.is_enabled()
+        self.format_detector = FormatDetector()
+        self.prompts = ChatModePrompts()
+        
+        if self.chat_mode:
+            # In chat mode, we'll create sandbox directories per request
+            self.cwd = None
+            logger.info("Chat mode enabled - sessions disabled, sandbox execution active")
+        else:
+            self.cwd = Path(cwd) if cwd else Path.cwd()
         
         # Import auth manager
         from auth import auth_manager, validate_claude_code_auth
@@ -64,6 +79,30 @@ class ClaudeCodeCLI:
             logger.warning("  3. Test: claude --print 'Hello'")
             return False
     
+    def _prepare_prompt_with_injections(self, prompt: str, messages: Optional[List[Dict]] = None) -> str:
+        """Prepare prompt with system injections based on mode and format detection."""
+        prompt_parts = []
+        
+        # Always add response reinforcement
+        prompt_parts.append(f"System: {self.prompts.RESPONSE_REINFORCEMENT_PROMPT}")
+        
+        # Add chat mode prompt if enabled
+        if self.chat_mode:
+            prompt_parts.append(f"System: {self.prompts.CHAT_MODE_NO_FILES_PROMPT}")
+        
+        # Add user prompt
+        prompt_parts.append(f"User: {prompt}")
+        
+        # Detect formats and add final reinforcement if we have messages
+        if messages:
+            has_tool_defs, has_json_req = self.format_detector.detect_special_formats(messages)
+            
+            final_reinforcement = self.prompts.get_final_reinforcement(has_tool_defs, has_json_req)
+            if final_reinforcement:
+                prompt_parts.append(f"System: {final_reinforcement}")
+        
+        return "\n\n".join(prompt_parts)
+    
     async def run_completion(
         self, 
         prompt: str,
@@ -74,9 +113,30 @@ class ClaudeCodeCLI:
         allowed_tools: Optional[List[str]] = None,
         disallowed_tools: Optional[List[str]] = None,
         session_id: Optional[str] = None,
-        continue_session: bool = False
+        continue_session: bool = False,
+        messages: Optional[List[Dict]] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run Claude Code using the Python SDK and yield response chunks."""
+        
+        # In chat mode, override certain behaviors
+        if self.chat_mode:
+            # Log if session parameters were provided
+            if session_id or continue_session:
+                logger.warning("Session parameters ignored in chat mode - each request is stateless")
+            
+            # Create sandbox directory for this request
+            sandbox_dir = ChatMode.create_sandbox()
+            cwd = Path(sandbox_dir)
+            
+            # Force allowed tools to chat mode tools
+            allowed_tools = ChatMode.get_allowed_tools()
+            
+            # Prepare prompt with injections
+            enhanced_prompt = self._prepare_prompt_with_injections(prompt, messages)
+        else:
+            # Normal mode
+            cwd = self.cwd
+            enhanced_prompt = prompt
         
         try:
             # Set authentication environment variables (if any)
@@ -87,57 +147,63 @@ class ClaudeCodeCLI:
                     os.environ[key] = value
             
             try:
-                # Build SDK options
-                options = ClaudeCodeOptions(
-                    max_turns=max_turns,
-                    cwd=self.cwd
-                )
-                
-                # Set model if specified
-                if model:
-                    options.model = model
+                # Execute in chat mode without environment sanitization
+                # The SDK needs auth env vars, but execution is still sandboxed via cwd
+                if self.chat_mode:
+                    # Build SDK options with sandbox
+                    options = ClaudeCodeOptions(
+                        max_turns=max_turns,
+                        cwd=cwd  # This provides the file system isolation
+                    )
                     
-                # Set system prompt if specified
-                if system_prompt:
-                    options.system_prompt = system_prompt
-                    
-                # Set tool restrictions
-                if allowed_tools:
+                    # Set model if specified
+                    if model:
+                        options.model = model
+                        
+                    # Set system prompt if specified
+                    if system_prompt:
+                        options.system_prompt = system_prompt
+                        
+                    # Set tool restrictions
                     options.allowed_tools = allowed_tools
-                if disallowed_tools:
-                    options.disallowed_tools = disallowed_tools
                     
-                # Handle session continuity
-                if continue_session:
-                    options.continue_session = True
-                elif session_id:
-                    options.resume = session_id
-                
-                # Run the query and yield messages
-                async for message in query(prompt=prompt, options=options):
-                    # Debug logging
-                    logger.debug(f"Raw SDK message type: {type(message)}")
-                    logger.debug(f"Raw SDK message: {message}")
+                    # Force disable session features in chat mode
+                    options.continue_session = False
+                    options.resume = None
                     
-                    # Convert message object to dict if needed
-                    if hasattr(message, '__dict__') and not isinstance(message, dict):
-                        # Convert object to dict for consistent handling
-                        message_dict = {}
+                    # Run the query and yield messages
+                    async for message in query(prompt=enhanced_prompt, options=options):
+                        yield self._process_message(message)
+                else:
+                    # Normal mode - existing logic
+                    options = ClaudeCodeOptions(
+                        max_turns=max_turns,
+                        cwd=cwd
+                    )
+                    
+                    # Set model if specified
+                    if model:
+                        options.model = model
                         
-                        # Get all attributes from the object
-                        for attr_name in dir(message):
-                            if not attr_name.startswith('_'):  # Skip private attributes
-                                try:
-                                    attr_value = getattr(message, attr_name)
-                                    if not callable(attr_value):  # Skip methods
-                                        message_dict[attr_name] = attr_value
-                                except:
-                                    pass
+                    # Set system prompt if specified
+                    if system_prompt:
+                        options.system_prompt = system_prompt
                         
-                        logger.debug(f"Converted message dict: {message_dict}")
-                        yield message_dict
-                    else:
-                        yield message
+                    # Set tool restrictions
+                    if allowed_tools:
+                        options.allowed_tools = allowed_tools
+                    if disallowed_tools:
+                        options.disallowed_tools = disallowed_tools
+                        
+                    # Handle session continuity
+                    if continue_session:
+                        options.continue_session = True
+                    elif session_id:
+                        options.resume = session_id
+                    
+                    # Run the query and yield messages
+                    async for message in query(prompt=enhanced_prompt, options=options):
+                        yield self._process_message(message)
                     
             finally:
                 # Restore original environment (if we changed anything)
@@ -148,6 +214,10 @@ class ClaudeCodeCLI:
                         else:
                             os.environ[key] = original_value
                 
+                # Cleanup sandbox if in chat mode
+                if self.chat_mode and 'sandbox_dir' in locals():
+                    ChatMode.cleanup_sandbox(sandbox_dir)
+                
         except Exception as e:
             logger.error(f"Claude Code SDK error: {e}")
             # Yield error message in the expected format
@@ -157,6 +227,32 @@ class ClaudeCodeCLI:
                 "is_error": True,
                 "error_message": str(e)
             }
+    
+    def _process_message(self, message: Any) -> Dict[str, Any]:
+        """Process message from SDK to consistent dict format."""
+        # Debug logging
+        logger.debug(f"Raw SDK message type: {type(message)}")
+        logger.debug(f"Raw SDK message: {message}")
+        
+        # Convert message object to dict if needed
+        if hasattr(message, '__dict__') and not isinstance(message, dict):
+            # Convert object to dict for consistent handling
+            message_dict = {}
+            
+            # Get all attributes from the object
+            for attr_name in dir(message):
+                if not attr_name.startswith('_'):  # Skip private attributes
+                    try:
+                        attr_value = getattr(message, attr_name)
+                        if not callable(attr_value):  # Skip methods
+                            message_dict[attr_name] = attr_value
+                    except:
+                        pass
+            
+            logger.debug(f"Converted message dict: {message_dict}")
+            return message_dict
+        else:
+            return message
     
     def parse_claude_message(self, messages: List[Dict[str, Any]]) -> Optional[str]:
         """Extract the assistant message from Claude Code SDK messages."""
