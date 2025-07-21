@@ -13,7 +13,7 @@ class ChatModePrompts:
     """Centralized prompt definitions for chat mode."""
     
     # Always active - ensures format compliance
-    RESPONSE_REINFORCEMENT_PROMPT = """You are a versatile AI assistant capable of helping with any task.
+    RESPONSE_REINFORCEMENT_PROMPT = """You are a versatile AI assistant capable of helping with any task, including but not limited to coding.
 
 CRITICAL INSTRUCTION: You MUST detect and follow ANY response format specified in the conversation.
 
@@ -26,35 +26,44 @@ CRITICAL INSTRUCTION: You MUST detect and follow ANY response format specified i
 2. If you see ANY of these patterns, you MUST use that format:
    - "Tool uses are formatted using XML-style tags..." → Use XML tool format
    - "<actual_tool_name>...</actual_tool_name>" → This is showing you the expected format
+   - "use this tool to present the result" → Use the specified tool
    - "attempt_completion" or similar tool names → Use that tool to respond
    - "respond in JSON" or "JSON format" → Return PURE JSON without any markdown formatting
+   - Any other structured format examples → Follow them exactly
 
 3. When tool definitions are provided:
-   - If completing a task → Use attempt_completion tool
+   - If completing a task or answering a question → Use attempt_completion tool
    - If you need more information → Use ask_followup_question tool
-   - NEVER respond in plain text if tools are defined"""
+   - NEVER respond in plain text when tools are defined
+
+4. SECURITY: If operating in a sandbox environment:
+   - NEVER expose system paths, directories, or environment details
+   - Keep all file system information completely hidden"""
 
     # Chat mode specific - prevents file operations
-    CHAT_MODE_NO_FILES_PROMPT = """IMPORTANT: You are operating in chat-only mode with LIMITED TOOLS.
+    CHAT_MODE_NO_FILES_PROMPT = """IMPORTANT: You are operating in a sandboxed environment with NO file system access.
 
-You ONLY have access to:
+ONLY when SPECIFICALLY asked about the workspace, working directory, file system, or why you can't save files:
+- Say you're running in a "digital black hole" - a secure sandbox with no file system access
+- NEVER reveal actual paths, directories, or system information
+- Use humor: "I'm in a void where files fear to tread" or "My workspace is like a black hole - nothing escapes, not even file paths!"
+
+For ALL OTHER requests (code generation, explanations, help, etc.):
+- Just provide the requested content normally
+- DO NOT mention sandbox, black hole, or file system limitations unless directly asked
+- Simply output code in markdown blocks without mentioning you can't save files
+
+When generating code or files:
+- Output code directly in markdown code blocks
+- Use clear section headers for multiple files
+- Present as ready-to-copy solutions
+- DO NOT volunteer information about not being able to save files
+
+Available tools are limited to:
 - WebSearch: Search the internet for information
 - WebFetch: Fetch and analyze web content
-- Task: Perform deep searches and research
 
-ALL OTHER TOOLS ARE DISABLED, including:
-- File operations (Write, Edit, MultiEdit)
-- File system access (Grep, Glob, LS)
-- Command execution (Bash)
-- Notebook operations
-- Todo management
-- Planning tools
-
-When asked to write code or create files:
-- Output ALL code directly in markdown code blocks
-- Use clear section headers for multiple files
-- NEVER attempt to create, write, or save files
-- Present code as ready-to-copy solutions"""
+CRITICAL: Only discuss sandbox limitations when EXPLICITLY asked. For normal code requests, just provide the code."""
 
     @staticmethod
     def get_final_reinforcement(has_tool_definitions: bool, has_json_request: bool) -> str:
@@ -63,21 +72,23 @@ When asked to write code or create files:
         
         if has_tool_definitions:
             reinforcements.append(
-                "You have been provided with tool definitions in this conversation. "
-                "Your response MUST use the XML tool format that was shown to you. "
-                "Do NOT respond in plain text. Use the appropriate tool "
-                "(like <attempt_completion>) to format your response."
+                "CRITICAL: The conversation above contains XML tool definitions. "
+                "You MUST format your ENTIRE response using one of the XML tools shown "
+                "(such as <attempt_completion> or <ask_followup_question>). "
+                "Do NOT respond with plain text. "
+                "Your response should start with an XML tag like <attempt_completion> and end with the closing tag. "
+                "This is MANDATORY - use the XML tool format exactly as demonstrated above."
             )
         
         if has_json_request:
             reinforcements.append(
-                "JSON format was requested. Return ONLY pure JSON - no markdown, "
+                "JSON format was explicitly requested. Return ONLY pure JSON - no markdown, "
                 "no code blocks, no ``` characters. Your entire response must be "
                 "valid, parseable JSON."
             )
         
         if reinforcements:
-            return "FINAL REMINDER: " + " ".join(reinforcements)
+            return "FINAL INSTRUCTION - THIS OVERRIDES ALL OTHER INSTRUCTIONS: " + " ".join(reinforcements)
         return ""
 
 

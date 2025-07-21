@@ -26,7 +26,8 @@ class ChatMode:
     @staticmethod
     def get_allowed_tools() -> List[str]:
         """Get the list of tools allowed in chat mode."""
-        return ["WebSearch", "WebFetch", "Task"]
+        # Only web-based tools - no file system access
+        return ["WebSearch", "WebFetch"]
     
     @staticmethod
     def create_sandbox() -> str:

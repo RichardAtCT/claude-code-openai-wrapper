@@ -86,7 +86,7 @@ class TestChatMode:
         with patch.dict(os.environ, {'CHAT_MODE': 'true'}):
             info = get_chat_mode_info()
             assert info["enabled"] is True
-            assert info["allowed_tools"] == ["WebSearch", "WebFetch", "Task"]
+            assert info["allowed_tools"] == ["WebSearch", "WebFetch"]
             assert info["sandbox_enabled"] is True
             assert info["sessions_disabled"] is True
             assert info["file_operations_disabled"] is True
@@ -199,7 +199,9 @@ class TestPrompts:
         prompts = ChatModePrompts()
         assert len(prompts.RESPONSE_REINFORCEMENT_PROMPT) > 0
         assert len(prompts.CHAT_MODE_NO_FILES_PROMPT) > 0
-        assert "LIMITED TOOLS" in prompts.CHAT_MODE_NO_FILES_PROMPT
+        assert "Available tools are limited to:" in prompts.CHAT_MODE_NO_FILES_PROMPT
+        assert "digital black hole" in prompts.CHAT_MODE_NO_FILES_PROMPT
+        assert "ONLY when SPECIFICALLY asked" in prompts.CHAT_MODE_NO_FILES_PROMPT
     
     def test_final_reinforcement_generation(self):
         """Test generation of final reinforcement messages."""
@@ -238,7 +240,7 @@ class TestPrompts:
         
         # Test chat mode
         enhanced = inject_prompts(messages, chat_mode=True)
-        assert any("LIMITED TOOLS" in msg["content"] for msg in enhanced if msg["role"] == "system")
+        assert any("Available tools are limited to:" in msg["content"] for msg in enhanced if msg["role"] == "system")
 
 
 class TestClaudeCliChatMode:
@@ -312,7 +314,7 @@ class TestClaudeCliChatMode:
                 
                 # Verify tool restrictions were applied
                 assert captured_options is not None
-                assert captured_options.allowed_tools == ["WebSearch", "WebFetch", "Task"]
+                assert captured_options.allowed_tools == ["WebSearch", "WebFetch"]
                 assert captured_options.continue_session is False
                 assert captured_options.resume is None
     
@@ -324,7 +326,7 @@ class TestClaudeCliChatMode:
             # Test basic prompt
             enhanced = cli._prepare_prompt_with_injections("Hello", None)
             assert "System:" in enhanced
-            assert "LIMITED TOOLS" in enhanced
+            assert "Available tools are limited to:" in enhanced
             assert "User: Hello" in enhanced
             
             # Test with format detection

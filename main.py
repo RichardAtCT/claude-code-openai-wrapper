@@ -342,10 +342,13 @@ async def generate_streaming_response(
         # Convert messages to prompt
         prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
         
-        # Filter content for unsupported features
-        prompt = MessageAdapter.filter_content(prompt)
-        if system_prompt:
-            system_prompt = MessageAdapter.filter_content(system_prompt)
+        # Filter content for unsupported features (skip in chat mode to preserve XML)
+        if not CHAT_MODE:
+            prompt = MessageAdapter.filter_content(prompt)
+            if system_prompt:
+                system_prompt = MessageAdapter.filter_content(system_prompt)
+        else:
+            logger.debug("Chat mode: Skipping content filtering to preserve XML tool definitions")
         
         # Get Claude Code SDK options from request
         claude_options = request.to_claude_options()
@@ -432,8 +435,12 @@ async def generate_streaming_response(
                         else:
                             continue
                             
-                        # Filter out tool usage and thinking blocks
-                        filtered_text = MessageAdapter.filter_content(raw_text)
+                        # Filter out tool usage and thinking blocks (skip in chat mode)
+                        if CHAT_MODE:
+                            # In chat mode, preserve the exact response format
+                            filtered_text = raw_text
+                        else:
+                            filtered_text = MessageAdapter.filter_content(raw_text)
                             
                         if filtered_text and not filtered_text.isspace():
                             # Create streaming chunk
@@ -451,8 +458,12 @@ async def generate_streaming_response(
                             content_sent = True
                 
                 elif isinstance(content, str):
-                    # Filter out tool usage and thinking blocks
-                    filtered_content = MessageAdapter.filter_content(content)
+                    # Filter out tool usage and thinking blocks (skip in chat mode)
+                    if CHAT_MODE:
+                        # In chat mode, preserve the exact response format
+                        filtered_content = content
+                    else:
+                        filtered_content = MessageAdapter.filter_content(content)
                     
                     if filtered_content and not filtered_content.isspace():
                         # Create streaming chunk
@@ -593,10 +604,13 @@ async def chat_completions(
             # Convert messages to prompt
             prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
             
-            # Filter content
-            prompt = MessageAdapter.filter_content(prompt)
-            if system_prompt:
-                system_prompt = MessageAdapter.filter_content(system_prompt)
+            # Filter content (skip in chat mode to preserve XML)
+            if not CHAT_MODE:
+                prompt = MessageAdapter.filter_content(prompt)
+                if system_prompt:
+                    system_prompt = MessageAdapter.filter_content(system_prompt)
+            else:
+                logger.debug("Chat mode: Skipping content filtering to preserve XML tool definitions")
             
             # Get Claude Code SDK options from request
             claude_options = request_body.to_claude_options()
@@ -647,8 +661,13 @@ async def chat_completions(
             if not raw_assistant_content:
                 raise HTTPException(status_code=500, detail="No response from Claude Code")
             
-            # Filter out tool usage and thinking blocks
-            assistant_content = MessageAdapter.filter_content(raw_assistant_content)
+            # Filter out tool usage and thinking blocks (skip in chat mode)
+            if CHAT_MODE:
+                # In chat mode, preserve the exact response format
+                assistant_content = raw_assistant_content
+                logger.debug(f"Chat mode: Preserving raw response format, length: {len(assistant_content)}")
+            else:
+                assistant_content = MessageAdapter.filter_content(raw_assistant_content)
             
             # Add assistant response to session if using session mode
             if actual_session_id:

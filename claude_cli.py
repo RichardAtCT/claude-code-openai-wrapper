@@ -81,27 +81,89 @@ class ClaudeCodeCLI:
     
     def _prepare_prompt_with_injections(self, prompt: str, messages: Optional[List[Dict]] = None) -> str:
         """Prepare prompt with system injections based on mode and format detection."""
-        prompt_parts = []
+        # Import MessageAdapter to use the format detection
+        from message_adapter import MessageAdapter
+        import re
         
-        # Always add response reinforcement
-        prompt_parts.append(f"System: {self.prompts.RESPONSE_REINFORCEMENT_PROMPT}")
+        # Check if the prompt already has structured format
+        has_structured_prompt = MessageAdapter.has_structured_format(prompt)
         
-        # Add chat mode prompt if enabled
-        if self.chat_mode:
-            prompt_parts.append(f"System: {self.prompts.CHAT_MODE_NO_FILES_PROMPT}")
-        
-        # Add user prompt
-        prompt_parts.append(f"User: {prompt}")
-        
-        # Detect formats and add final reinforcement if we have messages
-        if messages:
-            has_tool_defs, has_json_req = self.format_detector.detect_special_formats(messages)
+        if has_structured_prompt:
+            # For structured prompts (XML, JSON, etc), preserve the exact format
+            logger.debug("Detected structured prompt format - minimal injection")
             
-            final_reinforcement = self.prompts.get_final_reinforcement(has_tool_defs, has_json_req)
-            if final_reinforcement:
-                prompt_parts.append(f"System: {final_reinforcement}")
-        
-        return "\n\n".join(prompt_parts)
+            pre_injections = []
+            post_injections = []
+            
+            # Check if the prompt contains tool definitions
+            # Look for common patterns that indicate tool usage expectations
+            prompt_lower = prompt.lower()
+            has_tool_indicators = any([
+                "tool use" in prompt_lower,
+                "tool uses are formatted" in prompt_lower,
+                "<actual_tool_name>" in prompt_lower,
+                "xml-style tags" in prompt_lower,
+                "attempt_completion" in prompt_lower,
+                "ask_followup_question" in prompt_lower,
+                re.search(r'<\w+>\s*<\w+>', prompt) is not None  # XML-like nested tags
+            ])
+            
+            if has_tool_indicators and self.chat_mode:
+                # Only add strong XML enforcement in chat mode
+                # This ensures compatibility with Roo/Cline while not affecting normal usage
+                tool_instruction = (
+                    "\n\nCRITICAL FINAL INSTRUCTION: You MUST use the XML tool format shown above in your response. "
+                    "The conversation above contains tool definitions like <attempt_completion>, <ask_followup_question>, etc. "
+                    "You MUST format your ENTIRE response using one of these XML tools. "
+                    "Do NOT respond with plain text. Use the appropriate XML tool tag to wrap your response."
+                )
+                post_injections.append(tool_instruction)
+                logger.debug("Added XML tool usage instruction for chat mode")
+            elif self.chat_mode and not has_tool_indicators:
+                # Only add full chat mode prompt if there are no tool indicators
+                pre_injections.append(self.prompts.CHAT_MODE_NO_FILES_PROMPT)
+                logger.debug("Added full chat mode prompt (no tool indicators detected)")
+            
+            # Build the final prompt with pre and post injections
+            final_prompt = prompt
+            if pre_injections:
+                final_prompt = "\n\n".join(pre_injections) + "\n\n" + final_prompt
+            if post_injections:
+                final_prompt = final_prompt + "\n\n".join(post_injections)
+                
+            return final_prompt
+        else:
+            # For plain text prompts, use the full injection with role prefixes
+            prompt_parts = []
+            final_parts = []
+            
+            # Add response reinforcement only in chat mode
+            if self.chat_mode:
+                prompt_parts.append(f"System: {self.prompts.RESPONSE_REINFORCEMENT_PROMPT}")
+                prompt_parts.append(f"System: {self.prompts.CHAT_MODE_NO_FILES_PROMPT}")
+            
+            # Add user prompt
+            if self.chat_mode:
+                prompt_parts.append(f"User: {prompt}")
+            else:
+                # In normal mode, return prompt as-is
+                return prompt
+            
+            # Detect formats and add final reinforcement if we have messages (chat mode only)
+            if messages and self.chat_mode:
+                has_tool_defs, has_json_req = self.format_detector.detect_special_formats(messages)
+                
+                final_reinforcement = self.prompts.get_final_reinforcement(has_tool_defs, has_json_req)
+                if final_reinforcement:
+                    # Add this as a final part after everything else
+                    final_parts.append(f"System: {final_reinforcement}")
+            
+            # Combine all parts with final reinforcement at the very end
+            full_prompt = "\n\n".join(prompt_parts)
+            if final_parts:
+                full_prompt += "\n\n" + "\n\n".join(final_parts)
+                
+            return full_prompt
     
     async def run_completion(
         self, 
@@ -172,8 +234,13 @@ class ClaudeCodeCLI:
                     options.resume = None
                     
                     # Run the query and yield messages
+                    logger.debug(f"Executing query with enhanced prompt in chat mode")
                     async for message in query(prompt=enhanced_prompt, options=options):
-                        yield self._process_message(message)
+                        processed_msg = self._process_message(message)
+                        # Log assistant responses
+                        if processed_msg.get("type") == "assistant" or "content" in processed_msg:
+                            logger.debug(f"Assistant message type: {processed_msg.get('type')}, has content: {'content' in processed_msg}")
+                        yield processed_msg
                 else:
                     # Normal mode - existing logic
                     options = ClaudeCodeOptions(
