@@ -357,28 +357,30 @@ async def stream_with_progress_injection(
     
     # Create a merged stream that combines queued chunks and progress indicators
     async def merged_stream():
-        indicators = ["💭", "🔍", "⚡", "🔄", "✨"]
-        indicator_index = 0
-        hold_on_sent = False
-        last_activity_time = asyncio.get_event_loop().time()
-        progress_count = 0  # Track number of progress indicators sent
+        # Progress messages - simple and professional
+        progress_messages = [
+            "Working on it",
+            "Still processing", 
+            "Almost there"
+        ]
         
-        # Calculate dynamic delay based on how many indicators we've sent
-        def get_next_delay():
-            if progress_count == 0:
-                return 2.0  # Initial delay before "Hold on..."
-            elif progress_count == 1:
-                return 2.0  # First indicator after "Hold on..."
-            elif progress_count < 5:
-                return 3.0  # Slightly longer for next few
-            elif progress_count < 10:
-                return 4.0  # Even longer
-            else:
-                return 5.0  # Max delay for later indicators
+        progress_sent = False
+        any_content_sent = False  # Track if ANY content has been sent
+        last_activity_time = asyncio.get_event_loop().time()
+        current_message_index = 0  # Track which message we're showing
+        current_dots = 0  # Track number of dots (0-3)
+        last_dot_time = 0  # Track when we last added a dot
+        last_message_time = 0  # Track when we last changed message
+        
+        # Timing configuration
+        DOT_INTERVAL = 2.5  # Add a dot every 2.5 seconds
+        MESSAGE_INTERVAL = 10.0  # Change message every 10 seconds
+        INITIAL_DELAY = 4.0  # Wait 4s before first progress
+        MAX_DOTS = 3  # Maximum dots per message
         
         # Create tasks for queue and progress
         queue_task = asyncio.create_task(chunk_queue.get())
-        progress_task = asyncio.create_task(asyncio.sleep(get_next_delay()))
+        progress_task = asyncio.create_task(asyncio.sleep(INITIAL_DELAY))
         
         while True:
             # Wait for either a chunk or timeout
@@ -402,14 +404,43 @@ async def stream_with_progress_injection(
                                 pass
                         return
                     
-                    # Log chunk arrival for debugging
-                    logger.debug(f"Progress injection: Received chunk, resetting progress state")
+                    # Check if this is actual text content or just tool use
+                    is_text_content = False
+                    if "data: " in chunk:
+                        try:
+                            # Parse the SSE data
+                            data_line = chunk.split("data: ", 1)[1].strip()
+                            if data_line and data_line != "[DONE]":
+                                import json
+                                data = json.loads(data_line)
+                                # Check if it has actual text content
+                                if "choices" in data and len(data["choices"]) > 0:
+                                    delta = data["choices"][0].get("delta", {})
+                                    if "content" in delta and delta["content"]:
+                                        is_text_content = True
+                        except:
+                            pass
                     
-                    # Reset progress state when ANY chunk arrives
-                    last_activity_time = asyncio.get_event_loop().time()
-                    hold_on_sent = False
-                    indicator_index = 0
-                    progress_count = 0
+                    # Only reset progress state for actual text content
+                    if is_text_content:
+                        logger.debug(f"Progress injection: Received text content, resetting progress state")
+                        
+                        # If we showed progress and now getting real content, add spacing
+                        if progress_sent:
+                            # Send a newline chunk before the actual content
+                            spacing_chunk = create_progress_chunk(request_id, model, "\n")
+                            yield spacing_chunk
+                            logger.debug("Progress injection: Added spacing before content")
+                        
+                        last_activity_time = asyncio.get_event_loop().time()
+                        progress_sent = False
+                        current_message_index = 0
+                        current_dots = 0
+                        last_dot_time = 0
+                        last_message_time = 0
+                        any_content_sent = True  # Mark that we've seen content
+                    else:
+                        logger.debug(f"Progress injection: Received non-text chunk (tool use or metadata)")
                     
                     # Cancel existing progress task to prevent it from firing
                     if progress_task and not progress_task.done():
@@ -424,36 +455,69 @@ async def stream_with_progress_injection(
                     
                     # Create new task for next chunk
                     queue_task = asyncio.create_task(chunk_queue.get())
-                    # Restart progress monitoring
-                    progress_task = asyncio.create_task(asyncio.sleep(get_next_delay()))
+                    # Restart progress monitoring with short interval for dots
+                    progress_task = asyncio.create_task(asyncio.sleep(0.5))  # Check every 0.5s for smoother updates
                     
                 elif task == progress_task:
-                    # Progress timeout fired
+                    # Progress timeout fired - check what we need to update
                     current_time = asyncio.get_event_loop().time()
-                    time_since_activity = current_time - last_activity_time
+                    time_since_start = current_time - last_activity_time
                     
-                    # Only send progress if enough time has passed since last activity
-                    if time_since_activity >= get_next_delay():
-                        # Send progress indicator with proper spacing
-                        if not hold_on_sent:
-                            # First progress message - single newline for cleaner look
-                            progress_chunk = create_progress_chunk(request_id, model, "\nHold on...")
+                    # Only proceed if we've waited the initial delay
+                    if time_since_start >= INITIAL_DELAY:
+                        time_since_last_dot = current_time - last_dot_time if last_dot_time > 0 else float('inf')
+                        time_since_last_message = current_time - last_message_time if last_message_time > 0 else float('inf')
+                        
+                        # Determine what to update
+                        should_update = False
+                        update_message = False
+                        
+                        # Check if we need to change the message (every 10s)
+                        if time_since_start >= MESSAGE_INTERVAL * (current_message_index + 1) and current_message_index < len(progress_messages) - 1:
+                            current_message_index += 1
+                            current_dots = 0  # Reset dots when changing message
+                            last_message_time = current_time
+                            should_update = True
+                            update_message = True
+                            logger.debug(f"Progress injection: Changing to message {current_message_index}")
+                        # Check if we need to add a dot (every 2.5s)
+                        elif time_since_last_dot >= DOT_INTERVAL and current_dots < MAX_DOTS:
+                            current_dots += 1
+                            last_dot_time = current_time
+                            should_update = True
+                            logger.debug(f"Progress injection: Adding dot {current_dots}")
+                        # Initial message
+                        elif not progress_sent:
+                            last_message_time = current_time
+                            last_dot_time = current_time
+                            should_update = True
+                            logger.debug("Progress injection: Sending initial message")
+                        
+                        if should_update:
+                            # Determine what to send
+                            if not progress_sent and not any_content_sent:
+                                # First message at start of stream
+                                message_text = progress_messages[current_message_index]
+                                formatted_message = f"*{message_text}*"
+                            elif not progress_sent:
+                                # First message but there's already content
+                                message_text = progress_messages[current_message_index]
+                                formatted_message = f"\n*{message_text}*"
+                            elif update_message:
+                                # Message change - send new message on new line
+                                message_text = progress_messages[current_message_index]
+                                formatted_message = f"\n*{message_text}*"
+                            else:
+                                # Just adding a dot - send only the dot
+                                formatted_message = " ."
+                            
+                            progress_chunk = create_progress_chunk(request_id, model, formatted_message)
                             yield progress_chunk
-                            hold_on_sent = True
-                            progress_count += 1
-                            logger.debug(f"Progress injection: Sent 'Hold on...' (time since activity: {time_since_activity:.2f}s)")
-                        elif progress_count < 15:  # Limit total indicators
-                            # Subsequent indicators - just add space
-                            progress_chunk = create_progress_chunk(request_id, model, f" {indicators[indicator_index]}")
-                            yield progress_chunk
-                            indicator_index = (indicator_index + 1) % len(indicators)
-                            progress_count += 1
-                            logger.debug(f"Progress injection: Sent indicator {indicators[indicator_index - 1]} (time since activity: {time_since_activity:.2f}s)")
-                    else:
-                        logger.debug(f"Progress injection: Skipping progress (only {time_since_activity:.2f}s since last activity)")
+                            progress_sent = True
+                            any_content_sent = True
                     
-                    # Schedule next progress check with dynamic delay
-                    progress_task = asyncio.create_task(asyncio.sleep(get_next_delay()))
+                    # Schedule next check
+                    progress_task = asyncio.create_task(asyncio.sleep(0.5))  # Check every 0.5s
             
             # Cancel any pending tasks if needed
             for task in pending:
@@ -464,7 +528,7 @@ async def stream_with_progress_injection(
                         await task
                     except asyncio.CancelledError:
                         pass
-                    progress_task = asyncio.create_task(asyncio.sleep(get_next_delay()))
+                    progress_task = asyncio.create_task(asyncio.sleep(0.5))  # Resume checking
     
     # Start the stream consumer task
     consumer_task = asyncio.create_task(stream_consumer())
