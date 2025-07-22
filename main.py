@@ -321,12 +321,180 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+def create_progress_chunk(request_id: str, model: str, content: str) -> str:
+    """Create a progress indicator chunk in SSE format."""
+    chunk = ChatCompletionStreamResponse(
+        id=request_id,
+        model=model,
+        choices=[StreamChoice(
+            index=0,
+            delta={"content": content},
+            finish_reason=None
+        )]
+    )
+    return f"data: {chunk.model_dump_json()}\n\n"
+
+
+async def stream_with_progress_injection(
+    original_stream: AsyncGenerator[str, None],
+    request_id: str,
+    model: str
+) -> AsyncGenerator[str, None]:
+    """Inject progress indicators during stream pauses without modifying the stream logic."""
+    
+    # Use a queue to communicate between SDK stream and progress injection
+    chunk_queue = asyncio.Queue()
+    stream_complete = asyncio.Event()
+    
+    # Task to consume the original stream and put chunks in queue
+    async def stream_consumer():
+        try:
+            async for chunk in original_stream:
+                await chunk_queue.put(chunk)
+        finally:
+            stream_complete.set()
+            await chunk_queue.put(None)  # Sentinel value
+    
+    # Create a merged stream that combines queued chunks and progress indicators
+    async def merged_stream():
+        indicators = ["💭", "🔍", "⚡", "🔄", "✨"]
+        indicator_index = 0
+        hold_on_sent = False
+        last_activity_time = asyncio.get_event_loop().time()
+        progress_count = 0  # Track number of progress indicators sent
+        
+        # Calculate dynamic delay based on how many indicators we've sent
+        def get_next_delay():
+            if progress_count == 0:
+                return 2.0  # Initial delay before "Hold on..."
+            elif progress_count == 1:
+                return 2.0  # First indicator after "Hold on..."
+            elif progress_count < 5:
+                return 3.0  # Slightly longer for next few
+            elif progress_count < 10:
+                return 4.0  # Even longer
+            else:
+                return 5.0  # Max delay for later indicators
+        
+        # Create tasks for queue and progress
+        queue_task = asyncio.create_task(chunk_queue.get())
+        progress_task = asyncio.create_task(asyncio.sleep(get_next_delay()))
+        
+        while True:
+            # Wait for either a chunk or timeout
+            done, pending = await asyncio.wait(
+                [queue_task, progress_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # Handle completed tasks
+            for task in done:
+                if task == queue_task:
+                    # Got a chunk from the original stream
+                    chunk = task.result()
+                    if chunk is None:
+                        # Stream ended - clean up progress task
+                        if progress_task and not progress_task.done():
+                            progress_task.cancel()
+                            try:
+                                await progress_task
+                            except asyncio.CancelledError:
+                                pass
+                        return
+                    
+                    # Log chunk arrival for debugging
+                    logger.debug(f"Progress injection: Received chunk, resetting progress state")
+                    
+                    # Reset progress state when ANY chunk arrives
+                    last_activity_time = asyncio.get_event_loop().time()
+                    hold_on_sent = False
+                    indicator_index = 0
+                    progress_count = 0
+                    
+                    # Cancel existing progress task to prevent it from firing
+                    if progress_task and not progress_task.done():
+                        progress_task.cancel()
+                        try:
+                            await progress_task
+                        except asyncio.CancelledError:
+                            pass
+                    
+                    # Yield the chunk
+                    yield chunk
+                    
+                    # Create new task for next chunk
+                    queue_task = asyncio.create_task(chunk_queue.get())
+                    # Restart progress monitoring
+                    progress_task = asyncio.create_task(asyncio.sleep(get_next_delay()))
+                    
+                elif task == progress_task:
+                    # Progress timeout fired
+                    current_time = asyncio.get_event_loop().time()
+                    time_since_activity = current_time - last_activity_time
+                    
+                    # Only send progress if enough time has passed since last activity
+                    if time_since_activity >= get_next_delay():
+                        # Send progress indicator with proper spacing
+                        if not hold_on_sent:
+                            # First progress message - single newline for cleaner look
+                            progress_chunk = create_progress_chunk(request_id, model, "\nHold on...")
+                            yield progress_chunk
+                            hold_on_sent = True
+                            progress_count += 1
+                            logger.debug(f"Progress injection: Sent 'Hold on...' (time since activity: {time_since_activity:.2f}s)")
+                        elif progress_count < 15:  # Limit total indicators
+                            # Subsequent indicators - just add space
+                            progress_chunk = create_progress_chunk(request_id, model, f" {indicators[indicator_index]}")
+                            yield progress_chunk
+                            indicator_index = (indicator_index + 1) % len(indicators)
+                            progress_count += 1
+                            logger.debug(f"Progress injection: Sent indicator {indicators[indicator_index - 1]} (time since activity: {time_since_activity:.2f}s)")
+                    else:
+                        logger.debug(f"Progress injection: Skipping progress (only {time_since_activity:.2f}s since last activity)")
+                    
+                    # Schedule next progress check with dynamic delay
+                    progress_task = asyncio.create_task(asyncio.sleep(get_next_delay()))
+            
+            # Cancel any pending tasks if needed
+            for task in pending:
+                if task == progress_task and queue_task in done:
+                    # Cancel progress if we got a chunk
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    progress_task = asyncio.create_task(asyncio.sleep(get_next_delay()))
+    
+    # Start the stream consumer task
+    consumer_task = asyncio.create_task(stream_consumer())
+    
+    try:
+        # Use the merged stream
+        async for chunk in merged_stream():
+            yield chunk
+    finally:
+        # Cancel consumer task if still running
+        if not consumer_task.done():
+            consumer_task.cancel()
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Ensure stream is complete
+        stream_complete.set()
+        
+        logger.debug("Progress injection: Monitoring stopped")
+
+
 async def generate_streaming_response(
     request: ChatCompletionRequest,
     request_id: str,
     claude_headers: Optional[Dict[str, Any]] = None
 ) -> AsyncGenerator[str, None]:
     """Generate SSE formatted streaming response."""
+    sandbox_dir = None  # Track sandbox for cleanup
     try:
         # In chat mode, skip session management
         if CHAT_MODE:
@@ -395,6 +563,13 @@ async def generate_streaming_response(
             messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]  # Convert to dicts for format detection
         ):
             chunks_buffer.append(chunk)
+            
+            # Extract sandbox directory from init message in chat mode
+            if CHAT_MODE and not sandbox_dir and chunk.get("subtype") == "init":
+                data = chunk.get("data", {})
+                if isinstance(data, dict) and "cwd" in data:
+                    sandbox_dir = data["cwd"]
+                    logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
             
             # Check if we have an assistant message
             # Handle both old format (type/message structure) and new format (direct content)
@@ -537,6 +712,14 @@ async def generate_streaming_response(
             }
         }
         yield f"data: {json.dumps(error_chunk)}\n\n"
+    finally:
+        # Cleanup sandbox directory if in chat mode
+        if CHAT_MODE and sandbox_dir:
+            try:
+                ChatMode.cleanup_sandbox(sandbox_dir)
+                logger.debug(f"Cleaned up sandbox directory: {sandbox_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup sandbox {sandbox_dir}: {e}")
 
 
 @app.post("/v1/chat/completions")
@@ -578,8 +761,20 @@ async def chat_completions(
         
         if request_body.stream:
             # Return streaming response
+            if CHAT_MODE:
+                # In chat mode, wrap the stream with progress injection
+                logger.info("Chat mode: Wrapping stream with progress indicators")
+                stream_generator = stream_with_progress_injection(
+                    generate_streaming_response(request_body, request_id, claude_headers),
+                    request_id,
+                    request_body.model
+                )
+            else:
+                # Normal mode - no progress injection
+                stream_generator = generate_streaming_response(request_body, request_id, claude_headers)
+            
             return StreamingResponse(
-                generate_streaming_response(request_body, request_id, claude_headers),
+                stream_generator,
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",

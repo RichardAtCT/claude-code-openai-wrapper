@@ -235,12 +235,21 @@ class ClaudeCodeCLI:
                     
                     # Run the query and yield messages
                     logger.debug(f"Executing query with enhanced prompt in chat mode")
-                    async for message in query(prompt=enhanced_prompt, options=options):
-                        processed_msg = self._process_message(message)
-                        # Log assistant responses
-                        if processed_msg.get("type") == "assistant" or "content" in processed_msg:
-                            logger.debug(f"Assistant message type: {processed_msg.get('type')}, has content: {'content' in processed_msg}")
-                        yield processed_msg
+                    try:
+                        async for message in query(prompt=enhanced_prompt, options=options):
+                            processed_msg = self._process_message(message)
+                            # Log assistant responses
+                            if processed_msg.get("type") == "assistant" or "content" in processed_msg:
+                                logger.debug(f"Assistant message type: {processed_msg.get('type')}, has content: {'content' in processed_msg}")
+                            yield processed_msg
+                    except Exception as sdk_error:
+                        # Handle SDK errors gracefully
+                        if "cancel scope" in str(sdk_error).lower():
+                            logger.warning(f"SDK cancel scope issue detected (will continue): {sdk_error}")
+                            # Don't propagate cancel scope errors - they're internal to SDK
+                        else:
+                            logger.error(f"SDK error during streaming: {sdk_error}")
+                            raise
                 else:
                     # Normal mode - existing logic
                     options = ClaudeCodeOptions(
@@ -281,19 +290,21 @@ class ClaudeCodeCLI:
                         else:
                             os.environ[key] = original_value
                 
-                # Cleanup sandbox if in chat mode
-                if self.chat_mode and 'sandbox_dir' in locals():
-                    ChatMode.cleanup_sandbox(sandbox_dir)
+                # Note: Sandbox cleanup moved to main.py to avoid premature cleanup
                 
         except Exception as e:
-            logger.error(f"Claude Code SDK error: {e}")
-            # Yield error message in the expected format
-            yield {
-                "type": "result",
-                "subtype": "error_during_execution",
-                "is_error": True,
-                "error_message": str(e)
-            }
+            # Don't log cancel scope errors as errors
+            if "cancel scope" in str(e).lower():
+                logger.warning(f"SDK cancel scope issue at completion: {e}")
+            else:
+                logger.error(f"Claude Code SDK error: {e}")
+                # Yield error message in the expected format
+                yield {
+                    "type": "result",
+                    "subtype": "error_during_execution",
+                    "is_error": True,
+                    "error_message": str(e)
+                }
     
     def _process_message(self, message: Any) -> Dict[str, Any]:
         """Process message from SDK to consistent dict format."""
