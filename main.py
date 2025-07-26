@@ -366,6 +366,7 @@ async def stream_with_progress_injection(
         
         progress_sent = False
         any_content_sent = False  # Track if ANY content has been sent
+        need_newline_before_progress = False  # Track if we need newline before next progress
         last_activity_time = asyncio.get_event_loop().time()
         current_message_index = 0  # Track which message we're showing
         current_dots = 0  # Track number of dots (0-3)
@@ -427,8 +428,8 @@ async def stream_with_progress_injection(
                         
                         # If we showed progress and now getting real content, add spacing
                         if progress_sent:
-                            # Send a newline chunk before the actual content
-                            spacing_chunk = create_progress_chunk(request_id, model, "\n")
+                            # Send a double newline chunk before the actual content
+                            spacing_chunk = create_progress_chunk(request_id, model, "\n\n")
                             yield spacing_chunk
                             logger.debug("Progress injection: Added spacing before content")
                         
@@ -439,6 +440,7 @@ async def stream_with_progress_injection(
                         last_dot_time = 0
                         last_message_time = 0
                         any_content_sent = True  # Mark that we've seen content
+                        need_newline_before_progress = True  # Need newline before next progress
                     else:
                         logger.debug(f"Progress injection: Received non-text chunk (tool use or metadata)")
                     
@@ -500,21 +502,25 @@ async def stream_with_progress_injection(
                                 message_text = progress_messages[current_message_index]
                                 formatted_message = f"*{message_text}*"
                             elif not progress_sent:
-                                # First message but there's already content
+                                # First message but there's already content - need newline
                                 message_text = progress_messages[current_message_index]
                                 formatted_message = f"\n*{message_text}*"
                             elif update_message:
-                                # Message change - send new message on new line
+                                # Message change - send new message on same line
                                 message_text = progress_messages[current_message_index]
-                                formatted_message = f"\n*{message_text}*"
+                                formatted_message = f" *{message_text}*"
                             else:
                                 # Just adding a dot - send only the dot
-                                formatted_message = " ."
+                                formatted_message = "."
+                            
+                            # Check if we need to add a newline before progress
+                            if need_newline_before_progress:
+                                formatted_message = "\n" + formatted_message
+                                need_newline_before_progress = False
                             
                             progress_chunk = create_progress_chunk(request_id, model, formatted_message)
                             yield progress_chunk
                             progress_sent = True
-                            any_content_sent = True
                     
                     # Schedule next check
                     progress_task = asyncio.create_task(asyncio.sleep(0.5))  # Check every 0.5s
