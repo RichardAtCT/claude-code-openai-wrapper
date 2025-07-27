@@ -203,9 +203,11 @@ Control streaming progress indicators for long-running operations:
   - Perfect for user-facing applications where feedback is important
 
 - **Disable for cleaner output** (`SHOW_PROGRESS_MARKERS=false`)
-  - Only streams the final response
-  - Filters out intermediate tool uses and thinking steps
+  - **Only streams the final response** without any intermediate content
+  - Filters out ALL intermediate tool uses, thinking steps, and preliminary responses
+  - Waits for completion then sends only the final assistant message
   - Ideal for programmatic usage or when you only need the final result
+  - Note: This buffers the entire response, so initial latency will be higher
 
 Example messages include positive, subtly humorous updates:
 - "Working on it", "Still processing", "Crafting your response"
@@ -391,7 +393,7 @@ Env vars override defaults and can be set at runtime with `-e` flags or in `dock
 - **Security and API Protection**:
   - `API_KEYS=key1,key2`: Comma-separated list of API keys required for endpoint access (clients must send `Authorization: Bearer <key>`).
   - `CHAT_MODE=true`: Enable chat mode for sandboxed execution with no file system access (disables sessions, restricts tools).
-  - `SHOW_PROGRESS_MARKERS=false`: Disable streaming progress indicators (default: true). When false, only shows final response without intermediate updates.
+  - `SHOW_PROGRESS_MARKERS=false`: Disable streaming progress indicators (default: true). When false, buffers the entire response and only streams the final assistant message, filtering out all intermediate tool uses and preliminary responses.
 
 - **Custom/Advanced Vars**:
   - `MAX_THINKING_TOKENS=4096`: Custom token budget for extended thinking (if implemented in code; e.g., for `budget_tokens` in SDK calls).
