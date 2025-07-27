@@ -4,6 +4,7 @@ import asyncio
 import logging
 import secrets
 import string
+import random
 from typing import Optional, AsyncGenerator, Dict, Any
 from contextlib import asynccontextmanager
 
@@ -466,7 +467,7 @@ async def stream_with_progress_injection(
         any_content_sent = False  # Track if ANY content has been sent
         need_newline_before_progress = False  # Track if we need newline before next progress
         last_activity_time = asyncio.get_event_loop().time()
-        current_message_index = 0  # Track which message we're showing
+        current_message_index = random.randint(0, 4)  # Randomly select from first 5 messages
         current_dots = 0  # Track number of dots (0-3)
         last_dot_time = 0  # Track when we last added a dot
         last_message_time = 0  # Track when we last changed message
@@ -542,7 +543,7 @@ async def stream_with_progress_injection(
                         
                         last_activity_time = asyncio.get_event_loop().time()
                         progress_sent = False
-                        current_message_index = 0
+                        current_message_index = random.randint(0, 4)  # Randomly select from first 5 messages
                         current_dots = 0
                         last_dot_time = 0
                         last_message_time = 0
