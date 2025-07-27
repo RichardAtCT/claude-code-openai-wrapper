@@ -357,15 +357,24 @@ async def stream_with_progress_injection(
     
     # Create a merged stream that combines queued chunks and progress indicators
     async def merged_stream():
-        # Progress messages - simple and professional
+        # Progress messages - positive and subtly humorous
         progress_messages = [
             "Working on it",
-            "Still processing", 
-            "Almost there",
-            "Taking a bit longer",
-            "Still working on your request",
-            "Processing complex response",
-            "Finalizing details"
+            "Still processing",
+            "Crafting your response",
+            "Building something great",
+            "Cooking up an answer",
+            "Still at it",
+            "Making progress",
+            "Crunching through this",
+            "On the case",
+            "Deep in thought",
+            "Still going strong",
+            "Powering through",
+            "In the zone",
+            "Keeping at it",
+            "Still on the job",
+            "Persistence mode activated"
         ]
         
         progress_sent = False
@@ -378,10 +387,19 @@ async def stream_with_progress_injection(
         last_message_time = 0  # Track when we last changed message
         
         # Timing configuration
-        DOT_INTERVAL = 2.5  # Add a dot every 2.5 seconds
-        MESSAGE_INTERVAL = 10.0  # Change message every 10 seconds
+        BASE_DOT_INTERVAL = 3.0  # Base interval for dots
+        BASE_MESSAGE_INTERVAL = 15.0  # Base interval for message changes
         INITIAL_DELAY = 4.0  # Wait 4s before first progress
         MAX_DOTS = 3  # Maximum dots per message
+        BACKOFF_MULTIPLIER = 1.2  # Exponential backoff multiplier
+        BACKOFF_START_AFTER = 3  # Start backoff after this many updates
+        MAX_DOT_INTERVAL = 20.0  # Maximum dot interval (cap)
+        MAX_MESSAGE_INTERVAL = 60.0  # Maximum message interval (cap)
+        
+        # Dynamic intervals
+        current_dot_interval = BASE_DOT_INTERVAL
+        current_message_interval = BASE_MESSAGE_INTERVAL
+        update_count = 0  # Track total updates for backoff
         
         # Create tasks for queue and progress
         queue_task = asyncio.create_task(chunk_queue.get())
@@ -445,6 +463,10 @@ async def stream_with_progress_injection(
                         last_message_time = 0
                         any_content_sent = True  # Mark that we've seen content
                         need_newline_before_progress = True  # Need newline before next progress
+                        # Reset intervals when we get actual content
+                        current_dot_interval = BASE_DOT_INTERVAL
+                        current_message_interval = BASE_MESSAGE_INTERVAL
+                        update_count = 0
                     else:
                         logger.debug(f"Progress injection: Received non-text chunk (tool use or metadata)")
                     
@@ -461,8 +483,15 @@ async def stream_with_progress_injection(
                     
                     # Create new task for next chunk
                     queue_task = asyncio.create_task(chunk_queue.get())
-                    # Restart progress monitoring with short interval for dots
-                    progress_task = asyncio.create_task(asyncio.sleep(0.5))  # Check every 0.5s for smoother updates
+                    # Restart progress monitoring with dynamic interval
+                    elapsed_time = asyncio.get_event_loop().time() - last_activity_time
+                    if elapsed_time < 30:
+                        check_interval = 0.5
+                    elif elapsed_time < 120:
+                        check_interval = 1.0
+                    else:
+                        check_interval = 2.0
+                    progress_task = asyncio.create_task(asyncio.sleep(check_interval))
                     
                 elif task == progress_task:
                     # Progress timeout fired - check what we need to update
@@ -478,24 +507,37 @@ async def stream_with_progress_injection(
                         should_update = False
                         update_message = False
                         
-                        # Check if we need to change the message (every 10s)
-                        if time_since_start >= MESSAGE_INTERVAL * (current_message_index + 1) and current_message_index < len(progress_messages) - 1:
+                        # Check if we need to change the message
+                        message_threshold = sum(current_message_interval * (BACKOFF_MULTIPLIER ** i if i >= BACKOFF_START_AFTER else 1) 
+                                              for i in range(current_message_index + 1))
+                        if time_since_start >= message_threshold and current_message_index < len(progress_messages) - 1:
                             current_message_index += 1
                             current_dots = 0  # Reset dots when changing message
                             last_message_time = current_time
                             should_update = True
                             update_message = True
-                            logger.debug(f"Progress injection: Changing to message {current_message_index}")
-                        # Check if we need to add a dot (every 2.5s)
-                        elif time_since_last_dot >= DOT_INTERVAL and current_dots < MAX_DOTS:
+                            
+                            # Apply exponential backoff to message interval
+                            if current_message_index >= BACKOFF_START_AFTER:
+                                current_message_interval = min(current_message_interval * BACKOFF_MULTIPLIER, MAX_MESSAGE_INTERVAL)
+                            
+                            logger.debug(f"Progress injection: Changing to message {current_message_index}, next interval: {current_message_interval:.1f}s")
+                        # Check if we need to add a dot
+                        elif time_since_last_dot >= current_dot_interval and current_dots < MAX_DOTS:
                             current_dots += 1
                             last_dot_time = current_time
                             should_update = True
-                            logger.debug(f"Progress injection: Adding dot {current_dots}")
+                            
+                            # Apply exponential backoff to dot interval
+                            update_count += 1
+                            if update_count >= BACKOFF_START_AFTER:
+                                current_dot_interval = min(current_dot_interval * BACKOFF_MULTIPLIER, MAX_DOT_INTERVAL)
+                            
+                            logger.debug(f"Progress injection: Adding dot {current_dots}, next interval: {current_dot_interval:.1f}s")
                         # After exhausting all messages, continue with repeating pattern
                         elif current_message_index >= len(progress_messages) - 1 and current_dots >= MAX_DOTS:
-                            # Reset dots and show continuous indicator every 2.5s
-                            if time_since_last_dot >= DOT_INTERVAL:
+                            # Reset dots and show continuous indicator
+                            if time_since_last_dot >= current_dot_interval:
                                 current_dots = 1  # Reset to single dot
                                 last_dot_time = current_time
                                 should_update = True
@@ -533,9 +575,21 @@ async def stream_with_progress_injection(
                             progress_chunk = create_progress_chunk(request_id, model, formatted_message)
                             yield progress_chunk
                             progress_sent = True
+                            
+                            # Increment update count for backoff tracking
+                            if not should_update or update_message:
+                                update_count += 1
                     
-                    # Schedule next check
-                    progress_task = asyncio.create_task(asyncio.sleep(0.5))  # Check every 0.5s
+                    # Schedule next check with dynamic frequency
+                    elapsed_time = current_time - last_activity_time
+                    if elapsed_time < 30:
+                        check_interval = 0.5  # Fast checks initially
+                    elif elapsed_time < 120:
+                        check_interval = 1.0  # Slower after 30s
+                    else:
+                        check_interval = 2.0  # Even slower after 2 minutes
+                    
+                    progress_task = asyncio.create_task(asyncio.sleep(check_interval))
             
             # Cancel any pending tasks if needed
             for task in pending:
@@ -546,7 +600,15 @@ async def stream_with_progress_injection(
                         await task
                     except asyncio.CancelledError:
                         pass
-                    progress_task = asyncio.create_task(asyncio.sleep(0.5))  # Resume checking
+                    # Resume checking with dynamic interval
+                    elapsed_time = asyncio.get_event_loop().time() - last_activity_time
+                    if elapsed_time < 30:
+                        check_interval = 0.5
+                    elif elapsed_time < 120:
+                        check_interval = 1.0
+                    else:
+                        check_interval = 2.0
+                    progress_task = asyncio.create_task(asyncio.sleep(check_interval))
     
     # Start the stream consumer task
     consumer_task = asyncio.create_task(stream_consumer())
