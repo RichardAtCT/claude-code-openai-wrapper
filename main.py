@@ -634,9 +634,7 @@ async def generate_streaming_response(
         role_sent = False  # Track if we've sent the initial role chunk
         content_sent = False  # Track if we've sent any content
         
-        # Create a timeout wrapper for the SDK stream
-        STREAM_TIMEOUT = 120.0  # 2 minute timeout for any single chunk
-        last_chunk_time = asyncio.get_event_loop().time()
+        # Create a wrapper for the SDK stream
         
         async def stream_with_timeout():
             """Wrap SDK stream with timeout detection"""
@@ -665,43 +663,19 @@ async def generate_streaming_response(
                     "error_message": f"Stream error: {str(e)}"
                 }
         
-        # Create timeout task
-        async def timeout_monitor():
-            """Monitor for stream timeouts"""
-            while True:
-                await asyncio.sleep(5.0)  # Check every 5 seconds
-                current_time = asyncio.get_event_loop().time()
-                if current_time - last_chunk_time > STREAM_TIMEOUT:
-                    logger.error(f"Stream timeout detected - no chunks for {STREAM_TIMEOUT} seconds")
-                    return True  # Timeout occurred
-            return False
-        
-        timeout_task = asyncio.create_task(timeout_monitor())
         stream_iter = stream_with_timeout()
         
-        try:
-            logger.debug(f"Starting SDK stream iteration with {STREAM_TIMEOUT}s timeout")
-            chunk_count = 0
-            async for chunk in stream_iter:
-                chunk_count += 1
-                # Update last chunk time
-                current_time = asyncio.get_event_loop().time()
-                time_since_last = current_time - last_chunk_time
-                last_chunk_time = current_time
-                
-                # Log chunk timing info
-                chunk_type = chunk.get('type', 'unknown')
-                chunk_subtype = chunk.get('subtype', '')
-                logger.debug(f"SDK chunk #{chunk_count} received after {time_since_last:.2f}s - type: {chunk_type}, subtype: {chunk_subtype}")
-                
-                # Check if timeout task detected a timeout
-                if timeout_task.done():
-                    timeout_occurred = await timeout_task
-                    if timeout_occurred:
-                        logger.error("Breaking from stream due to timeout")
-                        break
-                
-                chunks_buffer.append(chunk)
+        logger.debug("Starting SDK stream iteration")
+        chunk_count = 0
+        async for chunk in stream_iter:
+            chunk_count += 1
+            
+            # Log chunk info
+            chunk_type = chunk.get('type', 'unknown')
+            chunk_subtype = chunk.get('subtype', '')
+            logger.debug(f"SDK chunk #{chunk_count} received - type: {chunk_type}, subtype: {chunk_subtype}")
+            
+            chunks_buffer.append(chunk)
             
             # Extract sandbox directory from init message in chat mode
             if CHAT_MODE and not sandbox_dir and chunk.get("subtype") == "init":
@@ -793,39 +767,8 @@ async def generate_streaming_response(
                         
                         yield f"data: {stream_chunk.model_dump_json()}\n\n"
                         content_sent = True
-            
-            logger.debug(f"SDK stream completed after {chunk_count} chunks")
         
-        finally:
-            # Cancel timeout monitor
-            if not timeout_task.done():
-                timeout_task.cancel()
-                try:
-                    await timeout_task
-                except asyncio.CancelledError:
-                    pass
-        
-        # Check if we hit a timeout
-        if timeout_task.done():
-            try:
-                timeout_occurred = await timeout_task
-                if timeout_occurred:
-                    logger.error("Stream timed out - sending error response")
-                    # Send error message if we have started streaming
-                    if role_sent and not content_sent:
-                        error_chunk = ChatCompletionStreamResponse(
-                            id=request_id,
-                            model=request.model,
-                            choices=[StreamChoice(
-                                index=0,
-                                delta={"content": "\n\n[Response timed out. Please try again with a simpler request.]"},
-                                finish_reason=None
-                            )]
-                        )
-                        yield f"data: {error_chunk.model_dump_json()}\n\n"
-                        content_sent = True
-            except Exception as e:
-                logger.error(f"Error checking timeout status: {e}")
+        logger.debug(f"SDK stream completed after {chunk_count} chunks")
         
         # Handle case where no role was sent (send at least role chunk)
         if not role_sent:
