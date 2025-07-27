@@ -47,6 +47,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - **Optional tool usage** - Enable Claude Code tools (Read, Write, Bash, etc.) when needed
 - **Fast default mode** - Tools disabled by default for OpenAI API compatibility
 - **Chat mode** - Sandboxed execution with no file system access for secure chat APIs
+- **Progress markers** - Optional streaming progress indicators ("Working on it...", "Still processing...") with exponential backoff
 - **Development mode** with auto-reload (`uvicorn --reload`)
 - **Interactive API key protection** - Optional security with auto-generated tokens
 - **Comprehensive logging** and debugging capabilities
@@ -148,6 +149,9 @@ CORS_ORIGINS=["*"]
 
 # Chat mode - enables sandboxed execution with no file access
 # CHAT_MODE=false
+
+# Progress markers - show streaming progress indicators
+# SHOW_PROGRESS_MARKERS=true
 ```
 
 ### 🔐 **API Security Configuration**
@@ -188,6 +192,25 @@ poetry run python main.py
 - 🏠 **Local development** - No authentication needed
 - 🌐 **Remote access** - Secure with generated tokens
 - 🔒 **VPN/Tailscale** - Add security layer for remote endpoints
+
+### 📊 **Progress Markers**
+
+Control streaming progress indicators for long-running operations:
+
+- **Enabled by default** (`SHOW_PROGRESS_MARKERS=true`)
+  - Shows progress messages like "Working on it", "Still processing", "Crafting your response"
+  - Uses exponential backoff to avoid being too chatty
+  - Perfect for user-facing applications where feedback is important
+
+- **Disable for cleaner output** (`SHOW_PROGRESS_MARKERS=false`)
+  - Only streams the final response
+  - Filters out intermediate tool uses and thinking steps
+  - Ideal for programmatic usage or when you only need the final result
+
+Example messages include positive, subtly humorous updates:
+- "Working on it", "Still processing", "Crafting your response"
+- "Building something great", "Cooking up an answer", "In the zone"
+- "Deep in thought", "Powering through", "Persistence mode activated"
 
 ### 🛡️ **Rate Limiting**
 
@@ -368,6 +391,7 @@ Env vars override defaults and can be set at runtime with `-e` flags or in `dock
 - **Security and API Protection**:
   - `API_KEYS=key1,key2`: Comma-separated list of API keys required for endpoint access (clients must send `Authorization: Bearer <key>`).
   - `CHAT_MODE=true`: Enable chat mode for sandboxed execution with no file system access (disables sessions, restricts tools).
+  - `SHOW_PROGRESS_MARKERS=false`: Disable streaming progress indicators (default: true). When false, only shows final response without intermediate updates.
 
 - **Custom/Advanced Vars**:
   - `MAX_THINKING_TOKENS=4096`: Custom token budget for extended thinking (if implemented in code; e.g., for `budget_tokens` in SDK calls).

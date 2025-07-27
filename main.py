@@ -42,6 +42,7 @@ load_dotenv()
 # Configure logging based on debug mode
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() in ('true', '1', 'yes', 'on')
 VERBOSE = os.getenv('VERBOSE', 'false').lower() in ('true', '1', 'yes', 'on')
+SHOW_PROGRESS_MARKERS = os.getenv('SHOW_PROGRESS_MARKERS', 'true').lower() in ('true', '1', 'yes', 'on')
 
 # Set logging level based on debug/verbose mode
 log_level = logging.DEBUG if (DEBUG_MODE or VERBOSE) else logging.INFO
@@ -57,7 +58,7 @@ runtime_api_key = None
 # Check if chat mode is enabled
 CHAT_MODE = ChatMode.is_enabled()
 if CHAT_MODE:
-    logger.info("🔒 Chat mode enabled - sessions disabled, sandboxed execution active")
+    logger.info(f"🔒 Chat mode enabled - sessions disabled, sandboxed execution active, progress markers: {'enabled' if SHOW_PROGRESS_MARKERS else 'disabled'}")
 
 def generate_secure_token(length: int = 32) -> str:
     """Generate a secure random token for API authentication."""
@@ -151,6 +152,7 @@ async def lifespan(app: FastAPI):
         logger.debug(f"🔧 Environment variables:")
         logger.debug(f"   DEBUG_MODE: {DEBUG_MODE}")
         logger.debug(f"   VERBOSE: {VERBOSE}")
+        logger.debug(f"   SHOW_PROGRESS_MARKERS: {SHOW_PROGRESS_MARKERS}")
         logger.debug(f"   PORT: {os.getenv('PORT', '8000')}")
         logger.debug(f"   CORS_ORIGINS: {os.getenv('CORS_ORIGINS', '[\"*\"]')}")
         logger.debug(f"   MAX_TIMEOUT: {os.getenv('MAX_TIMEOUT', '600000')}")
@@ -335,6 +337,89 @@ def create_progress_chunk(request_id: str, model: str, content: str) -> str:
     return f"data: {chunk.model_dump_json()}\n\n"
 
 
+async def stream_final_content_only(
+    request: ChatCompletionRequest,
+    request_id: str,
+    claude_headers: Optional[Dict[str, Any]] = None
+) -> AsyncGenerator[str, None]:
+    """Generate SSE formatted streaming response with only final content (no intermediate tool uses)."""
+    collected_content = []
+    role_sent = False
+    
+    try:
+        # Buffer all chunks to extract only final content
+        async for chunk in generate_streaming_response(request, request_id, claude_headers):
+            # Parse SSE data
+            if chunk.startswith("data: "):
+                data_line = chunk[6:].strip()
+                if data_line == "[DONE]":
+                    # End of stream - send accumulated content
+                    if collected_content and not role_sent:
+                        # Send role chunk first
+                        initial_chunk = ChatCompletionStreamResponse(
+                            id=request_id,
+                            model=request.model,
+                            choices=[StreamChoice(
+                                index=0,
+                                delta={"role": "assistant", "content": ""},
+                                finish_reason=None
+                            )]
+                        )
+                        yield f"data: {initial_chunk.model_dump_json()}\n\n"
+                    
+                    # Send all collected content as one chunk
+                    if collected_content:
+                        content_chunk = ChatCompletionStreamResponse(
+                            id=request_id,
+                            model=request.model,
+                            choices=[StreamChoice(
+                                index=0,
+                                delta={"content": "".join(collected_content)},
+                                finish_reason=None
+                            )]
+                        )
+                        yield f"data: {content_chunk.model_dump_json()}\n\n"
+                    
+                    # Send finish chunk
+                    final_chunk = ChatCompletionStreamResponse(
+                        id=request_id,
+                        model=request.model,
+                        choices=[StreamChoice(
+                            index=0,
+                            delta={},
+                            finish_reason="stop"
+                        )]
+                    )
+                    yield f"data: {final_chunk.model_dump_json()}\n\n"
+                    yield "data: [DONE]\n\n"
+                    
+                elif data_line:
+                    try:
+                        data = json.loads(data_line)
+                        # Extract content from the chunk
+                        if "choices" in data and len(data["choices"]) > 0:
+                            choice = data["choices"][0]
+                            if "delta" in choice:
+                                delta = choice["delta"]
+                                if "role" in delta:
+                                    role_sent = True
+                                if "content" in delta and delta["content"]:
+                                    # Collect content but don't send yet
+                                    collected_content.append(delta["content"])
+                    except json.JSONDecodeError:
+                        pass
+            
+    except Exception as e:
+        logger.error(f"Error in stream_final_content_only: {e}")
+        error_chunk = {
+            "error": {
+                "message": str(e),
+                "type": "streaming_error"
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+
+
 async def stream_with_progress_injection(
     original_stream: AsyncGenerator[str, None],
     request_id: str,
@@ -389,7 +474,7 @@ async def stream_with_progress_injection(
         # Timing configuration
         BASE_DOT_INTERVAL = 3.0  # Base interval for dots
         BASE_MESSAGE_INTERVAL = 15.0  # Base interval for message changes
-        INITIAL_DELAY = 4.0  # Wait 4s before first progress
+        INITIAL_DELAY = 6.0  # Wait 6s before first progress
         MAX_DOTS = 3  # Maximum dots per message
         BACKOFF_MULTIPLIER = 1.2  # Exponential backoff multiplier
         BACKOFF_START_AFTER = 3  # Start backoff after this many updates
@@ -938,16 +1023,20 @@ async def chat_completions(
         
         if request_body.stream:
             # Return streaming response
-            if CHAT_MODE:
-                # In chat mode, wrap the stream with progress injection
+            if CHAT_MODE and SHOW_PROGRESS_MARKERS:
+                # In chat mode with progress markers enabled
                 logger.info("Chat mode: Wrapping stream with progress indicators")
                 stream_generator = stream_with_progress_injection(
                     generate_streaming_response(request_body, request_id, claude_headers),
                     request_id,
                     request_body.model
                 )
+            elif not SHOW_PROGRESS_MARKERS:
+                # Progress markers disabled - show only final content
+                logger.info("Progress markers disabled: Streaming final content only")
+                stream_generator = stream_final_content_only(request_body, request_id, claude_headers)
             else:
-                # Normal mode - no progress injection
+                # Normal mode - all chunks without progress injection
                 stream_generator = generate_streaming_response(request_body, request_id, claude_headers)
             
             return StreamingResponse(
@@ -1208,7 +1297,8 @@ async def get_auth_status(request: Request):
             "api_key_required": bool(active_api_key),
             "api_key_source": "environment" if os.getenv("API_KEY") else ("runtime" if runtime_api_key else "none"),
             "version": "1.0.0",
-            "chat_mode": get_chat_mode_info()
+            "chat_mode": get_chat_mode_info(),
+            "progress_markers_enabled": SHOW_PROGRESS_MARKERS
         }
     }
 
