@@ -344,71 +344,129 @@ async def stream_final_content_only(
     claude_headers: Optional[Dict[str, Any]] = None
 ) -> AsyncGenerator[str, None]:
     """Generate SSE formatted streaming response with only final content (no intermediate tool uses)."""
-    collected_content = []
-    role_sent = False
+    sandbox_dir = None
     
     try:
-        # Buffer all chunks to extract only final content
-        async for chunk in generate_streaming_response(request, request_id, claude_headers):
-            # Parse SSE data
-            if chunk.startswith("data: "):
-                data_line = chunk[6:].strip()
-                if data_line == "[DONE]":
-                    # End of stream - send accumulated content
-                    if collected_content and not role_sent:
-                        # Send role chunk first
-                        initial_chunk = ChatCompletionStreamResponse(
-                            id=request_id,
-                            model=request.model,
-                            choices=[StreamChoice(
-                                index=0,
-                                delta={"role": "assistant", "content": ""},
-                                finish_reason=None
-                            )]
-                        )
-                        yield f"data: {initial_chunk.model_dump_json()}\n\n"
-                    
-                    # Send all collected content as one chunk
-                    if collected_content:
-                        content_chunk = ChatCompletionStreamResponse(
-                            id=request_id,
-                            model=request.model,
-                            choices=[StreamChoice(
-                                index=0,
-                                delta={"content": "".join(collected_content)},
-                                finish_reason=None
-                            )]
-                        )
-                        yield f"data: {content_chunk.model_dump_json()}\n\n"
-                    
-                    # Send finish chunk
-                    final_chunk = ChatCompletionStreamResponse(
-                        id=request_id,
-                        model=request.model,
-                        choices=[StreamChoice(
-                            index=0,
-                            delta={},
-                            finish_reason="stop"
-                        )]
-                    )
-                    yield f"data: {final_chunk.model_dump_json()}\n\n"
-                    yield "data: [DONE]\n\n"
-                    
-                elif data_line:
-                    try:
-                        data = json.loads(data_line)
-                        # Extract content from the chunk
-                        if "choices" in data and len(data["choices"]) > 0:
-                            choice = data["choices"][0]
-                            if "delta" in choice:
-                                delta = choice["delta"]
-                                if "role" in delta:
-                                    role_sent = True
-                                if "content" in delta and delta["content"]:
-                                    # Collect content but don't send yet
-                                    collected_content.append(delta["content"])
-                    except json.JSONDecodeError:
-                        pass
+        # Process messages similar to generate_streaming_response
+        if CHAT_MODE:
+            all_messages = request.messages
+            actual_session_id = None
+            logger.info("Chat mode active - sessions disabled")
+        else:
+            all_messages, actual_session_id = session_manager.process_messages(
+                request.messages, request.session_id
+            )
+        
+        # Convert messages to prompt
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+        
+        # Filter content (skip in chat mode to preserve XML)
+        if not CHAT_MODE:
+            prompt = MessageAdapter.filter_content(prompt)
+            if system_prompt:
+                system_prompt = MessageAdapter.filter_content(system_prompt)
+        
+        # Get Claude options
+        claude_options = request.to_claude_options()
+        if claude_headers:
+            claude_options.update(claude_headers)
+        
+        # Handle tools
+        if CHAT_MODE:
+            claude_options['allowed_tools'] = ChatMode.get_allowed_tools()
+            claude_options['disallowed_tools'] = None
+            claude_options['max_turns'] = claude_options.get('max_turns', 10)
+        elif not request.enable_tools:
+            disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
+                                'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
+                                'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
+            claude_options['disallowed_tools'] = disallowed_tools
+            claude_options['max_turns'] = 1
+        
+        # Collect all SDK chunks to find the final result
+        sdk_chunks = []
+        final_result_text = None
+        
+        async for chunk in claude_cli.run_completion(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=claude_options.get('model'),
+            max_turns=claude_options.get('max_turns', 10),
+            allowed_tools=claude_options.get('allowed_tools'),
+            disallowed_tools=claude_options.get('disallowed_tools'),
+            stream=True,
+            messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]
+        ):
+            sdk_chunks.append(chunk)
+            
+            # Track sandbox directory in chat mode
+            if CHAT_MODE and not sandbox_dir and chunk.get("subtype") == "init":
+                data = chunk.get("data", {})
+                if isinstance(data, dict) and "cwd" in data:
+                    sandbox_dir = data["cwd"]
+            
+            # Look for ResultMessage with final result
+            if chunk.get("subtype") == "success" and "result" in chunk:
+                final_result_text = chunk["result"]
+                logger.debug(f"Found final result in ResultMessage: {len(final_result_text)} chars")
+        
+        # Now stream only the final result
+        if final_result_text:
+            # Send role chunk
+            initial_chunk = ChatCompletionStreamResponse(
+                id=request_id,
+                model=request.model,
+                choices=[StreamChoice(
+                    index=0,
+                    delta={"role": "assistant", "content": ""},
+                    finish_reason=None
+                )]
+            )
+            yield f"data: {initial_chunk.model_dump_json()}\n\n"
+            
+            # Send content chunk with final result
+            content_chunk = ChatCompletionStreamResponse(
+                id=request_id,
+                model=request.model,
+                choices=[StreamChoice(
+                    index=0,
+                    delta={"content": final_result_text},
+                    finish_reason=None
+                )]
+            )
+            yield f"data: {content_chunk.model_dump_json()}\n\n"
+        else:
+            # Fallback if no result found
+            logger.warning("No final result found in SDK chunks")
+            # Send empty response
+            initial_chunk = ChatCompletionStreamResponse(
+                id=request_id,
+                model=request.model,
+                choices=[StreamChoice(
+                    index=0,
+                    delta={"role": "assistant", "content": ""},
+                    finish_reason=None
+                )]
+            )
+            yield f"data: {initial_chunk.model_dump_json()}\n\n"
+        
+        # Send finish chunk
+        final_chunk = ChatCompletionStreamResponse(
+            id=request_id,
+            model=request.model,
+            choices=[StreamChoice(
+                index=0,
+                delta={},
+                finish_reason="stop"
+            )]
+        )
+        yield f"data: {final_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+        
+        # Store in session if needed
+        if actual_session_id and final_result_text:
+            assistant_message = Message(role="assistant", content=final_result_text)
+            session_manager.add_assistant_response(actual_session_id, assistant_message)
             
     except Exception as e:
         logger.error(f"Error in stream_final_content_only: {e}")
@@ -419,6 +477,14 @@ async def stream_final_content_only(
             }
         }
         yield f"data: {json.dumps(error_chunk)}\n\n"
+    finally:
+        # Cleanup sandbox directory if in chat mode
+        if CHAT_MODE and sandbox_dir:
+            try:
+                ChatMode.cleanup_sandbox(sandbox_dir)
+                logger.debug(f"Cleaned up sandbox directory: {sandbox_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup sandbox {sandbox_dir}: {e}")
 
 
 async def stream_with_progress_injection(
