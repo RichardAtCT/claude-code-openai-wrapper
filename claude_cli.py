@@ -115,14 +115,24 @@ class ClaudeCodeCLI:
                     "\n\nCRITICAL FINAL INSTRUCTION: You MUST use the XML tool format shown above in your response. "
                     "The conversation above contains tool definitions like <attempt_completion>, <ask_followup_question>, etc. "
                     "You MUST format your ENTIRE response using one of these XML tools. "
-                    "Do NOT respond with plain text. Use the appropriate XML tool tag to wrap your response."
+                    "Do NOT respond with plain text. Use the appropriate XML tool tag to wrap your response.\n"
+                    "IMPORTANT: Provide COMPLETE and DETAILED responses. Do not truncate or abbreviate your answers. "
+                    "If providing code, include the FULL implementation. If explaining concepts, be thorough. "
+                    "Your response should be comprehensive and fully address the user's request."
                 )
                 post_injections.append(tool_instruction)
-                logger.debug("Added XML tool usage instruction for chat mode")
+                logger.debug("Added XML tool usage instruction with completeness hints for chat mode")
             elif self.chat_mode and not has_tool_indicators:
                 # Only add full chat mode prompt if there are no tool indicators
                 pre_injections.append(self.prompts.CHAT_MODE_NO_FILES_PROMPT)
-                logger.debug("Added full chat mode prompt (no tool indicators detected)")
+                # Add completeness instruction for non-tool responses
+                post_injections.append(
+                    "\n\nIMPORTANT: Provide COMPLETE and THOROUGH responses. "
+                    "Do not truncate or abbreviate your answers. "
+                    "If writing code, include the FULL implementation with all necessary details. "
+                    "If explaining concepts, be comprehensive and address all aspects of the question."
+                )
+                logger.debug("Added full chat mode prompt with completeness instruction (no tool indicators detected)")
             
             # Build the final prompt with pre and post injections
             final_prompt = prompt
@@ -141,6 +151,12 @@ class ClaudeCodeCLI:
             if self.chat_mode:
                 prompt_parts.append(f"System: {self.prompts.RESPONSE_REINFORCEMENT_PROMPT}")
                 prompt_parts.append(f"System: {self.prompts.CHAT_MODE_NO_FILES_PROMPT}")
+                # Add completeness instruction
+                prompt_parts.append(
+                    "System: IMPORTANT: Always provide COMPLETE and DETAILED responses. "
+                    "Do not truncate, abbreviate, or cut off your answers. "
+                    "Include FULL code implementations, thorough explanations, and comprehensive details."
+                )
             
             # Add user prompt
             if self.chat_mode:
@@ -236,11 +252,30 @@ class ClaudeCodeCLI:
                     # Run the query and yield messages
                     logger.debug(f"Executing query with enhanced prompt in chat mode")
                     try:
+                        total_content_length = 0
                         async for message in query(prompt=enhanced_prompt, options=options):
                             processed_msg = self._process_message(message)
-                            # Log assistant responses
+                            # Log assistant responses with content length tracking
                             if processed_msg.get("type") == "assistant" or "content" in processed_msg:
+                                content = processed_msg.get("content", [])
+                                if isinstance(content, list):
+                                    for block in content:
+                                        if hasattr(block, 'text'):
+                                            block_length = len(block.text)
+                                            total_content_length += block_length
+                                            logger.debug(f"Assistant text block length: {block_length}, total so far: {total_content_length}")
+                                        elif isinstance(block, dict) and block.get("type") == "text":
+                                            block_length = len(block.get("text", ""))
+                                            total_content_length += block_length
+                                            logger.debug(f"Assistant text block length: {block_length}, total so far: {total_content_length}")
+                                elif isinstance(content, str):
+                                    content_length = len(content)
+                                    total_content_length += content_length
+                                    logger.debug(f"Assistant content length: {content_length}, total so far: {total_content_length}")
                                 logger.debug(f"Assistant message type: {processed_msg.get('type')}, has content: {'content' in processed_msg}")
+                            # Log completion summary
+                            if processed_msg.get("subtype") == "success":
+                                logger.info(f"Response completed - Total content length: {total_content_length} characters")
                             yield processed_msg
                     except Exception as sdk_error:
                         # Handle SDK errors gracefully
@@ -278,8 +313,24 @@ class ClaudeCodeCLI:
                         options.resume = session_id
                     
                     # Run the query and yield messages
+                    total_content_length = 0
                     async for message in query(prompt=enhanced_prompt, options=options):
-                        yield self._process_message(message)
+                        processed_msg = self._process_message(message)
+                        # Track content length in normal mode too
+                        if processed_msg.get("type") == "assistant" or "content" in processed_msg:
+                            content = processed_msg.get("content", [])
+                            if isinstance(content, list):
+                                for block in content:
+                                    if hasattr(block, 'text'):
+                                        total_content_length += len(block.text)
+                                    elif isinstance(block, dict) and block.get("type") == "text":
+                                        total_content_length += len(block.get("text", ""))
+                            elif isinstance(content, str):
+                                total_content_length += len(content)
+                        # Log completion summary
+                        if processed_msg.get("subtype") == "success":
+                            logger.info(f"Response completed - Total content length: {total_content_length} characters")
+                        yield processed_msg
                     
             finally:
                 # Restore original environment (if we changed anything)

@@ -361,7 +361,11 @@ async def stream_with_progress_injection(
         progress_messages = [
             "Working on it",
             "Still processing", 
-            "Almost there"
+            "Almost there",
+            "Taking a bit longer",
+            "Still working on your request",
+            "Processing complex response",
+            "Finalizing details"
         ]
         
         progress_sent = False
@@ -488,6 +492,14 @@ async def stream_with_progress_injection(
                             last_dot_time = current_time
                             should_update = True
                             logger.debug(f"Progress injection: Adding dot {current_dots}")
+                        # After exhausting all messages, continue with repeating pattern
+                        elif current_message_index >= len(progress_messages) - 1 and current_dots >= MAX_DOTS:
+                            # Reset dots and show continuous indicator every 2.5s
+                            if time_since_last_dot >= DOT_INTERVAL:
+                                current_dots = 1  # Reset to single dot
+                                last_dot_time = current_time
+                                should_update = True
+                                logger.debug("Progress injection: Continuous progress indicator")
                         # Initial message
                         elif not progress_sent:
                             last_message_time = current_time
@@ -617,22 +629,79 @@ async def generate_streaming_response(
         else:
             logger.info("Tools enabled by user request")
         
-        # Run Claude Code
+        # Run Claude Code with timeout protection
         chunks_buffer = []
         role_sent = False  # Track if we've sent the initial role chunk
         content_sent = False  # Track if we've sent any content
         
-        async for chunk in claude_cli.run_completion(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            model=claude_options.get('model'),
-            max_turns=claude_options.get('max_turns', 10),
-            allowed_tools=claude_options.get('allowed_tools'),
-            disallowed_tools=claude_options.get('disallowed_tools'),
-            stream=True,
-            messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]  # Convert to dicts for format detection
-        ):
-            chunks_buffer.append(chunk)
+        # Create a timeout wrapper for the SDK stream
+        STREAM_TIMEOUT = 120.0  # 2 minute timeout for any single chunk
+        last_chunk_time = asyncio.get_event_loop().time()
+        
+        async def stream_with_timeout():
+            """Wrap SDK stream with timeout detection"""
+            try:
+                async for chunk in claude_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    model=claude_options.get('model'),
+                    max_turns=claude_options.get('max_turns', 10),
+                    allowed_tools=claude_options.get('allowed_tools'),
+                    disallowed_tools=claude_options.get('disallowed_tools'),
+                    stream=True,
+                    messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]  # Convert to dicts for format detection
+                ):
+                    yield chunk
+            except asyncio.CancelledError:
+                logger.warning("SDK stream was cancelled")
+                raise
+            except Exception as e:
+                logger.error(f"SDK stream error: {type(e).__name__}: {e}")
+                # Yield error as SDK format
+                yield {
+                    "type": "result",
+                    "subtype": "error_during_execution",
+                    "is_error": True,
+                    "error_message": f"Stream error: {str(e)}"
+                }
+        
+        # Create timeout task
+        async def timeout_monitor():
+            """Monitor for stream timeouts"""
+            while True:
+                await asyncio.sleep(5.0)  # Check every 5 seconds
+                current_time = asyncio.get_event_loop().time()
+                if current_time - last_chunk_time > STREAM_TIMEOUT:
+                    logger.error(f"Stream timeout detected - no chunks for {STREAM_TIMEOUT} seconds")
+                    return True  # Timeout occurred
+            return False
+        
+        timeout_task = asyncio.create_task(timeout_monitor())
+        stream_iter = stream_with_timeout()
+        
+        try:
+            logger.debug(f"Starting SDK stream iteration with {STREAM_TIMEOUT}s timeout")
+            chunk_count = 0
+            async for chunk in stream_iter:
+                chunk_count += 1
+                # Update last chunk time
+                current_time = asyncio.get_event_loop().time()
+                time_since_last = current_time - last_chunk_time
+                last_chunk_time = current_time
+                
+                # Log chunk timing info
+                chunk_type = chunk.get('type', 'unknown')
+                chunk_subtype = chunk.get('subtype', '')
+                logger.debug(f"SDK chunk #{chunk_count} received after {time_since_last:.2f}s - type: {chunk_type}, subtype: {chunk_subtype}")
+                
+                # Check if timeout task detected a timeout
+                if timeout_task.done():
+                    timeout_occurred = await timeout_task
+                    if timeout_occurred:
+                        logger.error("Breaking from stream due to timeout")
+                        break
+                
+                chunks_buffer.append(chunk)
             
             # Extract sandbox directory from init message in chat mode
             if CHAT_MODE and not sandbox_dir and chunk.get("subtype") == "init":
@@ -724,6 +793,39 @@ async def generate_streaming_response(
                         
                         yield f"data: {stream_chunk.model_dump_json()}\n\n"
                         content_sent = True
+            
+            logger.debug(f"SDK stream completed after {chunk_count} chunks")
+        
+        finally:
+            # Cancel timeout monitor
+            if not timeout_task.done():
+                timeout_task.cancel()
+                try:
+                    await timeout_task
+                except asyncio.CancelledError:
+                    pass
+        
+        # Check if we hit a timeout
+        if timeout_task.done():
+            try:
+                timeout_occurred = await timeout_task
+                if timeout_occurred:
+                    logger.error("Stream timed out - sending error response")
+                    # Send error message if we have started streaming
+                    if role_sent and not content_sent:
+                        error_chunk = ChatCompletionStreamResponse(
+                            id=request_id,
+                            model=request.model,
+                            choices=[StreamChoice(
+                                index=0,
+                                delta={"content": "\n\n[Response timed out. Please try again with a simpler request.]"},
+                                finish_reason=None
+                            )]
+                        )
+                        yield f"data: {error_chunk.model_dump_json()}\n\n"
+                        content_sent = True
+            except Exception as e:
+                logger.error(f"Error checking timeout status: {e}")
         
         # Handle case where no role was sent (send at least role chunk)
         if not role_sent:
