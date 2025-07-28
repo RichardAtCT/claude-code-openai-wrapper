@@ -152,6 +152,9 @@ CORS_ORIGINS=["*"]
 
 # Progress markers - show streaming progress indicators
 # SHOW_PROGRESS_MARKERS=true
+
+# SSE keepalive interval - prevents connection timeouts (seconds)
+# SSE_KEEPALIVE_INTERVAL=30
 ```
 
 ### 🔐 **API Security Configuration**
@@ -208,6 +211,20 @@ Control streaming progress indicators for long-running operations:
   - Waits for completion then sends only the final assistant message
   - Ideal for programmatic usage or when you only need the final result
   - Note: This buffers the entire response, so initial latency will be higher
+
+### 🔄 **SSE Keepalive Configuration**
+
+Prevents connection timeouts during long-running requests by sending invisible keepalive comments:
+
+- **Default interval**: 30 seconds (`SSE_KEEPALIVE_INTERVAL=30`)
+- **How it works**: Sends SSE comments (lines starting with `:`) that are automatically ignored by clients
+- **When it's used**: During any pause in streaming longer than the configured interval
+- **Invisible to clients**: Keepalive comments don't appear in the response content
+
+This feature ensures that:
+- Long Claude processing times don't cause connection timeouts
+- Proxies and load balancers don't close "idle" connections
+- Works seamlessly with both progress markers enabled and disabled
 
 Example messages include positive, subtly humorous updates:
 - "Working on it", "Still processing", "Crafting your response"
@@ -394,6 +411,7 @@ Env vars override defaults and can be set at runtime with `-e` flags or in `dock
   - `API_KEYS=key1,key2`: Comma-separated list of API keys required for endpoint access (clients must send `Authorization: Bearer <key>`).
   - `CHAT_MODE=true`: Enable chat mode for sandboxed execution with no file system access (disables sessions, restricts tools).
   - `SHOW_PROGRESS_MARKERS=false`: Disable streaming progress indicators (default: true). When false, buffers the entire response and only streams the final assistant message, filtering out all intermediate tool uses and preliminary responses.
+  - `SSE_KEEPALIVE_INTERVAL=30`: Interval in seconds for sending SSE keepalive comments to prevent connection timeouts (default: 30).
 
 - **Custom/Advanced Vars**:
   - `MAX_THINKING_TOKENS=4096`: Custom token budget for extended thinking (if implemented in code; e.g., for `budget_tokens` in SDK calls).
@@ -821,6 +839,8 @@ Chat mode is ideal for:
 3. **Timeout errors**:
    - Increase `MAX_TIMEOUT` in `.env`
    - Note: Claude Code can take time for complex requests
+   - SSE keepalive comments are sent every 30 seconds (configurable via `SSE_KEEPALIVE_INTERVAL`)
+   - If you see connection timeouts after ~60 seconds, check your proxy/load balancer settings
 
 ## Testing
 

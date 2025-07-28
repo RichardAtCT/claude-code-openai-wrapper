@@ -44,6 +44,7 @@ load_dotenv()
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() in ('true', '1', 'yes', 'on')
 VERBOSE = os.getenv('VERBOSE', 'false').lower() in ('true', '1', 'yes', 'on')
 SHOW_PROGRESS_MARKERS = os.getenv('SHOW_PROGRESS_MARKERS', 'true').lower() in ('true', '1', 'yes', 'on')
+SSE_KEEPALIVE_INTERVAL = int(os.getenv('SSE_KEEPALIVE_INTERVAL', '30'))  # seconds
 
 # Set logging level based on debug/verbose mode
 log_level = logging.DEBUG if (DEBUG_MODE or VERBOSE) else logging.INFO
@@ -338,6 +339,11 @@ def create_progress_chunk(request_id: str, model: str, content: str) -> str:
     return f"data: {chunk.model_dump_json()}\n\n"
 
 
+def create_sse_keepalive() -> str:
+    """Create an SSE comment for keep-alive. Comments are not shown to clients."""
+    return ": keepalive\n\n"
+
+
 async def stream_final_content_only(
     request: ChatCompletionRequest,
     request_id: str,
@@ -387,28 +393,103 @@ async def stream_final_content_only(
         sdk_chunks = []
         final_result_text = None
         
-        async for chunk in claude_cli.run_completion(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            model=claude_options.get('model'),
-            max_turns=claude_options.get('max_turns', 10),
-            allowed_tools=claude_options.get('allowed_tools'),
-            disallowed_tools=claude_options.get('disallowed_tools'),
-            stream=True,
-            messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]
-        ):
-            sdk_chunks.append(chunk)
+        # Create a queue for keepalive messages
+        keepalive_queue = asyncio.Queue()
+        keepalive_task = None
+        
+        async def send_keepalives():
+            """Send SSE keepalive comments periodically"""
+            try:
+                while True:
+                    await asyncio.sleep(SSE_KEEPALIVE_INTERVAL)
+                    await keepalive_queue.put(create_sse_keepalive())
+                    logger.debug(f"Queued SSE keepalive comment")
+            except asyncio.CancelledError:
+                logger.debug("Keepalive task cancelled")
+        
+        # Start keepalive task
+        keepalive_task = asyncio.create_task(send_keepalives())
+        
+        try:
+            # Get SDK stream iterator
+            sdk_stream = claude_cli.run_completion(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=claude_options.get('model'),
+                max_turns=claude_options.get('max_turns', 10),
+                allowed_tools=claude_options.get('allowed_tools'),
+                disallowed_tools=claude_options.get('disallowed_tools'),
+                stream=True,
+                messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]
+            )
             
-            # Track sandbox directory in chat mode
-            if CHAT_MODE and not sandbox_dir and chunk.get("subtype") == "init":
-                data = chunk.get("data", {})
-                if isinstance(data, dict) and "cwd" in data:
-                    sandbox_dir = data["cwd"]
+            # Create task for SDK stream processing
+            sdk_task = None
+            sdk_done = False
             
-            # Look for ResultMessage with final result
-            if chunk.get("subtype") == "success" and "result" in chunk:
-                final_result_text = chunk["result"]
-                logger.debug(f"Found final result in ResultMessage: {len(final_result_text)} chars")
+            async def process_sdk_stream():
+                nonlocal sdk_done, final_result_text, sandbox_dir
+                try:
+                    async for chunk in sdk_stream:
+                        sdk_chunks.append(chunk)
+                        
+                        # Track sandbox directory in chat mode
+                        if CHAT_MODE and not sandbox_dir and chunk.get("subtype") == "init":
+                            data = chunk.get("data", {})
+                            if isinstance(data, dict) and "cwd" in data:
+                                sandbox_dir = data["cwd"]
+                        
+                        # Look for AssistantMessage content
+                        if "content" in chunk and isinstance(chunk["content"], list):
+                            # Extract text from content blocks
+                            for block in chunk["content"]:
+                                if hasattr(block, 'text'):
+                                    # TextBlock object
+                                    if final_result_text is None:
+                                        final_result_text = ""
+                                    final_result_text += block.text
+                                elif isinstance(block, dict) and block.get("type") == "text":
+                                    # Dictionary format
+                                    if final_result_text is None:
+                                        final_result_text = ""
+                                    final_result_text += block.get("text", "")
+                            
+                            if final_result_text:
+                                logger.debug(f"Found assistant content: {len(final_result_text)} chars")
+                        
+                        # Also check for ResultMessage format (backward compatibility)
+                        elif chunk.get("subtype") == "success" and "result" in chunk:
+                            final_result_text = chunk["result"]
+                            logger.debug(f"Found final result in ResultMessage: {len(final_result_text)} chars")
+                finally:
+                    sdk_done = True
+            
+            sdk_task = asyncio.create_task(process_sdk_stream())
+            
+            # Process both SDK stream and keepalives
+            while not sdk_done:
+                # Wait for either SDK completion or keepalive
+                try:
+                    keepalive_msg = await asyncio.wait_for(
+                        keepalive_queue.get(),
+                        timeout=1.0  # Check every second
+                    )
+                    yield keepalive_msg
+                    logger.debug("Sent SSE keepalive to client")
+                except asyncio.TimeoutError:
+                    # Check if SDK processing is done
+                    if sdk_task.done():
+                        await sdk_task  # Get any exceptions
+                        break
+                    
+        finally:
+            # Clean up keepalive task
+            if keepalive_task:
+                keepalive_task.cancel()
+                try:
+                    await keepalive_task
+                except asyncio.CancelledError:
+                    pass
         
         # Now stream only the final result
         if final_result_text:
@@ -437,18 +518,58 @@ async def stream_final_content_only(
             yield f"data: {content_chunk.model_dump_json()}\n\n"
         else:
             # Fallback if no result found
-            logger.warning("No final result found in SDK chunks")
-            # Send empty response
-            initial_chunk = ChatCompletionStreamResponse(
-                id=request_id,
-                model=request.model,
-                choices=[StreamChoice(
-                    index=0,
-                    delta={"role": "assistant", "content": ""},
-                    finish_reason=None
-                )]
-            )
-            yield f"data: {initial_chunk.model_dump_json()}\n\n"
+            logger.warning(f"No final result found in SDK chunks. Total chunks: {len(sdk_chunks)}")
+            # Log chunk types for debugging
+            chunk_types = [f"{c.get('type', 'unknown')}:{c.get('subtype', '')}" for c in sdk_chunks[:5]]
+            logger.debug(f"First 5 chunk types: {chunk_types}")
+            
+            # Try to extract any text content from chunks as fallback
+            fallback_text = ""
+            for chunk in sdk_chunks:
+                if "content" in chunk and isinstance(chunk["content"], list):
+                    for block in chunk["content"]:
+                        if hasattr(block, 'text'):
+                            fallback_text += block.text
+                        elif isinstance(block, dict) and block.get("type") == "text":
+                            fallback_text += block.get("text", "")
+            
+            if fallback_text:
+                logger.info(f"Using fallback text extraction: {len(fallback_text)} chars")
+                # Send the fallback content
+                initial_chunk = ChatCompletionStreamResponse(
+                    id=request_id,
+                    model=request.model,
+                    choices=[StreamChoice(
+                        index=0,
+                        delta={"role": "assistant", "content": ""},
+                        finish_reason=None
+                    )]
+                )
+                yield f"data: {initial_chunk.model_dump_json()}\n\n"
+                
+                content_chunk = ChatCompletionStreamResponse(
+                    id=request_id,
+                    model=request.model,
+                    choices=[StreamChoice(
+                        index=0,
+                        delta={"content": fallback_text},
+                        finish_reason=None
+                    )]
+                )
+                yield f"data: {content_chunk.model_dump_json()}\n\n"
+            else:
+                # Send empty response as last resort
+                logger.error("No content found in any chunks")
+                initial_chunk = ChatCompletionStreamResponse(
+                    id=request_id,
+                    model=request.model,
+                    choices=[StreamChoice(
+                        index=0,
+                        delta={"role": "assistant", "content": ""},
+                        finish_reason=None
+                    )]
+                )
+                yield f"data: {initial_chunk.model_dump_json()}\n\n"
         
         # Send finish chunk
         final_chunk = ChatCompletionStreamResponse(
@@ -537,6 +658,7 @@ async def stream_with_progress_injection(
         current_dots = 0  # Track number of dots (0-3)
         last_dot_time = 0  # Track when we last added a dot
         last_message_time = 0  # Track when we last changed message
+        last_keepalive_time = 0  # Track when we last sent a keepalive
         
         # Timing configuration
         BASE_DOT_INTERVAL = 3.0  # Base interval for dots
@@ -613,6 +735,7 @@ async def stream_with_progress_injection(
                         current_dots = 0
                         last_dot_time = 0
                         last_message_time = 0
+                        last_keepalive_time = asyncio.get_event_loop().time()  # Reset keepalive timer
                         any_content_sent = True  # Mark that we've seen content
                         need_newline_before_progress = True  # Need newline before next progress
                         # Reset intervals when we get actual content
@@ -731,6 +854,14 @@ async def stream_with_progress_injection(
                             # Increment update count for backoff tracking
                             if not should_update or update_message:
                                 update_count += 1
+                        else:
+                            # No visible progress update needed - check if we need keepalive
+                            time_since_keepalive = current_time - last_keepalive_time if last_keepalive_time > 0 else float('inf')
+                            if time_since_keepalive >= SSE_KEEPALIVE_INTERVAL:
+                                # Send invisible keepalive comment
+                                yield create_sse_keepalive()
+                                last_keepalive_time = current_time
+                                logger.debug("Progress injection: Sent SSE keepalive comment")
                     
                     # Schedule next check with dynamic frequency
                     elapsed_time = current_time - last_activity_time
