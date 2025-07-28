@@ -81,12 +81,14 @@ class ClaudeCodeCLI:
     
     def _prepare_prompt_with_injections(self, prompt: str, messages: Optional[List[Dict]] = None) -> str:
         """Prepare prompt with system injections based on mode and format detection."""
+        logger.debug(f"Preparing prompt with injections, chat_mode={self.chat_mode}")
         # Import MessageAdapter to use the format detection
         from message_adapter import MessageAdapter
         import re
         
         # Check if the prompt already has structured format
         has_structured_prompt = MessageAdapter.has_structured_format(prompt)
+        logger.debug(f"Has structured prompt format: {has_structured_prompt}")
         
         if has_structured_prompt:
             # For structured prompts (XML, JSON, etc), preserve the exact format
@@ -107,6 +109,8 @@ class ClaudeCodeCLI:
                 "ask_followup_question" in prompt_lower,
                 re.search(r'<\w+>\s*<\w+>', prompt) is not None  # XML-like nested tags
             ])
+            
+            logger.debug(f"Has tool indicators: {has_tool_indicators}")
             
             if has_tool_indicators and self.chat_mode:
                 # Only add strong XML enforcement in chat mode
@@ -210,7 +214,17 @@ class ClaudeCodeCLI:
             allowed_tools = ChatMode.get_allowed_tools()
             
             # Prepare prompt with injections
+            logger.debug(f"Original prompt length: {len(prompt)}")
             enhanced_prompt = self._prepare_prompt_with_injections(prompt, messages)
+            logger.debug(f"Enhanced prompt length: {len(enhanced_prompt)}")
+            if enhanced_prompt != prompt:
+                logger.debug(f"Prompt was enhanced with injections")
+                # Log first and last 500 chars of enhanced prompt
+                if len(enhanced_prompt) > 1000:
+                    logger.debug(f"Enhanced prompt start: {enhanced_prompt[:500]}...")
+                    logger.debug(f"Enhanced prompt end: ...{enhanced_prompt[-500:]}")
+                else:
+                    logger.debug(f"Enhanced prompt: {enhanced_prompt}")
         else:
             # Normal mode
             cwd = self.cwd
@@ -251,10 +265,15 @@ class ClaudeCodeCLI:
                     
                     # Run the query and yield messages
                     logger.debug(f"Executing query with enhanced prompt in chat mode")
+                    logger.debug(f"SDK options: sandbox_dir={options.cwd}, max_turns={options.max_turns}")
+                    logger.debug(f"Allowed tools: {options.allowed_tools}")
                     try:
                         total_content_length = 0
+                        sdk_message_count = 0
                         async for message in query(prompt=enhanced_prompt, options=options):
+                            sdk_message_count += 1
                             processed_msg = self._process_message(message)
+                            logger.debug(f"SDK message #{sdk_message_count} type: {processed_msg.get('type')}, subtype: {processed_msg.get('subtype')}")
                             # Log assistant responses with content length tracking
                             if processed_msg.get("type") == "assistant" or "content" in processed_msg:
                                 content = processed_msg.get("content", [])
@@ -277,6 +296,8 @@ class ClaudeCodeCLI:
                             if processed_msg.get("subtype") == "success":
                                 logger.info(f"Response completed - Total content length: {total_content_length} characters")
                             yield processed_msg
+                        
+                        logger.debug(f"SDK stream ended after {sdk_message_count} messages, total content: {total_content_length} chars")
                     except Exception as sdk_error:
                         # Handle SDK errors gracefully
                         if "cancel scope" in str(sdk_error).lower():
