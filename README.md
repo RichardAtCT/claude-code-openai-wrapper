@@ -226,10 +226,11 @@ This feature ensures that:
 - Proxies and load balancers don't close "idle" connections
 - Works seamlessly with both progress markers enabled and disabled
 
-Example messages include positive, subtly humorous updates:
-- "Working on it", "Still processing", "Crafting your response"
-- "Building something great", "Cooking up an answer", "In the zone"
-- "Deep in thought", "Powering through", "Persistence mode activated"
+The progress indicators use universal, language-agnostic symbols:
+- Starts with ⏳ (hourglass) to indicate processing has begun
+- Transitions to rotating circles (◐ ◓ ◑ ◒) for ongoing progress
+- Adds dots (·) incrementally to show continued activity
+- Example progression: ⏳ → ⏳· → ◐ → ◐· → ◐·· → ◓ → ◓·
 
 ### 🛡️ **Rate Limiting**
 

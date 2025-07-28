@@ -630,31 +630,20 @@ async def stream_with_progress_injection(
     
     # Create a merged stream that combines queued chunks and progress indicators
     async def merged_stream():
-        # Progress messages - positive and subtly humorous
+        # Progress messages - universal rotating circles
         progress_messages = [
-            "Working on it",
-            "Still processing",
-            "Crafting your response",
-            "Building something great",
-            "Cooking up an answer",
-            "Still at it",
-            "Making progress",
-            "Crunching through this",
-            "On the case",
-            "Deep in thought",
-            "Still going strong",
-            "Powering through",
-            "In the zone",
-            "Keeping at it",
-            "Still on the job",
-            "Persistence mode activated"
+            "◐", "◓", "◑", "◒",  # Rotating circles
+            "◐", "◓", "◑", "◒",  # Repeat pattern
+            "◐", "◓", "◑", "◒",  # Continue
+            "◐", "◓", "◑", "◒"   # Total 16 entries
         ]
         
         progress_sent = False
         any_content_sent = False  # Track if ANY content has been sent
         need_newline_before_progress = False  # Track if we need newline before next progress
+        showing_hourglass = True  # Track if we're showing the initial hourglass
         last_activity_time = asyncio.get_event_loop().time()
-        current_message_index = random.randint(0, 4)  # Randomly select from first 5 messages
+        current_message_index = 0  # Will start at 0 after hourglass phase
         current_dots = 0  # Track number of dots (0-3)
         last_dot_time = 0  # Track when we last added a dot
         last_message_time = 0  # Track when we last changed message
@@ -731,7 +720,8 @@ async def stream_with_progress_injection(
                         
                         last_activity_time = asyncio.get_event_loop().time()
                         progress_sent = False
-                        current_message_index = random.randint(0, 4)  # Randomly select from first 5 messages
+                        showing_hourglass = True  # Reset to hourglass for next pause
+                        current_message_index = 0  # Will start at 0 after hourglass
                         current_dots = 0
                         last_dot_time = 0
                         last_message_time = 0
@@ -782,23 +772,38 @@ async def stream_with_progress_injection(
                         should_update = False
                         update_message = False
                         
-                        # Check if we need to change the message
-                        message_threshold = sum(current_message_interval * (BACKOFF_MULTIPLIER ** i if i >= BACKOFF_START_AFTER else 1) 
-                                              for i in range(current_message_index + 1))
-                        if time_since_start >= message_threshold and current_message_index < len(progress_messages) - 1:
-                            current_message_index += 1
-                            current_dots = 0  # Reset dots when changing message
-                            last_message_time = current_time
-                            should_update = True
-                            update_message = True
-                            
-                            # Apply exponential backoff to message interval
-                            if current_message_index >= BACKOFF_START_AFTER:
-                                current_message_interval = min(current_message_interval * BACKOFF_MULTIPLIER, MAX_MESSAGE_INTERVAL)
-                            
-                            logger.debug(f"Progress injection: Changing to message {current_message_index}, next interval: {current_message_interval:.1f}s")
+                        # Special handling for hourglass phase
+                        if showing_hourglass and current_dots >= MAX_DOTS:
+                            # Check if enough time has passed for a message change
+                            if time_since_start >= BASE_MESSAGE_INTERVAL:
+                                # Transition from hourglass to first circle
+                                showing_hourglass = False
+                                current_message_index = 0
+                                current_dots = 0
+                                last_message_time = current_time
+                                last_dot_time = current_time
+                                should_update = True
+                                update_message = True
+                                logger.debug("Progress injection: Transitioning from hourglass to circles")
+                        # Check if we need to change the message (only when not showing hourglass and have all dots)
+                        elif not showing_hourglass and current_dots >= MAX_DOTS:
+                            # Calculate time since last message change
+                            time_since_message_change = current_time - last_message_time if last_message_time > 0 else float('inf')
+                            if time_since_message_change >= current_message_interval and current_message_index < len(progress_messages) - 1:
+                                current_message_index += 1
+                                current_dots = 0  # Reset dots when changing message
+                                last_message_time = current_time
+                                last_dot_time = current_time
+                                should_update = True
+                                update_message = True
+                                
+                                # Apply exponential backoff to message interval
+                                if current_message_index >= BACKOFF_START_AFTER:
+                                    current_message_interval = min(current_message_interval * BACKOFF_MULTIPLIER, MAX_MESSAGE_INTERVAL)
+                                
+                                logger.debug(f"Progress injection: Changing to message {current_message_index}, next interval: {current_message_interval:.1f}s")
                         # Check if we need to add a dot
-                        elif time_since_last_dot >= current_dot_interval and current_dots < MAX_DOTS:
+                        if time_since_last_dot >= current_dot_interval and current_dots < MAX_DOTS and not update_message:
                             current_dots += 1
                             last_dot_time = current_time
                             should_update = True
@@ -810,13 +815,18 @@ async def stream_with_progress_injection(
                             
                             logger.debug(f"Progress injection: Adding dot {current_dots}, next interval: {current_dot_interval:.1f}s")
                         # After exhausting all messages, continue with repeating pattern
-                        elif current_message_index >= len(progress_messages) - 1 and current_dots >= MAX_DOTS:
-                            # Reset dots and show continuous indicator
-                            if time_since_last_dot >= current_dot_interval:
-                                current_dots = 1  # Reset to single dot
+                        elif not showing_hourglass and current_message_index >= len(progress_messages) - 1 and current_dots >= MAX_DOTS:
+                            # Check if enough time for cycling back
+                            time_since_message_change = current_time - last_message_time if last_message_time > 0 else float('inf')
+                            if time_since_message_change >= current_message_interval:
+                                # Cycle back to start of messages
+                                current_message_index = 0
+                                current_dots = 0
+                                last_message_time = current_time
                                 last_dot_time = current_time
                                 should_update = True
-                                logger.debug("Progress injection: Continuous progress indicator")
+                                update_message = True
+                                logger.debug("Progress injection: Cycling back to first message")
                         # Initial message
                         elif not progress_sent:
                             last_message_time = current_time
@@ -827,20 +837,18 @@ async def stream_with_progress_injection(
                         if should_update:
                             # Determine what to send
                             if not progress_sent and not any_content_sent:
-                                # First message at start of stream
-                                message_text = progress_messages[current_message_index]
-                                formatted_message = f"*{message_text}*"
+                                # First message at start of stream - show hourglass
+                                formatted_message = "⏳"
                             elif not progress_sent:
-                                # First message but there's already content - need newline
-                                message_text = progress_messages[current_message_index]
-                                formatted_message = f"\n*{message_text}*"
+                                # First message but there's already content - need newline with hourglass
+                                formatted_message = "\n⏳"
                             elif update_message:
-                                # Message change - send new message on same line
+                                # Message change - send new circle message without space
                                 message_text = progress_messages[current_message_index]
-                                formatted_message = f" *{message_text}*"
+                                formatted_message = message_text
                             else:
                                 # Just adding a dot - send only the dot
-                                formatted_message = "."
+                                formatted_message = "·"
                             
                             # Check if we need to add a newline before progress
                             if need_newline_before_progress:
