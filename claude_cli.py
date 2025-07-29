@@ -13,6 +13,12 @@ from prompts import ChatModePrompts, FormatDetector, inject_prompts
 
 logger = logging.getLogger(__name__)
 
+# Pre-compiled regex patterns for performance
+import re
+XML_TAG_PATTERN = re.compile(r'<(\w+)>.*?</\1>', re.DOTALL | re.IGNORECASE)
+TOOL_NAME_PATTERN = re.compile(r'<tool_name>(\w+)</tool_name>', re.IGNORECASE)
+NESTED_XML_PATTERN = re.compile(r'<\w+>\s*<\w+>')
+
 
 class ClaudeCodeCLI:
     def __init__(self, timeout: int = 600000, cwd: Optional[str] = None):
@@ -126,7 +132,7 @@ class ClaudeCodeCLI:
             post_injections = []
             
             # Extract XML tool examples dynamically from the prompt
-            xml_tool_examples = re.findall(r'<(\w+)>.*?</\1>', prompt, re.DOTALL | re.IGNORECASE)
+            xml_tool_examples = XML_TAG_PATTERN.findall(prompt)
             raw_xml_tags = list(set([match for match in xml_tool_examples]))
             
             # Get prompt_lower for use throughout
@@ -143,7 +149,7 @@ class ClaudeCodeCLI:
             xml_tool_names = [tag for tag in raw_xml_tags if tag.lower() not in NON_TOOL_TAGS]
             
             # Look for tool descriptions with <tool_name> tags
-            tool_name_matches = re.findall(r'<tool_name>(\w+)</tool_name>', prompt, re.IGNORECASE)
+            tool_name_matches = TOOL_NAME_PATTERN.findall(prompt)
             for tool in tool_name_matches:
                 if tool.lower() not in NON_TOOL_TAGS and tool not in xml_tool_names:
                     xml_tool_names.append(tool)
@@ -195,7 +201,7 @@ class ClaudeCodeCLI:
                 "use xml tags" in prompt_lower,
                 "respond using xml" in prompt_lower,
                 len(xml_tool_names) > 0,  # Found actual XML examples
-                re.search(r'<\w+>\s*<\w+>', prompt) is not None,  # XML-like nested tags
+                NESTED_XML_PATTERN.search(prompt) is not None,  # XML-like nested tags
                 # Check for Roo/Cline specific patterns
                 "attempt_completion" in prompt_lower,
                 "ask_followup_question" in prompt_lower,

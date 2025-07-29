@@ -154,3 +154,13 @@ class MessageAdapter:
         OpenAI's rule of thumb: ~4 characters per token for English text.
         """
         return len(text) // 4
+    
+    @staticmethod
+    def validate_xml_tool_response(content: str) -> bool:
+        """Check if content contains valid XML tool tags."""
+        content_lower = content.lower()
+        return any([
+            "<attempt_completion>" in content_lower,
+            "<ask_followup_question>" in content_lower,
+            "<new_task>" in content_lower
+        ])

@@ -54,11 +54,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Claude SDK tool names - maintain this list to match SDK capabilities
+ALL_CLAUDE_TOOLS = [
+    'Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode',
+    'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead',
+    'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch'
+]
+
 # Global variable to store runtime-generated API key
 runtime_api_key = None
 
 # Check if chat mode is enabled
 CHAT_MODE = ChatMode.is_enabled()
+
+
+def create_error_response(error: Exception, context: str) -> Dict[str, Any]:
+    """Create standardized error response."""
+    logger.error(f"{context}: {type(error).__name__}: {str(error)}")
+    return {
+        "error": {
+            "message": str(error),
+            "type": type(error).__name__,
+            "context": context
+        }
+    }
 if CHAT_MODE:
     logger.info(f"🔒 Chat mode enabled - sessions disabled, sandboxed execution active, progress markers: {'enabled' if SHOW_PROGRESS_MARKERS else 'disabled'}")
 
@@ -615,10 +634,7 @@ async def stream_final_content_only(
             claude_options['disallowed_tools'] = None
             claude_options['max_turns'] = claude_options.get('max_turns', 10)
         elif not request.enable_tools:
-            disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
-                                'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
-                                'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
-            claude_options['disallowed_tools'] = disallowed_tools
+            claude_options['disallowed_tools'] = ALL_CLAUDE_TOOLS
             claude_options['max_turns'] = 1
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         
@@ -630,7 +646,6 @@ async def stream_final_content_only(
         assistant_messages = []  # List of (index, content) tuples
         current_assistant_content = ""
         in_assistant_message = False
-        message_index = 0
         
         # Direct SDK streaming - no async task wrapper
         logger.debug("Starting SDK stream for buffering")
@@ -742,12 +757,7 @@ async def stream_final_content_only(
         # Validate XML format if expected
         if expects_xml and final_content:
             # Check if response uses XML tool format
-            content_lower = final_content.lower()
-            has_xml_format = any([
-                "<attempt_completion>" in content_lower,
-                "<ask_followup_question>" in content_lower,
-                "<new_task>" in content_lower
-            ])
+            has_xml_format = MessageAdapter.validate_xml_tool_response(final_content)
             
             if not has_xml_format:
                 logger.error(f"❌ Expected XML tool format but got plain text response!")
@@ -1210,10 +1220,7 @@ async def generate_streaming_response(
             claude_options['max_turns'] = claude_options.get('max_turns', 10)
         elif not request.enable_tools:
             # Set disallowed_tools to all available tools to disable them
-            disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
-                                'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
-                                'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
-            claude_options['disallowed_tools'] = disallowed_tools
+            claude_options['disallowed_tools'] = ALL_CLAUDE_TOOLS
             claude_options['max_turns'] = 1  # Single turn for Q&A
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
@@ -1491,10 +1498,7 @@ async def chat_completions(
                 claude_options['max_turns'] = claude_options.get('max_turns', 10)
             elif not request_body.enable_tools:
                 # Set disallowed_tools to all available tools to disable them
-                disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
-                                    'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
-                                    'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
-                claude_options['disallowed_tools'] = disallowed_tools
+                claude_options['disallowed_tools'] = ALL_CLAUDE_TOOLS
                 claude_options['max_turns'] = 1  # Single turn for Q&A
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
