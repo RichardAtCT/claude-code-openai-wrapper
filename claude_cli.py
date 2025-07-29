@@ -92,40 +92,79 @@ class ClaudeCodeCLI:
         
         if has_structured_prompt:
             # For structured prompts (XML, JSON, etc), preserve the exact format
-            logger.debug("Detected structured prompt format - minimal injection")
+            logger.debug("Detected structured prompt format - applying enhanced injection")
             
             pre_injections = []
+            mid_injections = []
             post_injections = []
             
-            # Check if the prompt contains tool definitions
-            # Look for common patterns that indicate tool usage expectations
+            # Extract XML tool examples dynamically from the prompt
+            xml_tool_examples = re.findall(r'<(\w+)>.*?</\1>', prompt, re.DOTALL | re.IGNORECASE)
+            xml_tool_names = list(set([match for match in xml_tool_examples]))
+            
+            # Log detailed information about detected patterns
+            if xml_tool_names:
+                logger.info(f"Detected XML tool patterns: {xml_tool_names}")
+                # Log first 200 chars of each example for debugging
+                for i, example in enumerate(xml_tool_examples[:3]):  # Limit to first 3
+                    logger.debug(f"XML example {i+1}: <{example}>...</{example}>")
+            else:
+                logger.debug("No XML tool examples found in prompt")
+            
+            # Enhanced tool detection patterns
             prompt_lower = prompt.lower()
             has_tool_indicators = any([
                 "tool use" in prompt_lower,
                 "tool uses are formatted" in prompt_lower,
                 "<actual_tool_name>" in prompt_lower,
                 "xml-style tags" in prompt_lower,
-                "attempt_completion" in prompt_lower,
-                "ask_followup_question" in prompt_lower,
+                "[error] you did not use a tool" in prompt_lower,  # Error message pattern
+                len(xml_tool_names) > 0,  # Found actual XML examples
                 re.search(r'<\w+>\s*<\w+>', prompt) is not None  # XML-like nested tags
             ])
             
-            logger.debug(f"Has tool indicators: {has_tool_indicators}")
+            # Check for JSON format request to avoid interference
+            has_json_request = any([
+                "json format" in prompt_lower,
+                "respond in json" in prompt_lower,
+                "return json" in prompt_lower,
+                "output json" in prompt_lower
+            ])
             
-            if has_tool_indicators and self.chat_mode:
-                # Only add strong XML enforcement in chat mode
-                # This ensures compatibility with Roo/Cline while not affecting normal usage
+            logger.debug(f"Has tool indicators: {has_tool_indicators}, Has JSON request: {has_json_request}")
+            
+            if has_tool_indicators and self.chat_mode and not has_json_request:
+                # Layer 1: Prime at the beginning
+                pre_injections.append(
+                    "ATTENTION: This conversation uses XML-formatted tools. "
+                    "You MUST respond using the EXACT XML format demonstrated in the conversation."
+                )
+                
+                # Layer 2: Reinforce with examples (if we found any)
+                if xml_tool_names:
+                    # Use the first tool name as primary example
+                    primary_tool = xml_tool_names[0]
+                    example_text = (
+                        f"\n\nREMINDER: Your response MUST use XML format. "
+                        f"Example: <{primary_tool}>your_response_here</{primary_tool}>\n"
+                        f"Available tools detected: {', '.join([f'<{tool}>' for tool in xml_tool_names])}"
+                    )
+                    mid_injections.append(example_text)
+                    logger.debug(f"Added dynamic XML example with tools: {xml_tool_names}")
+                
+                # Layer 3: Critical final enforcement
                 tool_instruction = (
-                    "\n\nCRITICAL FINAL INSTRUCTION: You MUST use the XML tool format shown above in your response. "
-                    "The conversation above contains tool definitions like <attempt_completion>, <ask_followup_question>, etc. "
-                    "You MUST format your ENTIRE response using one of these XML tools. "
-                    "Do NOT respond with plain text. Use the appropriate XML tool tag to wrap your response.\n"
-                    "IMPORTANT: Provide COMPLETE and DETAILED responses. Do not truncate or abbreviate your answers. "
-                    "If providing code, include the FULL implementation. If explaining concepts, be thorough. "
-                    "Your response should be comprehensive and fully address the user's request."
+                    "\n\nCRITICAL - THIS IS MANDATORY:\n"
+                    "1. Your ENTIRE response MUST be wrapped in XML tags\n"
+                    "2. Start with an opening tag like <tool_name>\n"
+                    "3. End with the corresponding closing tag </tool_name>\n"
+                    "4. NO plain text outside the XML tags\n"
+                    "5. Use the EXACT format shown in the examples above\n\n"
+                    "IMPORTANT: Provide COMPLETE responses - do not truncate or abbreviate."
                 )
                 post_injections.append(tool_instruction)
-                logger.debug("Added XML tool usage instruction with completeness hints for chat mode")
+                logger.info("XML ENFORCEMENT ACTIVE: Multi-layer XML tool enforcement applied")
+                logger.debug(f"Enforcement layers: pre={len(pre_injections)}, mid={len(mid_injections)}, post={len(post_injections)}")
             elif self.chat_mode and not has_tool_indicators:
                 # Only add full chat mode prompt if there are no tool indicators
                 pre_injections.append(self.prompts.CHAT_MODE_NO_FILES_PROMPT)
@@ -138,10 +177,18 @@ class ClaudeCodeCLI:
                 )
                 logger.debug("Added full chat mode prompt with completeness instruction (no tool indicators detected)")
             
-            # Build the final prompt with pre and post injections
+            # Build the final prompt with all injection layers
             final_prompt = prompt
+            
+            # Apply pre-injections
             if pre_injections:
                 final_prompt = "\n\n".join(pre_injections) + "\n\n" + final_prompt
+            
+            # Apply mid-injections (after the main content but before final instructions)
+            if mid_injections:
+                final_prompt = final_prompt + "\n\n".join(mid_injections)
+            
+            # Apply post-injections
             if post_injections:
                 final_prompt = final_prompt + "\n\n".join(post_injections)
                 

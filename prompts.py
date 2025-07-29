@@ -109,14 +109,19 @@ class FormatDetector:
         for msg in messages:
             content = str(msg.get("content", "")).lower()
             
-            # Check for XML tool definitions (common in chat clients)
+            # Enhanced XML tool detection patterns
             tool_patterns = [
                 "tool" in content and ("<" in content or "xml" in content),
                 "attempt_completion" in content,
                 "ask_followup_question" in content,
                 "tool uses are formatted" in content,
                 "use this tool" in content and "<" in content,
-                re.search(r'<\w+>.*</\w+>', content, re.IGNORECASE) is not None
+                "[error] you did not use a tool" in content,  # Error message from Roo/Cline
+                "xml-style tags" in content,
+                "<actual_tool_name>" in content,  # Example pattern
+                "your response must use" in content and "xml" in content,
+                re.search(r'<\w+>.*</\w+>', content, re.IGNORECASE | re.DOTALL) is not None,
+                re.search(r'<(\w+)>\s*<(\w+)>', content) is not None  # Nested XML tags
             ]
             
             if any(tool_patterns):
@@ -128,7 +133,9 @@ class FormatDetector:
                 "respond" in content and "json" in content,
                 "return json" in content,
                 "output json" in content,
-                "json response" in content
+                "json response" in content,
+                "pure json" in content,
+                "parseable json" in content
             ]
             
             if any(json_patterns):
