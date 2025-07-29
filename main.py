@@ -576,23 +576,6 @@ async def stream_final_content_only(
     final_content = ""
     buffered_chunks = []
     
-    # Create keepalive queue and task
-    keepalive_queue = asyncio.Queue()
-    keepalive_task = None
-    
-    async def send_keepalives():
-        """Send SSE keepalive comments periodically"""
-        try:
-            while True:
-                await asyncio.sleep(SSE_KEEPALIVE_INTERVAL)
-                await keepalive_queue.put(create_sse_keepalive())
-                logger.debug(f"Queued SSE keepalive comment")
-        except asyncio.CancelledError:
-            logger.debug("Keepalive task cancelled")
-    
-    # Start keepalive task
-    keepalive_task = asyncio.create_task(send_keepalives())
-    
     try:
         # Get session info
         if CHAT_MODE:
@@ -608,6 +591,7 @@ async def stream_final_content_only(
         logger.debug(f"Converting {len(all_messages)} messages to prompt")
         prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
         logger.debug(f"Converted prompt length: {len(prompt)}, system prompt: {len(system_prompt) if system_prompt else 0} chars")
+        
         
         # Filter content for unsupported features (skip in chat mode to preserve XML)
         if not CHAT_MODE:
@@ -638,83 +622,140 @@ async def stream_final_content_only(
             claude_options['max_turns'] = 1
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         
-        # Buffer SDK responses
+        # Buffer SDK responses - Direct streaming without async task wrapper
         sdk_chunks_received = 0
         consume_start_time = asyncio.get_event_loop().time()
-        sdk_complete = False
         
-        async def consume_sdk_stream():
-            """Consume SDK stream in a task"""
-            nonlocal sdk_chunks_received, final_content, sandbox_dir, sdk_complete
-            try:
-                logger.debug("Starting SDK stream for buffering")
-                async for chunk in claude_cli.run_completion(
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    model=claude_options.get('model'),
-                    max_turns=claude_options.get('max_turns', 10),
-                    allowed_tools=claude_options.get('allowed_tools'),
-                    disallowed_tools=claude_options.get('disallowed_tools'),
-                    stream=True,
-                    messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]
-                ):
-                    sdk_chunks_received += 1
-                    buffered_chunks.append(chunk)
-                    
-                    # Extract sandbox directory from init message in chat mode
-                    if CHAT_MODE and not sandbox_dir and chunk.get("subtype") == "init":
-                        data = chunk.get("data", {})
-                        if isinstance(data, dict) and "cwd" in data:
-                            sandbox_dir = data["cwd"]
-                            logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
-                    
-                    # Extract content using unified method
-                    extracted_text = extract_content_from_chunk(chunk)
-                    if extracted_text is not None:
-                        final_content += extracted_text
-                        logger.debug(f"Buffered content from SDK chunk #{sdk_chunks_received}: {len(extracted_text)} chars, total: {len(final_content)}")
+        # Track assistant messages separately to find the LAST one
+        assistant_messages = []  # List of (index, content) tuples
+        current_assistant_content = ""
+        in_assistant_message = False
+        message_index = 0
+        
+        # Direct SDK streaming - no async task wrapper
+        logger.debug("Starting SDK stream for buffering")
+        logger.debug(f"SDK call parameters - prompt length: {len(prompt)}, system_prompt: {len(system_prompt) if system_prompt else 0}")
+        logger.debug(f"SDK call parameters - model: {claude_options.get('model')}, max_turns: {claude_options.get('max_turns', 10)}")
+        logger.debug(f"SDK call parameters - allowed_tools: {claude_options.get('allowed_tools')}")
+        logger.debug(f"SDK call parameters - messages count: {len(all_messages)}")
+        
+        # CRITICAL: Log if we expect XML format
+        expects_xml = False
+        if CHAT_MODE and prompt:
+            prompt_lower = prompt.lower()
+            expects_xml = any([
+                "tool uses are formatted" in prompt_lower,
+                "<tool_name>" in prompt_lower,
+                "xml-style tags" in prompt_lower,
+                "<attempt_completion>" in prompt_lower
+            ])
+            if expects_xml:
+                logger.info("📋 Expecting XML tool format in response based on prompt patterns")
+        
+        async for chunk in claude_cli.run_completion(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=claude_options.get('model'),
+            max_turns=claude_options.get('max_turns', 10),
+            allowed_tools=claude_options.get('allowed_tools'),
+            disallowed_tools=claude_options.get('disallowed_tools'),
+            stream=True,
+            messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]
+        ):
+            sdk_chunks_received += 1
+            buffered_chunks.append(chunk)
+            
+            # Extract sandbox directory from init message in chat mode
+            if CHAT_MODE and not sandbox_dir and chunk.get("subtype") == "init":
+                data = chunk.get("data", {})
+                if isinstance(data, dict) and "cwd" in data:
+                    sandbox_dir = data["cwd"]
+                    logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
+            
+            # Check if this is an assistant message
+            chunk_type = chunk.get("type")
+            chunk_subtype = chunk.get("subtype")
+            
+            # More precise detection of assistant messages
+            # Check for content that could be assistant text
+            extracted_text = extract_content_from_chunk(chunk)
+            
+            # Only process if we actually extracted text content
+            if extracted_text is not None and extracted_text.strip():
+                # Check if this is genuinely an assistant message (not tool results, etc.)
+                is_assistant_chunk = (
+                    chunk_type == "assistant" or 
+                    (chunk_type != "tool_use" and chunk_type != "system" and chunk_type != "result" and
+                     "content" in chunk and extracted_text)
+                )
                 
-                consume_end_time = asyncio.get_event_loop().time()
-                total_consume_time = consume_end_time - consume_start_time
-                logger.debug(f"SDK stream consumption completed: {sdk_chunks_received} chunks in {total_consume_time:.2f}s, final content length: {len(final_content)}")
-                
-            except Exception as e:
-                logger.error(f"Error consuming SDK stream: {e}")
-                # Re-raise to handle properly
-                raise
-            finally:
-                sdk_complete = True
+                if is_assistant_chunk:
+                    if not in_assistant_message:
+                        # Start of a new assistant message
+                        if current_assistant_content:
+                            # Save the previous assistant message
+                            assistant_messages.append(current_assistant_content)
+                            logger.debug(f"Completed assistant message #{len(assistant_messages)}: {len(current_assistant_content)} chars")
+                        current_assistant_content = extracted_text
+                        in_assistant_message = True
+                        logger.debug(f"Started new assistant message from chunk #{sdk_chunks_received}")
+                    else:
+                        # Continue current assistant message
+                        current_assistant_content += extracted_text
+                    logger.debug(f"Assistant content from chunk #{sdk_chunks_received}: {len(extracted_text)} chars, type={chunk_type}")
+            
+            # Check for message boundaries (tool use, system messages, etc.)
+            elif chunk_type in ["tool_use", "system", "result"] or chunk_subtype in ["tool_use", "init", "success"]:
+                if in_assistant_message and current_assistant_content:
+                    # End of current assistant message
+                    assistant_messages.append(current_assistant_content)
+                    logger.debug(f"Completed assistant message #{len(assistant_messages)} due to {chunk_type}/{chunk_subtype}: {len(current_assistant_content)} chars")
+                    current_assistant_content = ""
+                    in_assistant_message = False
         
-        # Start SDK consumption task
-        consume_task = asyncio.create_task(consume_sdk_stream())
+        # Don't forget the last assistant message if stream ended while in one
+        if in_assistant_message and current_assistant_content:
+            assistant_messages.append(current_assistant_content)
+            logger.debug(f"Final assistant message #{len(assistant_messages)}: {len(current_assistant_content)} chars")
         
-        # Send keepalives while SDK is running
-        try:
-            while not sdk_complete:
-                try:
-                    keepalive_msg = await asyncio.wait_for(
-                        keepalive_queue.get(),
-                        timeout=1.0
-                    )
-                    yield keepalive_msg
-                    logger.debug("Sent SSE keepalive to client while buffering")
-                except asyncio.TimeoutError:
-                    # Check if task is done
-                    if consume_task.done():
-                        # Get any exceptions from the task
-                        await consume_task
-                        break
-        except Exception as e:
-            logger.error(f"Error during keepalive loop: {e}")
-            raise
+        # Use only the LAST assistant message as the final content
+        if assistant_messages:
+            final_content = assistant_messages[-1]  # Get the last message
+            logger.info(f"Using LAST assistant message as final content: {len(final_content)} chars (out of {len(assistant_messages)} total assistant messages)")
+            
+            # Debug logging for all assistant messages if multiple found
+            if len(assistant_messages) > 1:
+                logger.debug("Multiple assistant messages found. Details:")
+                for i, msg in enumerate(assistant_messages):
+                    preview = msg[:200] + "..." if len(msg) > 200 else msg
+                    logger.debug(f"  Message #{i+1}: {len(msg)} chars - Preview: {preview}")
+                logger.debug(f"Selected final message preview: {final_content[:200]}...")
+        else:
+            final_content = ""
+            logger.warning("No assistant messages found in SDK stream")
         
-        # Stop keepalive task
-        if keepalive_task:
-            keepalive_task.cancel()
-            try:
-                await keepalive_task
-            except asyncio.CancelledError:
-                pass
+        consume_end_time = asyncio.get_event_loop().time()
+        total_consume_time = consume_end_time - consume_start_time
+        logger.debug(f"SDK stream consumption completed: {sdk_chunks_received} chunks in {total_consume_time:.2f}s, final content length: {len(final_content)}")
+        
+        
+        # Validate XML format if expected
+        if expects_xml and final_content:
+            # Check if response uses XML tool format
+            content_lower = final_content.lower()
+            has_xml_format = any([
+                "<attempt_completion>" in content_lower,
+                "<ask_followup_question>" in content_lower,
+                "<new_task>" in content_lower
+            ])
+            
+            if not has_xml_format:
+                logger.error(f"❌ Expected XML tool format but got plain text response!")
+                logger.error(f"Response preview: {final_content[:200]}...")
+                # Note: We can't retry here without changing the architecture significantly
+                # But at least we log it for debugging
+            else:
+                logger.info(f"✅ Response correctly uses XML tool format")
         
         # Now yield the final response
         if final_content:
@@ -781,10 +822,6 @@ async def stream_final_content_only(
         
     except Exception as e:
         logger.error(f"Error in stream_final_content_only: {e}")
-        # Cancel keepalive task
-        if keepalive_task:
-            keepalive_task.cancel()
-        
         # Yield error
         error_chunk = {
             "error": {
