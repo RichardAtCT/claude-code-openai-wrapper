@@ -39,7 +39,8 @@ class ClaudeCodeCLI:
                 prompt="Hello",
                 options=ClaudeCodeOptions(
                     max_turns=1,
-                    cwd=self.cwd
+                    cwd=self.cwd,
+                    model="claude-3-5-haiku-20241022"  # Use Haiku for faster/cheaper verification
                 )
             ):
                 messages.append(message)
