@@ -10,6 +10,7 @@ from claude_code_sdk import query, ClaudeCodeOptions, Message
 # Import chat mode utilities
 from chat_mode import ChatMode
 from prompts import ChatModePrompts, FormatDetector, inject_prompts
+from xml_detector import DeterministicXMLDetector
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class ClaudeCodeCLI:
         self.chat_mode = ChatMode.is_enabled()
         self.format_detector = FormatDetector()
         self.prompts = ChatModePrompts()
+        self.xml_detector = DeterministicXMLDetector()
         
         if self.chat_mode:
             # In chat mode, we'll create sandbox directories per request
@@ -85,32 +87,6 @@ class ClaudeCodeCLI:
             logger.warning("  3. Test: claude --print 'Hello'")
             return False
     
-    def _check_messages_for_xml_pattern(self, messages: Optional[List[Dict]]) -> bool:
-        """Check if previous messages contain XML tool usage patterns."""
-        if not messages:
-            return False
-        
-        for msg in messages:
-            content = ""
-            if isinstance(msg, dict):
-                content = msg.get("content", "")
-            elif hasattr(msg, "content"):
-                content = msg.content
-            
-            if isinstance(content, str):
-                content_lower = content.lower()
-                # Check for XML tool patterns in message history
-                if any([
-                    "<attempt_completion>" in content_lower,
-                    "<ask_followup_question>" in content_lower,
-                    "tool uses are formatted" in content_lower,
-                    "xml-style tags" in content_lower,
-                    "[error] you did not use a tool" in content_lower
-                ]):
-                    logger.debug("Found XML tool pattern in message history")
-                    return True
-        
-        return False
     
     def _prepare_prompt_with_injections(self, prompt: str, messages: Optional[List[Dict]] = None) -> str:
         """Prepare prompt with system injections based on mode and format detection."""
@@ -131,95 +107,16 @@ class ClaudeCodeCLI:
             mid_injections = []
             post_injections = []
             
-            # Extract XML tool examples dynamically from the prompt
-            xml_tool_examples = XML_TAG_PATTERN.findall(prompt)
-            raw_xml_tags = list(set([match for match in xml_tool_examples]))
+            # Use deterministic XML detector
+            xml_required, detection_reason, xml_tool_names = self.xml_detector.detect(prompt, messages)
             
-            # Get prompt_lower for use throughout
-            prompt_lower = prompt.lower()
-            
-            # Filter out common non-tool tags to avoid confusion
-            NON_TOOL_TAGS = {
-                'task', 'environment_details', 'suggest', 'file', 'args', 
-                'path', 'line_range', 'content', 'diff', 'arguments',
-                'question', 'follow_up', 'result', 'parameter1_name',
-                'parameter2_name', 'mode', 'message', 'description', 'parameters',
-                'parameter', 'name', 'type', 'required', 'tool_description'
-            }
-            xml_tool_names = [tag for tag in raw_xml_tags if tag.lower() not in NON_TOOL_TAGS]
-            
-            # Look for tool descriptions with <tool_name> tags
-            tool_name_matches = TOOL_NAME_PATTERN.findall(prompt)
-            for tool in tool_name_matches:
-                if tool.lower() not in NON_TOOL_TAGS and tool not in xml_tool_names:
-                    xml_tool_names.append(tool)
-                    logger.debug(f"Found tool from <tool_name> tag: {tool}")
-            
-            # Look for explicitly mentioned tool names in the prompt
-            tool_name_patterns = [
-                r'use the (\w+) tool',
-                r'<(\w+)>\s*tool',
-                r'tool:\s*<(\w+)>',
-                r'the (\w+) tool',
-                r'Tool uses are formatted using XML-style tags'  # Key indicator
-            ]
-            
-            for pattern in tool_name_patterns[:-1]:  # Skip the last one which is just an indicator
-                found_tools = re.findall(pattern, prompt, re.IGNORECASE)
-                for tool in found_tools:
-                    tool_lower = tool.lower()
-                    if tool_lower not in NON_TOOL_TAGS and tool_lower not in [t.lower() for t in xml_tool_names]:
-                        xml_tool_names.append(tool)
-            
-            # Explicitly check for common Roo/Cline tools
-            common_tools = ['attempt_completion', 'ask_followup_question', 'new_task']
-            for tool in common_tools:
-                if tool in prompt_lower and tool not in xml_tool_names:
-                    xml_tool_names.append(tool)
-            
-            # Log detailed information about detected patterns
-            if raw_xml_tags:
-                logger.debug(f"Raw XML tags found: {raw_xml_tags}")
+            # Log the detection result
+            logger.info(f"🔍 XML Detection Result: {'YES' if xml_required else 'NO'}")
+            logger.info(f"   Reason: {detection_reason}")
             if xml_tool_names:
-                logger.info(f"Detected XML tool patterns (filtered): {xml_tool_names}")
-            else:
-                logger.debug("No XML tool examples found in prompt after filtering")
+                logger.info(f"   Tools: {', '.join(xml_tool_names)}")
             
-            # Enhanced tool detection patterns - MORE COMPREHENSIVE
-            # prompt_lower already defined above
-            has_tool_indicators = any([
-                "tool use" in prompt_lower,
-                "tool uses are formatted" in prompt_lower,
-                "<actual_tool_name>" in prompt_lower,
-                "xml-style tags" in prompt_lower,
-                "xml style tags" in prompt_lower,
-                "xml formatted" in prompt_lower,
-                "[error] you did not use a tool" in prompt_lower,  # Error message pattern
-                "<tool_name>" in prompt_lower,  # Tool description pattern
-                "<tool_description>" in prompt_lower,
-                "formatted using xml" in prompt_lower,
-                "use xml tags" in prompt_lower,
-                "respond using xml" in prompt_lower,
-                len(xml_tool_names) > 0,  # Found actual XML examples
-                NESTED_XML_PATTERN.search(prompt) is not None,  # XML-like nested tags
-                # Check for Roo/Cline specific patterns
-                "attempt_completion" in prompt_lower,
-                "ask_followup_question" in prompt_lower,
-                # Check if previous messages show XML usage
-                self._check_messages_for_xml_pattern(messages) if messages else False
-            ])
-            
-            # Check for JSON format request to avoid interference
-            has_json_request = any([
-                "json format" in prompt_lower,
-                "respond in json" in prompt_lower,
-                "return json" in prompt_lower,
-                "output json" in prompt_lower
-            ])
-            
-            logger.debug(f"Has tool indicators: {has_tool_indicators}, Has JSON request: {has_json_request}")
-            
-            if has_tool_indicators and self.chat_mode and not has_json_request:
+            if xml_required and self.chat_mode:
                 # Layer 1: Prime at the beginning
                 pre_injections.append(
                     "ATTENTION: This conversation uses XML-formatted tools. "
@@ -264,8 +161,8 @@ class ClaudeCodeCLI:
                 post_injections.append(tool_instruction)
                 logger.info("XML ENFORCEMENT ACTIVE: Multi-layer XML tool enforcement applied")
                 logger.debug(f"Enforcement layers: pre={len(pre_injections)}, mid={len(mid_injections)}, post={len(post_injections)}")
-            elif self.chat_mode and not has_tool_indicators:
-                # Only add full chat mode prompt if there are no tool indicators
+            elif self.chat_mode and not xml_required:
+                # Only add full chat mode prompt if there are no XML requirements
                 pre_injections.append(self.prompts.CHAT_MODE_NO_FILES_PROMPT)
                 # Add completeness instruction for non-tool responses
                 post_injections.append(
@@ -274,7 +171,7 @@ class ClaudeCodeCLI:
                     "If writing code, include the FULL implementation with all necessary details. "
                     "If explaining concepts, be comprehensive and address all aspects of the question."
                 )
-                logger.debug("Added full chat mode prompt with completeness instruction (no tool indicators detected)")
+                logger.debug("Added full chat mode prompt with completeness instruction (no XML format required)")
             
             # Build the final prompt with all injection layers
             final_prompt = prompt
@@ -292,7 +189,7 @@ class ClaudeCodeCLI:
                 final_prompt = final_prompt + "\n\n" + "\n\n".join(post_injections)
             
             # VERIFICATION: If we detected XML tools but no enforcement was added, add it now
-            if has_tool_indicators and not has_json_request and self.chat_mode:
+            if xml_required and self.chat_mode:
                 # Check if XML enforcement is present in the final prompt
                 enforcement_present = any([
                     "CRITICAL - THIS IS MANDATORY" in final_prompt,
@@ -301,7 +198,7 @@ class ClaudeCodeCLI:
                 ])
                 
                 if not enforcement_present:
-                    logger.warning("XML enforcement missing despite tool indicators - adding failsafe enforcement")
+                    logger.warning("XML enforcement missing despite detection - adding failsafe enforcement")
                     failsafe_enforcement = (
                         "\n\n[FAILSAFE XML ENFORCEMENT]\n"
                         "CRITICAL: You MUST use XML tool format for your response.\n"
@@ -394,11 +291,12 @@ class ClaudeCodeCLI:
                     logger.debug(f"Enhanced prompt: {enhanced_prompt}")
                 
                 # Verify XML enforcement is present if expected
-                if "tool uses are formatted" in prompt.lower() or "<tool_name>" in prompt.lower():
+                xml_check_required, _, _ = self.xml_detector.detect(prompt, messages)
+                if xml_check_required:
                     if "CRITICAL - THIS IS MANDATORY" in enhanced_prompt or "FAILSAFE XML ENFORCEMENT" in enhanced_prompt:
                         logger.info("✓ XML enforcement successfully added to prompt")
                     else:
-                        logger.error("✗ XML enforcement NOT found in enhanced prompt despite tool indicators!")
+                        logger.error("✗ XML enforcement NOT found in enhanced prompt despite deterministic detection!")
             
         else:
             # Normal mode
