@@ -5,7 +5,7 @@ import logging
 import secrets
 import string
 import random
-from typing import Optional, AsyncGenerator, Dict, Any
+from typing import Optional, AsyncGenerator, Dict, Any, Tuple
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -363,6 +363,34 @@ def create_sse_keepalive() -> str:
     return ": keepalive\n\n"
 
 
+async def create_keepalive_task(interval: int = None) -> Tuple[asyncio.Task, asyncio.Queue]:
+    """Create a keepalive task that sends SSE comments periodically.
+    
+    Args:
+        interval: Keepalive interval in seconds (defaults to SSE_KEEPALIVE_INTERVAL)
+        
+    Returns:
+        Tuple of (keepalive_task, keepalive_queue)
+    """
+    if interval is None:
+        interval = SSE_KEEPALIVE_INTERVAL
+        
+    keepalive_queue = asyncio.Queue()
+    
+    async def send_keepalives():
+        """Send SSE keepalive comments periodically"""
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await keepalive_queue.put(create_sse_keepalive())
+                logger.debug(f"Queued SSE keepalive comment")
+        except asyncio.CancelledError:
+            logger.debug("Keepalive task cancelled")
+    
+    keepalive_task = asyncio.create_task(send_keepalives())
+    return keepalive_task, keepalive_queue
+
+
 def extract_content_from_chunk(chunk: Dict[str, Any]) -> Optional[str]:
     """Extract text content from ANY SDK chunk format.
     Returns None only if the chunk genuinely has no content (not an error).
@@ -425,164 +453,6 @@ def extract_content_from_chunk(chunk: Dict[str, Any]) -> Optional[str]:
     return None  # Only if chunk has no content field
 
 
-async def buffer_and_filter_stream(
-    stream_generator: AsyncGenerator[str, None],
-    request_id: str,
-    model: str,
-    actual_session_id: Optional[str] = None
-) -> AsyncGenerator[str, None]:
-    """Buffer SSE stream and return only final assistant content."""
-    buffered_chunks = []
-    final_content = ""
-    sandbox_dir = None
-    
-    # Create keepalive queue and task
-    keepalive_queue = asyncio.Queue()
-    keepalive_task = None
-    
-    async def send_keepalives():
-        """Send SSE keepalive comments periodically"""
-        try:
-            while True:
-                await asyncio.sleep(SSE_KEEPALIVE_INTERVAL)
-                await keepalive_queue.put(create_sse_keepalive())
-                logger.debug(f"Queued SSE keepalive comment")
-        except asyncio.CancelledError:
-            logger.debug("Keepalive task cancelled")
-    
-    # Start keepalive task
-    keepalive_task = asyncio.create_task(send_keepalives())
-    stream_done = False
-    
-    async def consume_stream():
-        nonlocal stream_done, final_content, sandbox_dir
-        consume_start_time = asyncio.get_event_loop().time()
-        chunk_count = 0
-        try:
-            logger.debug("Starting to consume base stream for buffering")
-            async for chunk in stream_generator:
-                chunk_count += 1
-                buffered_chunks.append(chunk)
-                
-                # Parse SSE chunk to extract content
-                if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
-                    try:
-                        data_str = chunk[6:].strip()
-                        data = json.loads(data_str)
-                        
-                        # Track sandbox directory if in chat mode
-                        if CHAT_MODE and "sandbox_dir" in data:
-                            sandbox_dir = data["sandbox_dir"]
-                        
-                        # Extract content from the chunk
-                        if "choices" in data and len(data["choices"]) > 0:
-                            delta = data["choices"][0].get("delta", {})
-                            if "content" in delta and delta["content"]:
-                                final_content += delta["content"]
-                                logger.debug(f"Buffered content: {len(delta['content'])} chars, total: {len(final_content)}")
-                    except json.JSONDecodeError:
-                        pass
-        finally:
-            consume_end_time = asyncio.get_event_loop().time()
-            total_consume_time = consume_end_time - consume_start_time
-            logger.debug(f"Base stream consumption completed: {chunk_count} chunks in {total_consume_time:.2f}s, final content length: {len(final_content)}")
-            stream_done = True
-    
-    # Start consuming the stream
-    consume_task = asyncio.create_task(consume_stream())
-    
-    try:
-        # Send keepalives while buffering
-        while not stream_done:
-            try:
-                keepalive_msg = await asyncio.wait_for(
-                    keepalive_queue.get(),
-                    timeout=1.0
-                )
-                yield keepalive_msg
-                logger.debug("Sent SSE keepalive to client")
-            except asyncio.TimeoutError:
-                if consume_task.done():
-                    await consume_task  # Get any exceptions
-                    break
-        
-        # Now yield the final content
-        if final_content:
-            # Send role chunk
-            initial_chunk = ChatCompletionStreamResponse(
-                id=request_id,
-                model=model,
-                choices=[StreamChoice(
-                    index=0,
-                    delta={"role": "assistant", "content": ""},
-                    finish_reason=None
-                )]
-            )
-            yield f"data: {initial_chunk.model_dump_json()}\n\n"
-            
-            # Send content chunk
-            content_chunk = ChatCompletionStreamResponse(
-                id=request_id,
-                model=model,
-                choices=[StreamChoice(
-                    index=0,
-                    delta={"content": final_content},
-                    finish_reason=None
-                )]
-            )
-            yield f"data: {content_chunk.model_dump_json()}\n\n"
-        else:
-            # No content - send empty response
-            logger.warning(f"No content found after buffering {len(buffered_chunks)} chunks")
-            initial_chunk = ChatCompletionStreamResponse(
-                id=request_id,
-                model=model,
-                choices=[StreamChoice(
-                    index=0,
-                    delta={"role": "assistant", "content": ""},
-                    finish_reason=None
-                )]
-            )
-            yield f"data: {initial_chunk.model_dump_json()}\n\n"
-        
-        # Send finish chunk
-        final_chunk = ChatCompletionStreamResponse(
-            id=request_id,
-            model=model,
-            choices=[StreamChoice(
-                index=0,
-                delta={},
-                finish_reason="stop"
-            )]
-        )
-        yield f"data: {final_chunk.model_dump_json()}\n\n"
-        yield "data: [DONE]\n\n"
-        
-        # Store in session if needed
-        if actual_session_id and final_content:
-            assistant_message = Message(role="assistant", content=final_content)
-            session_manager.add_assistant_response(actual_session_id, assistant_message)
-            
-    finally:
-        # Clean up keepalive task
-        if keepalive_task:
-            keepalive_task.cancel()
-            try:
-                await keepalive_task
-            except asyncio.CancelledError:
-                pass
-        
-        # Ensure consume task is done
-        if not consume_task.done():
-            consume_task.cancel()
-            try:
-                await consume_task
-            except asyncio.CancelledError:
-                pass
-        
-        # Return sandbox_dir for cleanup in the main handler
-        if CHAT_MODE and sandbox_dir:
-            logger.debug(f"Sandbox directory to be cleaned up: {sandbox_dir}")
 
 
 async def stream_final_content_only(
@@ -684,7 +554,7 @@ async def stream_final_content_only(
         # Task to consume the SDK stream and put chunks in queue
         async def sdk_consumer():
             try:
-                logger.info("Entering SDK async generator loop")
+                logger.debug("Starting SDK stream consumer loop")
                 async for chunk in claude_cli.run_completion(
                     prompt=prompt,
                     system_prompt=system_prompt,
@@ -696,12 +566,12 @@ async def stream_final_content_only(
                     messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]
                 ):
                     await chunk_queue.put(chunk)
-                logger.info("SDK async generator completed normally")
+                logger.debug("SDK stream consumer completed normally")
             except asyncio.CancelledError:
-                logger.error("SDK async generator was cancelled")
+                logger.warning("SDK stream consumer was cancelled")
                 raise
             except Exception as e:
-                logger.error(f"Exception in SDK async generator: {type(e).__name__}: {e}")
+                logger.error(f"SDK stream consumer error: {type(e).__name__}: {e}")
                 logger.error(f"Exception traceback: ", exc_info=True)
                 raise
             finally:
@@ -746,11 +616,11 @@ async def stream_final_content_only(
                         # Log detailed chunk information
                         chunk_type = chunk.get('type', 'unknown')
                         chunk_subtype = chunk.get('subtype', 'unknown')
-                        logger.info(f"SDK chunk #{sdk_chunks_received} received - type: {chunk_type}, subtype: {chunk_subtype}")
+                        logger.debug(f"SDK chunk #{sdk_chunks_received} received - type: {chunk_type}, subtype: {chunk_subtype}")
                         
                         # Log full chunk for debugging
                         if chunk_type == 'system' or chunk_subtype == 'init':
-                            logger.info(f"Full chunk data: {chunk}")
+                            logger.debug(f"Full chunk data: {chunk}")
                         elif chunk_type == 'assistant' or 'content' in chunk:
                             # Log content preview
                             content_preview = str(chunk).replace('\n', '\\n')[:200]
@@ -810,25 +680,25 @@ async def stream_final_content_only(
                         current_time = asyncio.get_event_loop().time()
                         yield create_sse_keepalive()
                         last_keepalive_time = current_time
-                        logger.info(f"📡 Sent SSE keepalive during SDK buffering (after {sdk_chunks_received} chunks)")
+                        logger.debug(f"📡 Sent SSE keepalive during SDK buffering (after {sdk_chunks_received} chunks)")
                         
                         # Create new keepalive task
                         keepalive_task = asyncio.create_task(asyncio.sleep(SSE_KEEPALIVE_INTERVAL))
             
-            logger.info(f"SDK async generator completed normally after {sdk_chunks_received} chunks")
+            logger.info(f"SDK stream completed: {sdk_chunks_received} chunks processed")
             
         except asyncio.CancelledError:
-            logger.error("SDK async generator was cancelled")
+            logger.warning("SDK stream was cancelled")
             raise
         except Exception as e:
-            logger.error(f"Exception in SDK async generator: {type(e).__name__}: {e}")
+            logger.error(f"SDK stream error: {type(e).__name__}: {e}")
             logger.error(f"Exception traceback: ", exc_info=True)
             raise
         
         # Ensure consumer task is complete
-        logger.info("Waiting for consumer task to complete...")
+        logger.debug("Waiting for consumer task to complete...")
         await consumer_task
-        logger.info("Consumer task completed")
+        logger.debug("Consumer task completed")
         
         # Don't forget the last assistant message if stream ended while in one
         if in_assistant_message and current_assistant_content:
@@ -838,7 +708,7 @@ async def stream_final_content_only(
         # Use only the LAST assistant message as the final content
         if assistant_messages:
             final_content = assistant_messages[-1]  # Get the last message
-            logger.info(f"Using LAST assistant message as final content: {len(final_content)} chars (out of {len(assistant_messages)} total assistant messages)")
+            logger.info(f"Final content extracted: {len(final_content)} chars (from {len(assistant_messages)} assistant messages)")
             
             # Debug logging for all assistant messages if multiple found
             if len(assistant_messages) > 1:
@@ -853,7 +723,7 @@ async def stream_final_content_only(
         
         consume_end_time = asyncio.get_event_loop().time()
         total_consume_time = consume_end_time - consume_start_time
-        logger.info(f"SDK stream consumption completed: {sdk_chunks_received} chunks in {total_consume_time:.2f}s")
+        logger.info(f"Stream buffering completed: {sdk_chunks_received} chunks in {total_consume_time:.2f}s")
         logger.info(f"Assistant messages found: {len(assistant_messages)}")
         logger.info(f"Final content length: {len(final_content)}")
         
