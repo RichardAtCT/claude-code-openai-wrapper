@@ -128,38 +128,40 @@ class ClaudeCodeCLI:
                     # Use the first tool name as primary example
                     primary_tool = xml_tool_names[0]
                     
-                    # Build more specific guidance based on common tools
+                    # Build more specific guidance based on common formatting tags
                     if 'attempt_completion' in xml_tool_names:
                         example_text = (
-                            f"\n\nREMINDER: Use the XML tool format for your response.\n"
-                            f"For completing tasks, use: <attempt_completion><result>your response</result></attempt_completion>\n"
-                            f"For asking questions, use: <ask_followup_question><question>your question</question><follow_up>...</follow_up></ask_followup_question>\n"
-                            f"DO NOT use <environment_details>, <task>, or other non-tool tags for your response."
+                            f"\n\nREMINDER: Format your response using XML tags.\n"
+                            f"For completing tasks, format as: <attempt_completion><result>your response</result></attempt_completion>\n"
+                            f"For asking questions, format as: <ask_followup_question><question>your question</question><follow_up>...</follow_up></ask_followup_question>\n"
+                            f"DO NOT use <environment_details>, <task>, or other structural tags - only the response formatting tags above."
                         )
                     else:
                         example_text = (
-                            f"\n\nREMINDER: Your response MUST use the XML tool format.\n"
-                            f"Use ONLY these tool tags: {', '.join([f'<{tool}>' for tool in xml_tool_names])}\n"
+                            f"\n\nREMINDER: Your response MUST be formatted with XML tags.\n"
+                            f"Use ONLY these formatting tags: {', '.join([f'<{tool}>' for tool in xml_tool_names])}\n"
                             f"Example: <{primary_tool}>your_response_here</{primary_tool}>\n"
-                            f"DO NOT use <environment_details>, <task>, or other non-tool tags."
+                            f"DO NOT use <environment_details>, <task>, or other structural tags."
                         )
                     
                     mid_injections.append(example_text)
-                    logger.debug(f"Added specific XML tool guidance for: {xml_tool_names}")
+                    logger.debug(f"Added specific XML formatting guidance for: {xml_tool_names}")
                 
                 # Layer 3: Critical final enforcement
                 tool_instruction = (
                     "\n\nCRITICAL - THIS IS MANDATORY:\n"
-                    "1. Your ENTIRE response MUST be wrapped in proper TOOL XML tags\n"
-                    "2. Use ONLY tool tags like <attempt_completion>, <ask_followup_question>, etc.\n"
-                    "3. DO NOT use <environment_details>, <task>, <response> or any non-tool tags\n"
-                    "4. Start with an opening tool tag and end with the closing tool tag\n"
-                    "5. NO plain text outside the XML tool tags\n"
-                    "6. For general responses, use: <attempt_completion><result>...</result></attempt_completion>\n\n"
+                    "1. Your ENTIRE response MUST be formatted using XML tags\n"
+                    "2. Use ONLY these XML formatting tags: <attempt_completion>, <ask_followup_question>, etc.\n"
+                    "3. DO NOT use <environment_details>, <task>, <response> or any non-formatting tags\n"
+                    "4. Start your response with an opening XML tag and end with the closing tag\n"
+                    "5. NO plain text outside the XML tags\n"
+                    "6. For general responses, format as: <attempt_completion><result>...</result></attempt_completion>\n\n"
+                    "CLARIFICATION: These XML tags are RESPONSE FORMATTING - NOT Claude tools.\n"
+                    "You don't need any SDK tools to use these XML tags. Simply format your text response within them.\n\n"
                     "IMPORTANT: Provide COMPLETE responses - do not truncate or abbreviate."
                 )
                 post_injections.append(tool_instruction)
-                logger.info("XML ENFORCEMENT ACTIVE: Multi-layer XML tool enforcement applied")
+                logger.info("XML ENFORCEMENT ACTIVE: Multi-layer XML response formatting enforcement applied")
                 logger.debug(f"Enforcement layers: pre={len(pre_injections)}, mid={len(mid_injections)}, post={len(post_injections)}")
             elif self.chat_mode and not xml_required:
                 # Only add full chat mode prompt if there are no XML requirements
@@ -201,10 +203,11 @@ class ClaudeCodeCLI:
                     logger.warning("XML enforcement missing despite detection - adding failsafe enforcement")
                     failsafe_enforcement = (
                         "\n\n[FAILSAFE XML ENFORCEMENT]\n"
-                        "CRITICAL: You MUST use XML tool format for your response.\n"
-                        "Wrap your ENTIRE response in tool tags like:\n"
+                        "CRITICAL: You MUST format your response using XML tags.\n"
+                        "Wrap your ENTIRE response in formatting tags like:\n"
                         "<attempt_completion><result>your response here</result></attempt_completion>\n"
-                        "DO NOT respond with plain text or markdown!"
+                        "DO NOT respond with plain text or markdown!\n"
+                        "Remember: These are response formatting tags, NOT SDK tools."
                     )
                     final_prompt = final_prompt + failsafe_enforcement
                     logger.info("FAILSAFE: Added XML enforcement as final prompt instruction")
@@ -289,14 +292,25 @@ class ClaudeCodeCLI:
                     logger.info(f"Enhanced prompt end: ...{enhanced_prompt[-500:]}")
                 else:
                     logger.debug(f"Enhanced prompt: {enhanced_prompt}")
-                
-                # Verify XML enforcement is present if expected
-                xml_check_required, _, _ = self.xml_detector.detect(prompt, messages)
-                if xml_check_required:
-                    if "CRITICAL - THIS IS MANDATORY" in enhanced_prompt or "FAILSAFE XML ENFORCEMENT" in enhanced_prompt:
-                        logger.info("✓ XML enforcement successfully added to prompt")
-                    else:
-                        logger.error("✗ XML enforcement NOT found in enhanced prompt despite deterministic detection!")
+            
+            # Log the complete SDK options
+            logger.info("=== SDK OPTIONS ===")
+            logger.info(f"allowed_tools: {allowed_tools}")
+            logger.info(f"disallowed_tools: {disallowed_tools}")
+            logger.info(f"max_turns: {max_turns}")
+            logger.info(f"model: {model}")
+            logger.info(f"stream: {stream}")
+            logger.info(f"session_id: {session_id}")
+            logger.info(f"continue_session: {continue_session}")
+            logger.info("=== END SDK OPTIONS ===")
+            
+            # Verify XML enforcement is present if expected
+            xml_check_required, _, _ = self.xml_detector.detect(prompt, messages)
+            if xml_check_required:
+                if "CRITICAL - THIS IS MANDATORY" in enhanced_prompt or "FAILSAFE XML ENFORCEMENT" in enhanced_prompt:
+                    logger.info("✓ XML enforcement successfully added to prompt")
+                else:
+                    logger.error("✗ XML enforcement NOT found in enhanced prompt despite deterministic detection!")
             
         else:
             # Normal mode
@@ -337,9 +351,16 @@ class ClaudeCodeCLI:
                     options.resume = None
                     
                     # Run the query and yield messages
-                    logger.debug(f"Executing query with enhanced prompt in chat mode")
-                    logger.debug(f"SDK options: sandbox_dir={options.cwd}, max_turns={options.max_turns}")
-                    logger.debug(f"Allowed tools: {options.allowed_tools}")
+                    logger.info(f"Executing query with enhanced prompt in chat mode")
+                    logger.info(f"SDK options: sandbox_dir={options.cwd}, max_turns={options.max_turns}")
+                    logger.info(f"Allowed tools: {options.allowed_tools}")
+                    logger.info(f"Model: {options.model}")
+                    logger.info(f"System prompt set: {bool(options.system_prompt)}")
+                    
+                    # Log critical SDK environment state
+                    logger.info("=== SDK EXECUTION STARTING ===")
+                    logger.info(f"Chat mode allowed tools: {allowed_tools}")
+                    logger.info(f"Options allowed_tools: {options.allowed_tools}")
                     
                     
                     try:
@@ -380,7 +401,8 @@ class ClaudeCodeCLI:
                                 logger.info(f"Response completed - Total content length: {total_content_length} characters")
                             yield processed_msg
                         
-                        logger.debug(f"SDK stream ended after {sdk_message_count} messages, total content: {total_content_length} chars")
+                        logger.info(f"SDK stream ended normally after {sdk_message_count} messages, total content: {total_content_length} chars")
+                        logger.info("=== SDK EXECUTION COMPLETED ===")
                     except Exception as sdk_error:
                         # Handle SDK errors gracefully
                         if "cancel scope" in str(sdk_error).lower():
@@ -388,6 +410,8 @@ class ClaudeCodeCLI:
                             # Don't propagate cancel scope errors - they're internal to SDK
                         else:
                             logger.error(f"SDK error during streaming: {sdk_error}")
+                            logger.error("SDK error traceback:", exc_info=True)
+                            logger.error("=== SDK EXECUTION FAILED ===")
                             raise
                 else:
                     # Normal mode - existing logic
@@ -418,23 +442,43 @@ class ClaudeCodeCLI:
                     
                     # Run the query and yield messages
                     total_content_length = 0
-                    async for message in query(prompt=enhanced_prompt, options=options):
-                        processed_msg = self._process_message(message)
-                        # Track content length in normal mode too
-                        if processed_msg.get("type") == "assistant" or "content" in processed_msg:
-                            content = processed_msg.get("content", [])
-                            if isinstance(content, list):
-                                for block in content:
-                                    if hasattr(block, 'text'):
-                                        total_content_length += len(block.text)
-                                    elif isinstance(block, dict) and block.get("type") == "text":
-                                        total_content_length += len(block.get("text", ""))
-                            elif isinstance(content, str):
-                                total_content_length += len(content)
-                        # Log completion summary
-                        if processed_msg.get("subtype") == "success":
-                            logger.info(f"Response completed - Total content length: {total_content_length} characters")
-                        yield processed_msg
+                    sdk_message_count = 0
+                    logger.info("Starting SDK query with enhanced prompt")
+                    logger.debug(f"Options object: {options}")
+                    
+                    try:
+                        async for message in query(prompt=enhanced_prompt, options=options):
+                            sdk_message_count += 1
+                            logger.debug(f"SDK message #{sdk_message_count} received from query")
+                            
+                            processed_msg = self._process_message(message)
+                            
+                            # Log message type and subtype
+                            msg_type = processed_msg.get("type", "unknown")
+                            msg_subtype = processed_msg.get("subtype", "unknown")
+                            logger.debug(f"Processed message type: {msg_type}, subtype: {msg_subtype}")
+                            
+                            # Track content length in normal mode too
+                            if processed_msg.get("type") == "assistant" or "content" in processed_msg:
+                                content = processed_msg.get("content", [])
+                                if isinstance(content, list):
+                                    for block in content:
+                                        if hasattr(block, 'text'):
+                                            total_content_length += len(block.text)
+                                        elif isinstance(block, dict) and block.get("type") == "text":
+                                            total_content_length += len(block.get("text", ""))
+                                elif isinstance(content, str):
+                                    total_content_length += len(content)
+                            # Log completion summary
+                            if processed_msg.get("subtype") == "success":
+                                logger.info(f"Response completed - Total content length: {total_content_length} characters")
+                            yield processed_msg
+                        
+                        logger.info(f"SDK query generator completed after {sdk_message_count} messages")
+                    except Exception as query_error:
+                        logger.error(f"Exception during SDK query: {type(query_error).__name__}: {query_error}")
+                        logger.error("Query error traceback:", exc_info=True)
+                        raise
                     
             finally:
                 # Restore original environment (if we changed anything)

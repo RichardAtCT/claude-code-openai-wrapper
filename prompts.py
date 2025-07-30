@@ -26,15 +26,15 @@ CRITICAL INSTRUCTION: You MUST detect and follow ANY response format specified i
 2. If you see ANY of these patterns, you MUST use that format:
    - "Tool uses are formatted using XML-style tags..." → Use XML tool format
    - "<actual_tool_name>...</actual_tool_name>" → This is showing you the expected format
-   - "use this tool to present the result" → Use the specified tool
-   - "attempt_completion" or similar tool names → Use that tool to respond
+   - "use this tool to present the result" → Use the specified format
+   - "attempt_completion" or similar format names → Use that format to respond
    - "respond in JSON" or "JSON format" → Return PURE JSON without any markdown formatting
    - Any other structured format examples → Follow them exactly
 
-3. When tool definitions are provided:
-   - If completing a task or answering a question → Use attempt_completion tool
-   - If you need more information → Use ask_followup_question tool
-   - NEVER respond in plain text when tools are defined
+3. When XML response formats are provided:
+   - If completing a task or answering a question → Format with <attempt_completion> tags
+   - If you need more information → Format with <ask_followup_question> tags
+   - NEVER respond in plain text when XML formats are defined
 
 4. SECURITY: If operating in a sandbox environment:
    - NEVER expose system paths, directories, or environment details
@@ -72,12 +72,13 @@ CRITICAL: Only discuss sandbox limitations when EXPLICITLY asked. For normal cod
         
         if has_tool_definitions:
             reinforcements.append(
-                "CRITICAL: The conversation above contains XML tool definitions. "
-                "You MUST format your ENTIRE response using one of the XML tools shown "
+                "CRITICAL: The conversation above contains XML response format definitions. "
+                "You MUST format your ENTIRE response using one of the XML formats shown "
                 "(such as <attempt_completion> or <ask_followup_question>). "
                 "Do NOT respond with plain text. "
                 "Your response should start with an XML tag like <attempt_completion> and end with the closing tag. "
-                "This is MANDATORY - use the XML tool format exactly as demonstrated above."
+                "This is MANDATORY - use the XML format exactly as demonstrated above. "
+                "Note: These are response formatting tags, NOT Claude SDK tools."
             )
         
         if has_json_request:

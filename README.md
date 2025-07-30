@@ -209,6 +209,7 @@ Control streaming progress indicators for long-running operations:
   - **Only streams the final response** without any intermediate content
   - Filters out ALL intermediate tool uses, thinking steps, and preliminary responses
   - Waits for completion then sends only the final assistant message
+  - SSE keepalives are sent every `SSE_KEEPALIVE_INTERVAL` seconds during SDK buffering
   - Ideal for programmatic usage or when you only need the final result
   - Note: This buffers the entire response, so initial latency will be higher
 
@@ -224,7 +225,10 @@ Prevents connection timeouts during long-running requests by sending invisible k
 This feature ensures that:
 - Long Claude processing times don't cause connection timeouts
 - Proxies and load balancers don't close "idle" connections
-- Works seamlessly with both progress markers enabled and disabled
+- Works identically in both progress marker modes:
+  - With progress markers: Keepalives sent between progress updates
+  - Without progress markers: Keepalives sent during SDK response buffering
+- Connections remain active even when the SDK takes time to respond
 
 The progress indicators use universal, language-agnostic symbols:
 - Starts with ⏳ (hourglass) to indicate processing has begun

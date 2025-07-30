@@ -652,7 +652,16 @@ async def stream_final_content_only(
         logger.debug(f"SDK call parameters - prompt length: {len(prompt)}, system_prompt: {len(system_prompt) if system_prompt else 0}")
         logger.debug(f"SDK call parameters - model: {claude_options.get('model')}, max_turns: {claude_options.get('max_turns', 10)}")
         logger.debug(f"SDK call parameters - allowed_tools: {claude_options.get('allowed_tools')}")
+        logger.debug(f"SDK call parameters - disallowed_tools: {claude_options.get('disallowed_tools')}")
         logger.debug(f"SDK call parameters - messages count: {len(all_messages)}")
+        
+        # Log the exact prompt being sent
+        logger.info("=== SDK PROMPT START ===")
+        logger.info(f"Prompt (first 500 chars): {prompt[:500]}...")
+        if len(prompt) > 500:
+            logger.info(f"Prompt (last 500 chars): ...{prompt[-500:]}")
+        logger.info(f"System prompt: {system_prompt[:200] if system_prompt else 'None'}")
+        logger.info("=== SDK PROMPT END ===")
         
         # CRITICAL: Log if we expect XML format
         expects_xml = False
@@ -667,66 +676,159 @@ async def stream_final_content_only(
             if expects_xml:
                 logger.info("📋 Expecting XML tool format in response based on prompt patterns")
         
-        async for chunk in claude_cli.run_completion(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            model=claude_options.get('model'),
-            max_turns=claude_options.get('max_turns', 10),
-            allowed_tools=claude_options.get('allowed_tools'),
-            disallowed_tools=claude_options.get('disallowed_tools'),
-            stream=True,
-            messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]
-        ):
-            sdk_chunks_received += 1
-            buffered_chunks.append(chunk)
+        # Use a queue to communicate between SDK stream and main loop
+        chunk_queue = asyncio.Queue()
+        stream_complete = asyncio.Event()
+        last_keepalive_time = asyncio.get_event_loop().time()
+        
+        # Task to consume the SDK stream and put chunks in queue
+        async def sdk_consumer():
+            try:
+                logger.info("Entering SDK async generator loop")
+                async for chunk in claude_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    model=claude_options.get('model'),
+                    max_turns=claude_options.get('max_turns', 10),
+                    allowed_tools=claude_options.get('allowed_tools'),
+                    disallowed_tools=claude_options.get('disallowed_tools'),
+                    stream=True,
+                    messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]
+                ):
+                    await chunk_queue.put(chunk)
+                logger.info("SDK async generator completed normally")
+            except asyncio.CancelledError:
+                logger.error("SDK async generator was cancelled")
+                raise
+            except Exception as e:
+                logger.error(f"Exception in SDK async generator: {type(e).__name__}: {e}")
+                logger.error(f"Exception traceback: ", exc_info=True)
+                raise
+            finally:
+                stream_complete.set()
+                await chunk_queue.put(None)  # Sentinel value
+        
+        # Start the SDK consumer task
+        consumer_task = asyncio.create_task(sdk_consumer())
+        
+        # Main loop that processes chunks and sends keepalives
+        try:
+            queue_task = asyncio.create_task(chunk_queue.get())
+            keepalive_task = asyncio.create_task(asyncio.sleep(SSE_KEEPALIVE_INTERVAL))
+            stream_ended = False
             
-            # Extract sandbox directory from init message in chat mode
-            if CHAT_MODE and not sandbox_dir and chunk.get("subtype") == "init":
-                data = chunk.get("data", {})
-                if isinstance(data, dict) and "cwd" in data:
-                    sandbox_dir = data["cwd"]
-                    logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
-            
-            # Check if this is an assistant message
-            chunk_type = chunk.get("type")
-            chunk_subtype = chunk.get("subtype")
-            
-            # More precise detection of assistant messages
-            # Check for content that could be assistant text
-            extracted_text = extract_content_from_chunk(chunk)
-            
-            # Only process if we actually extracted text content
-            if extracted_text is not None and extracted_text.strip():
-                # Check if this is genuinely an assistant message (not tool results, etc.)
-                is_assistant_chunk = (
-                    chunk_type == "assistant" or 
-                    (chunk_type != "tool_use" and chunk_type != "system" and chunk_type != "result" and
-                     "content" in chunk and extracted_text)
+            while not stream_ended:
+                # Wait for either a chunk or keepalive timeout
+                done, pending = await asyncio.wait(
+                    [queue_task, keepalive_task],
+                    return_when=asyncio.FIRST_COMPLETED
                 )
                 
-                if is_assistant_chunk:
-                    if not in_assistant_message:
-                        # Start of a new assistant message
-                        if current_assistant_content:
-                            # Save the previous assistant message
-                            assistant_messages.append(current_assistant_content)
-                            logger.debug(f"Completed assistant message #{len(assistant_messages)}: {len(current_assistant_content)} chars")
-                        current_assistant_content = extracted_text
-                        in_assistant_message = True
-                        logger.debug(f"Started new assistant message from chunk #{sdk_chunks_received}")
-                    else:
-                        # Continue current assistant message
-                        current_assistant_content += extracted_text
-                    logger.debug(f"Assistant content from chunk #{sdk_chunks_received}: {len(extracted_text)} chars, type={chunk_type}")
+                for task in done:
+                    if task == queue_task:
+                        # Got a chunk from the SDK
+                        chunk = task.result()
+                        if chunk is None:
+                            # Stream ended
+                            if keepalive_task and not keepalive_task.done():
+                                keepalive_task.cancel()
+                                try:
+                                    await keepalive_task
+                                except asyncio.CancelledError:
+                                    pass
+                            stream_ended = True
+                            break
+                        
+                        # Process the chunk
+                        sdk_chunks_received += 1
+                        current_time = asyncio.get_event_loop().time()
+                        
+                        # Log detailed chunk information
+                        chunk_type = chunk.get('type', 'unknown')
+                        chunk_subtype = chunk.get('subtype', 'unknown')
+                        logger.info(f"SDK chunk #{sdk_chunks_received} received - type: {chunk_type}, subtype: {chunk_subtype}")
+                        
+                        # Log full chunk for debugging
+                        if chunk_type == 'system' or chunk_subtype == 'init':
+                            logger.info(f"Full chunk data: {chunk}")
+                        elif chunk_type == 'assistant' or 'content' in chunk:
+                            # Log content preview
+                            content_preview = str(chunk).replace('\n', '\\n')[:200]
+                            logger.debug(f"Chunk content preview: {content_preview}...")
+                        
+                        buffered_chunks.append(chunk)
+                        
+                        # Extract sandbox directory from init message in chat mode
+                        if CHAT_MODE and not sandbox_dir and chunk_subtype == "init":
+                            data = chunk.get("data", {})
+                            if isinstance(data, dict) and "cwd" in data:
+                                sandbox_dir = data["cwd"]
+                                logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
+                        
+                        # More precise detection of assistant messages
+                        # Check for content that could be assistant text
+                        extracted_text = extract_content_from_chunk(chunk)
+                        
+                        # Only process if we actually extracted text content
+                        if extracted_text is not None and extracted_text.strip():
+                            # Check if this is genuinely an assistant message (not tool results, etc.)
+                            is_assistant_chunk = (
+                                chunk_type == "assistant" or 
+                                (chunk_type != "tool_use" and chunk_type != "system" and chunk_type != "result" and
+                                 "content" in chunk and extracted_text)
+                            )
+                            
+                            if is_assistant_chunk:
+                                if not in_assistant_message:
+                                    # Start of a new assistant message
+                                    if current_assistant_content:
+                                        # Save the previous assistant message
+                                        assistant_messages.append(current_assistant_content)
+                                        logger.debug(f"Completed assistant message #{len(assistant_messages)}: {len(current_assistant_content)} chars")
+                                    current_assistant_content = extracted_text
+                                    in_assistant_message = True
+                                    logger.debug(f"Started new assistant message from chunk #{sdk_chunks_received}")
+                                else:
+                                    # Continue current assistant message
+                                    current_assistant_content += extracted_text
+                                logger.debug(f"Assistant content from chunk #{sdk_chunks_received}: {len(extracted_text)} chars, type={chunk_type}")
+                        
+                        # Check for message boundaries (tool use, system messages, etc.)
+                        elif chunk_type in ["tool_use", "system", "result"] or chunk_subtype in ["tool_use", "init", "success"]:
+                            if in_assistant_message and current_assistant_content:
+                                # End of current assistant message
+                                assistant_messages.append(current_assistant_content)
+                                logger.debug(f"Completed assistant message #{len(assistant_messages)} due to {chunk_type}/{chunk_subtype}: {len(current_assistant_content)} chars")
+                                current_assistant_content = ""
+                                in_assistant_message = False
+                        
+                        # Create new task to wait for next chunk
+                        queue_task = asyncio.create_task(chunk_queue.get())
+                    
+                    elif task == keepalive_task:
+                        # Keepalive timeout - send keepalive
+                        current_time = asyncio.get_event_loop().time()
+                        yield create_sse_keepalive()
+                        last_keepalive_time = current_time
+                        logger.info(f"📡 Sent SSE keepalive during SDK buffering (after {sdk_chunks_received} chunks)")
+                        
+                        # Create new keepalive task
+                        keepalive_task = asyncio.create_task(asyncio.sleep(SSE_KEEPALIVE_INTERVAL))
             
-            # Check for message boundaries (tool use, system messages, etc.)
-            elif chunk_type in ["tool_use", "system", "result"] or chunk_subtype in ["tool_use", "init", "success"]:
-                if in_assistant_message and current_assistant_content:
-                    # End of current assistant message
-                    assistant_messages.append(current_assistant_content)
-                    logger.debug(f"Completed assistant message #{len(assistant_messages)} due to {chunk_type}/{chunk_subtype}: {len(current_assistant_content)} chars")
-                    current_assistant_content = ""
-                    in_assistant_message = False
+            logger.info(f"SDK async generator completed normally after {sdk_chunks_received} chunks")
+            
+        except asyncio.CancelledError:
+            logger.error("SDK async generator was cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Exception in SDK async generator: {type(e).__name__}: {e}")
+            logger.error(f"Exception traceback: ", exc_info=True)
+            raise
+        
+        # Ensure consumer task is complete
+        logger.info("Waiting for consumer task to complete...")
+        await consumer_task
+        logger.info("Consumer task completed")
         
         # Don't forget the last assistant message if stream ended while in one
         if in_assistant_message and current_assistant_content:
@@ -751,7 +853,16 @@ async def stream_final_content_only(
         
         consume_end_time = asyncio.get_event_loop().time()
         total_consume_time = consume_end_time - consume_start_time
-        logger.debug(f"SDK stream consumption completed: {sdk_chunks_received} chunks in {total_consume_time:.2f}s, final content length: {len(final_content)}")
+        logger.info(f"SDK stream consumption completed: {sdk_chunks_received} chunks in {total_consume_time:.2f}s")
+        logger.info(f"Assistant messages found: {len(assistant_messages)}")
+        logger.info(f"Final content length: {len(final_content)}")
+        
+        # Log buffered chunks summary
+        chunk_types = {}
+        for chunk in buffered_chunks:
+            chunk_type = f"{chunk.get('type', 'unknown')}/{chunk.get('subtype', 'unknown')}"
+            chunk_types[chunk_type] = chunk_types.get(chunk_type, 0) + 1
+        logger.info(f"Chunk type summary: {chunk_types}")
         
         
         # Validate XML format if expected
@@ -841,6 +952,15 @@ async def stream_final_content_only(
         }
         yield f"data: {json.dumps(error_chunk)}\n\n"
     finally:
+        # Ensure consumer task is complete
+        if 'consumer_task' in locals():
+            if not consumer_task.done():
+                consumer_task.cancel()
+                try:
+                    await consumer_task
+                except asyncio.CancelledError:
+                    pass
+        
         # Cleanup sandbox directory if in chat mode
         if CHAT_MODE and sandbox_dir:
             try:
