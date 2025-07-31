@@ -355,12 +355,14 @@ For stable, background operation:
 ```bash
 docker run -d -p 8000:8000 \
   -v ~/.claude:/root/.claude \
+  -v ~/.claude-wrapper:/root/.claude-wrapper \
   --name claude-wrapper-container \
   claude-wrapper:latest
 ```
 - `-d`: Detached mode (runs in background).
 - `-p 8000:8000`: Maps host port 8000 to the container's 8000 (change left side for host conflicts, e.g., `-p 9000:8000`).
 - `-v ~/.claude:/root/.claude`: Mounts your host's authentication directory for persistent subscription tokens (essential for Claude Max access).
+- `-v ~/.claude-wrapper:/root/.claude-wrapper`: Mounts session tracking directory for chat mode cleanup functionality.
 - `--name claude-wrapper-container`: Names the container for easy management.
 
 ### Development Run with Hot Reload
@@ -368,6 +370,7 @@ For coding/debugging (auto-reloads on file changes):
 ```bash
 docker run -d -p 8000:8000 \
   -v ~/.claude:/root/.claude \
+  -v ~/.claude-wrapper:/root/.claude-wrapper \
   -v $(pwd):/app \
   --name claude-wrapper-container \
   claude-wrapper:latest \
@@ -379,7 +382,7 @@ docker run -d -p 8000:8000 \
 ### Using Docker Compose for Simplified Runs
 Create or use an existing `docker-compose.yml` in the root for declarative configuration:
 ```yaml
-version: '3.8'
+version: '3'
 services:
   claude-wrapper:
     build: .
@@ -387,11 +390,36 @@ services:
       - "8000:8000"
     volumes:
       - ~/.claude:/root/.claude
-      - .:/app  # Optional for dev
+      - ~/.claude-wrapper:/root/.claude-wrapper  # For session tracking
+      # - .:/app  # Optional for dev - uncomment to mount code for hot reload
     environment:
-      - PORT=8000
-      - MAX_TIMEOUT=600
-    command: ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]  # Dev example
+      # Claude CLI Configuration
+      - CLAUDE_CLI_PATH=${CLAUDE_CLI_PATH:-claude}
+      # API Configuration
+      - PORT=${PORT:-8000}
+      - API_KEY=${API_KEY:-}
+      # Timeout Configuration
+      - MAX_TIMEOUT=${MAX_TIMEOUT:-600000}
+      # CORS Configuration
+      - CORS_ORIGINS=${CORS_ORIGINS:-["*"]}
+      # Chat Mode Configuration
+      - CHAT_MODE=${CHAT_MODE:-false}
+      - CHAT_MODE_CLEANUP_SESSIONS=${CHAT_MODE_CLEANUP_SESSIONS:-true}
+      - CHAT_MODE_CLEANUP_DELAY_MINUTES=${CHAT_MODE_CLEANUP_DELAY_MINUTES:-720}
+      # Progress Markers
+      - SHOW_PROGRESS_MARKERS=${SHOW_PROGRESS_MARKERS:-true}
+      # SSE Keep-alive
+      - SSE_KEEPALIVE_INTERVAL=${SSE_KEEPALIVE_INTERVAL:-30}
+      # Rate Limiting Configuration
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
+      - RATE_LIMIT_CHAT_PER_MINUTE=${RATE_LIMIT_CHAT_PER_MINUTE:-10}
+      - RATE_LIMIT_DEBUG_PER_MINUTE=${RATE_LIMIT_DEBUG_PER_MINUTE:-2}
+      - RATE_LIMIT_AUTH_PER_MINUTE=${RATE_LIMIT_AUTH_PER_MINUTE:-10}
+      - RATE_LIMIT_SESSION_PER_MINUTE=${RATE_LIMIT_SESSION_PER_MINUTE:-15}
+      - RATE_LIMIT_HEALTH_PER_MINUTE=${RATE_LIMIT_HEALTH_PER_MINUTE:-30}
+    # Dev example with hot reload - uncomment the line below and comment out the default CMD in Dockerfile
+    # command: ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     restart: unless-stopped
 ```
 - Run: `docker-compose up -d` (builds if needed, runs detached).
@@ -411,8 +439,10 @@ Customize the container's behavior through environment variables, volumes, and r
 Env vars override defaults and can be set at runtime with `-e` flags or in `docker-compose.yml` under `environment`. They control auth, server settings, and SDK behavior.
 
 - **Core Server Settings**:
+  - `CLAUDE_CLI_PATH=claude`: Path to Claude CLI executable (default: claude).
   - `PORT=9000`: Changes the internal listening port (default: 8000; update port mapping accordingly).
-  - `MAX_TIMEOUT=600`: Sets the request timeout in seconds (default: 300; increase for complex Claude queries).
+  - `MAX_TIMEOUT=600000`: Sets the request timeout in milliseconds (default: 600000 = 10 minutes; increase for complex Claude queries).
+  - `CORS_ORIGINS=["*"]`: CORS allowed origins (default: ["*"] allows all origins).
 
 - **Authentication and Providers**:
   - `ANTHROPIC_API_KEY=sk-your-key`: Enables direct API key auth (overrides subscription; generate at console.anthropic.com).
@@ -421,10 +451,21 @@ Env vars override defaults and can be set at runtime with `-e` flags or in `dock
   - `CLAUDE_USE_SUBSCRIPTION=true`: Forces subscription mode (default behavior; set to ensure no API fallback).
 
 - **Security and API Protection**:
-  - `API_KEYS=key1,key2`: Comma-separated list of API keys required for endpoint access (clients must send `Authorization: Bearer <key>`).
+  - `API_KEY=your-key`: Single API key required for endpoint access (clients must send `Authorization: Bearer <key>`). Leave unset for interactive prompt.
   - `CHAT_MODE=true`: Enable chat mode for sandboxed execution with no file system access (disables sessions, restricts tools).
+  - `CHAT_MODE_CLEANUP_SESSIONS=true`: Enable automatic Claude Code session cleanup in chat mode (default: true).
+  - `CHAT_MODE_CLEANUP_DELAY_MINUTES=720`: Minutes to wait before cleanup (default: 720 = 12 hours). Set to 0 for immediate cleanup.
   - `SHOW_PROGRESS_MARKERS=false`: Disable streaming progress indicators (default: true). When false, buffers the entire response and only streams the final assistant message, filtering out all intermediate tool uses and preliminary responses.
   - `SSE_KEEPALIVE_INTERVAL=30`: Interval in seconds for sending SSE keepalive comments to prevent connection timeouts (default: 30).
+
+- **Rate Limiting Configuration**:
+  - `RATE_LIMIT_ENABLED=true`: Enable rate limiting for all endpoints (default: true).
+  - `RATE_LIMIT_PER_MINUTE=30`: General rate limit per minute (default: 30).
+  - `RATE_LIMIT_CHAT_PER_MINUTE=10`: Chat completions rate limit per minute (default: 10).
+  - `RATE_LIMIT_DEBUG_PER_MINUTE=2`: Debug endpoint rate limit per minute (default: 2).
+  - `RATE_LIMIT_AUTH_PER_MINUTE=10`: Auth endpoint rate limit per minute (default: 10).
+  - `RATE_LIMIT_SESSION_PER_MINUTE=15`: Session endpoint rate limit per minute (default: 15).
+  - `RATE_LIMIT_HEALTH_PER_MINUTE=30`: Health check rate limit per minute (default: 30).
 
 - **Custom/Advanced Vars**:
   - `MAX_THINKING_TOKENS=4096`: Custom token budget for extended thinking (if implemented in code; e.g., for `budget_tokens` in SDK calls).
@@ -442,6 +483,7 @@ For persistence across runs, use a `.env` file in the root (e.g., `PORT=8000`) a
 Volumes mount host directories/files into the container, enabling persistence and config overrides.
 
 - **Authentication Volume (Required for Subscriptions)**: `-v ~/.claude:/root/.claude` – Shares tokens and `settings.json` (edit on host for defaults like `"max_tokens": 8192`; restart container to apply).
+- **Session Tracking Volume**: `-v ~/.claude-wrapper:/root/.claude-wrapper` – Stores session tracking data for chat mode cleanup functionality.
 - **Code Volume (Dev Only)**: `-v $(pwd):/app` – Allows live edits without rebuilds.
 - **Custom Config Volumes**: 
   - Mount a custom config: `-v /path/to/custom.json:/app/config/custom.json` (load in code).

@@ -7,6 +7,7 @@ services:
     volumes:
       - ~/.claude:/root/.claude
       - ~/.claude-wrapper:/root/.claude-wrapper  # For session tracking
+      # - .:/app  # Optional for dev - uncomment to mount code for hot reload
     environment:
       # Claude CLI Configuration
       - CLAUDE_CLI_PATH=${CLAUDE_CLI_PATH:-claude}
@@ -33,3 +34,6 @@ services:
       - RATE_LIMIT_AUTH_PER_MINUTE=${RATE_LIMIT_AUTH_PER_MINUTE:-10}
       - RATE_LIMIT_SESSION_PER_MINUTE=${RATE_LIMIT_SESSION_PER_MINUTE:-15}
       - RATE_LIMIT_HEALTH_PER_MINUTE=${RATE_LIMIT_HEALTH_PER_MINUTE:-30}
+    # Dev example with hot reload - uncomment the line below and comment out the default CMD in Dockerfile
+    # command: ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    restart: unless-stopped
