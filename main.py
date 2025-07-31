@@ -36,6 +36,7 @@ from parameter_validator import ParameterValidator, CompatibilityReporter
 from session_manager import session_manager
 from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
 from chat_mode import ChatMode, get_chat_mode_info
+from session_tracker import get_tracker, scan_claude_projects_for_sandbox_sessions
 
 # Load environment variables
 load_dotenv()
@@ -46,6 +47,7 @@ VERBOSE = os.getenv('VERBOSE', 'false').lower() in ('true', '1', 'yes', 'on')
 SHOW_PROGRESS_MARKERS = os.getenv('SHOW_PROGRESS_MARKERS', 'true').lower() in ('true', '1', 'yes', 'on')
 SSE_KEEPALIVE_INTERVAL = int(os.getenv('SSE_KEEPALIVE_INTERVAL', '30'))  # seconds
 CHAT_MODE_CLEANUP_SESSIONS = os.getenv('CHAT_MODE_CLEANUP_SESSIONS', 'true').lower() in ('true', '1', 'yes', 'on')
+CHAT_MODE_CLEANUP_DELAY_MINUTES = int(os.getenv('CHAT_MODE_CLEANUP_DELAY_MINUTES', '720'))  # 12 hours default
 
 # Set logging level based on debug/verbose mode
 log_level = logging.DEBUG if (DEBUG_MODE or VERBOSE) else logging.INFO
@@ -140,6 +142,61 @@ claude_cli = ClaudeCodeCLI(
 )
 
 
+async def sandbox_session_cleanup_task():
+    """Background task to clean up expired sandbox sessions."""
+    tracker = get_tracker()
+    
+    while True:
+        try:
+            # Wait for check interval (1 minute)
+            await asyncio.sleep(60)
+            
+            # Skip if cleanup is disabled or delay is 0 (immediate cleanup)
+            if not CHAT_MODE_CLEANUP_SESSIONS or CHAT_MODE_CLEANUP_DELAY_MINUTES == 0:
+                continue
+            
+            # Get expired sessions
+            expired_sessions = tracker.get_expired_sandbox_sessions(CHAT_MODE_CLEANUP_DELAY_MINUTES)
+            
+            if expired_sessions:
+                logger.info(f"Found {len(expired_sessions)} expired sandbox sessions to clean up")
+                
+                for session_id, info in expired_sessions.items():
+                    try:
+                        sandbox_dir = info.get("sandbox_dir", "")
+                        
+                        # Safety check
+                        if "claude_chat_sandbox" not in sandbox_dir:
+                            logger.warning(f"Skipping non-sandbox session {session_id}")
+                            tracker.cleanup_tracked_session(session_id)
+                            continue
+                        
+                        # Clean up the session
+                        if cleanup_claude_session(sandbox_dir, session_id):
+                            logger.info(f"Cleaned up expired sandbox session {session_id}")
+                            tracker.cleanup_tracked_session(session_id)
+                        else:
+                            logger.warning(f"Failed to cleanup session {session_id}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error cleaning up session {session_id}: {e}")
+                        # Remove from tracking even if cleanup failed
+                        tracker.cleanup_tracked_session(session_id)
+            
+            # Also clean up stale tracker entries (older than 5 hours)
+            stale_count = tracker.cleanup_stale_entries()
+            if stale_count > 0:
+                logger.info(f"Removed {stale_count} stale tracker entries")
+                
+        except asyncio.CancelledError:
+            logger.info("Sandbox cleanup task cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Error in sandbox cleanup task: {e}")
+            # Continue running even if there's an error
+            await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Verify Claude Code authentication and CLI on startup."""
@@ -193,9 +250,43 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Session manager disabled in chat mode")
     
+    # Start sandbox session cleanup task if enabled
+    sandbox_cleanup_task = None
+    if CHAT_MODE and CHAT_MODE_CLEANUP_SESSIONS:
+        # Perform startup cleanup of old sessions
+        logger.info(f"Starting sandbox session cleanup (delay: {CHAT_MODE_CLEANUP_DELAY_MINUTES} minutes)")
+        
+        # Clean up old sessions on startup
+        if CHAT_MODE_CLEANUP_DELAY_MINUTES > 0:
+            old_sessions = scan_claude_projects_for_sandbox_sessions(CHAT_MODE_CLEANUP_DELAY_MINUTES)
+            for session_id, project_dir, age_minutes in old_sessions:
+                try:
+                    # Extract sandbox dir from project dir
+                    # Convert back from transformed path
+                    sandbox_dir_parts = project_dir.split('/')[-1].replace('-', '/')
+                    if sandbox_dir_parts.startswith('/'):
+                        sandbox_dir_parts = sandbox_dir_parts[1:]
+                    # This is approximate - we use the project dir for cleanup
+                    if cleanup_claude_session(project_dir, session_id):
+                        logger.info(f"Cleaned up old sandbox session {session_id} (age: {age_minutes:.1f} minutes)")
+                except Exception as e:
+                    logger.error(f"Failed to cleanup old session {session_id}: {e}")
+        
+        # Start background cleanup task
+        sandbox_cleanup_task = asyncio.create_task(sandbox_session_cleanup_task())
+        logger.info("Started sandbox session cleanup background task")
+    
     yield
     
     # Cleanup on shutdown
+    if sandbox_cleanup_task:
+        sandbox_cleanup_task.cancel()
+        try:
+            await sandbox_cleanup_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Stopped sandbox session cleanup task")
+    
     if not CHAT_MODE:
         logger.info("Shutting down session manager...")
         session_manager.shutdown()
@@ -923,10 +1014,21 @@ async def stream_final_content_only(
                     logger.debug(f"Got session ID from claude_cli: {session_id}")
             
             if session_id and CHAT_MODE_CLEANUP_SESSIONS:
-                try:
-                    cleanup_claude_session(sandbox_dir, session_id)
-                except Exception as e:
-                    logger.error(f"Failed to cleanup Claude session: {e}")
+                # Track or cleanup based on delay setting
+                if CHAT_MODE_CLEANUP_DELAY_MINUTES == 0:
+                    # Immediate cleanup
+                    try:
+                        cleanup_claude_session(sandbox_dir, session_id)
+                        logger.debug(f"Immediately cleaned up sandbox session {session_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to cleanup Claude session: {e}")
+                else:
+                    # Track for delayed cleanup
+                    tracker = get_tracker()
+                    if tracker.track_sandbox_session(session_id, sandbox_dir):
+                        logger.debug(f"Tracked sandbox session {session_id} for cleanup in {CHAT_MODE_CLEANUP_DELAY_MINUTES} minutes")
+                    else:
+                        logger.error(f"Failed to track sandbox session {session_id}")
             elif session_id and not CHAT_MODE_CLEANUP_SESSIONS:
                 logger.debug(f"Session cleanup disabled - session {session_id} retained")
             
@@ -1499,10 +1601,21 @@ async def generate_streaming_response(
                     logger.debug(f"Got session ID from claude_cli: {session_id}")
             
             if session_id and CHAT_MODE_CLEANUP_SESSIONS:
-                try:
-                    cleanup_claude_session(sandbox_dir, session_id)
-                except Exception as e:
-                    logger.error(f"Failed to cleanup Claude session: {e}")
+                # Track or cleanup based on delay setting
+                if CHAT_MODE_CLEANUP_DELAY_MINUTES == 0:
+                    # Immediate cleanup
+                    try:
+                        cleanup_claude_session(sandbox_dir, session_id)
+                        logger.debug(f"Immediately cleaned up sandbox session {session_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to cleanup Claude session: {e}")
+                else:
+                    # Track for delayed cleanup
+                    tracker = get_tracker()
+                    if tracker.track_sandbox_session(session_id, sandbox_dir):
+                        logger.debug(f"Tracked sandbox session {session_id} for cleanup in {CHAT_MODE_CLEANUP_DELAY_MINUTES} minutes")
+                    else:
+                        logger.error(f"Failed to track sandbox session {session_id}")
             elif session_id and not CHAT_MODE_CLEANUP_SESSIONS:
                 logger.debug(f"Session cleanup disabled - session {session_id} retained")
             
@@ -1818,6 +1931,16 @@ async def get_auth_status(request: Request):
     auth_info = get_claude_code_auth_info()
     active_api_key = auth_manager.get_api_key()
     
+    # Get sandbox cleanup info if in chat mode
+    sandbox_cleanup_info = None
+    if CHAT_MODE and CHAT_MODE_CLEANUP_SESSIONS:
+        tracker = get_tracker()
+        sandbox_cleanup_info = {
+            "enabled": True,
+            "delay_minutes": CHAT_MODE_CLEANUP_DELAY_MINUTES,
+            "tracker_stats": tracker.get_tracker_stats()
+        }
+    
     return {
         "claude_code_auth": auth_info,
         "server_info": {
@@ -1825,7 +1948,8 @@ async def get_auth_status(request: Request):
             "api_key_source": "environment" if os.getenv("API_KEY") else ("runtime" if runtime_api_key else "none"),
             "version": "1.0.0",
             "chat_mode": get_chat_mode_info(),
-            "progress_markers_enabled": SHOW_PROGRESS_MARKERS
+            "progress_markers_enabled": SHOW_PROGRESS_MARKERS,
+            "sandbox_cleanup": sandbox_cleanup_info
         }
     }
 

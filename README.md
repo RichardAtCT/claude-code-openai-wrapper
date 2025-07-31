@@ -154,6 +154,10 @@ CORS_ORIGINS=["*"]
 # Set to false to keep sessions (they will appear in /resume command)
 # CHAT_MODE_CLEANUP_SESSIONS=true
 
+# Cleanup delay in minutes (default: 720 = 12 hours)
+# Set to 0 for immediate cleanup after request completion
+# CHAT_MODE_CLEANUP_DELAY_MINUTES=720
+
 # Progress markers - show streaming progress indicators
 # SHOW_PROGRESS_MARKERS=true
 
@@ -735,8 +739,9 @@ When chat mode is enabled:
 - **Complete Isolation**: Each request is stateless and runs in a fresh sandbox
 - **Path Hiding**: Environment variables that could reveal system paths are removed
 - **Tool Restrictions**: Only web-based tools allowed, no local system access
-- **Automatic Cleanup**: Both temporary directories and Claude Code session files are cleaned up after each request
-- **No Session Persistence**: Sessions don't appear in Claude Code's `/resume` command (configurable via `CHAT_MODE_CLEANUP_SESSIONS`)
+- **Automatic Cleanup**: Temporary sandbox directories are cleaned immediately; Claude Code session files are cleaned based on configured delay
+- **Time-Based Cleanup**: Sessions are tracked and cleaned after a delay (default: 12 hours for complete usage tracking)
+- **No Session Persistence**: Sessions are removed after the delay period (configurable via `CHAT_MODE_CLEANUP_SESSIONS` and `CHAT_MODE_CLEANUP_DELAY_MINUTES`)
 
 ### Important Notes
 
@@ -745,11 +750,35 @@ When chat mode is enabled:
 - **No Persistence**: Nothing is saved between requests
 - **Tool Override**: The `enable_tools` parameter is ignored; only chat mode tools are available
 
+### Session Cleanup Configuration
+
+The wrapper provides flexible session cleanup options:
+
+- **`CHAT_MODE_CLEANUP_SESSIONS`**: Master on/off switch for session cleanup (default: `true`)
+- **`CHAT_MODE_CLEANUP_DELAY_MINUTES`**: Minutes to wait before cleanup (default: `720` = 12 hours)
+  - Set to `0` for immediate cleanup after request completion
+  - Sessions are tracked and cleaned up by a background task
+  - On startup, old sessions exceeding the delay are automatically cleaned
+
+### Token Usage Tracking and Monitoring
+
+Claude Code tracks token usage at the session level. Each session file contains the complete token consumption data for all requests within that session. This has important implications for usage monitoring:
+
+- **Token Usage Aggregation**: Claude Code aggregates token usage per session, not per request
+- **Daily Usage Tracking**: For accurate daily token consumption reports, sessions should persist across usage periods
+- **12-Hour Default**: The 12-hour delay ensures sessions span daily usage boundaries, capturing complete usage patterns
+- **Monitoring Tools**: Usage tracking dashboards and cost analysis tools need access to session files to calculate token consumption
+
 ### Monitoring Considerations
 
-- **Usage Monitoring Tools**: If you use tools that monitor Claude Code usage by analyzing session logs (e.g., usage tracking dashboards, cost analysis tools), be aware that enabling `CHAT_MODE_CLEANUP_SESSIONS=true` (default) will delete session files immediately after each request
-- **To preserve logs for monitoring**: Set `CHAT_MODE_CLEANUP_SESSIONS=false` in your environment variables
-- **Trade-off**: Disabling cleanup will cause sessions to accumulate in Claude's `/resume` command, but allows monitoring tools to access the session data
+- **With delayed cleanup** (default 12 hours): Sessions remain available long enough for monitoring tools to capture complete daily usage data
+- **Immediate cleanup** (`CHAT_MODE_CLEANUP_DELAY_MINUTES=0`): May result in incomplete usage statistics as sessions are deleted before aggregation
+- **To preserve logs indefinitely**: Set `CHAT_MODE_CLEANUP_SESSIONS=false` - sessions accumulate but provide complete historical data
+- **Recommended for monitoring**: Use at least 12-24 hours delay to ensure usage data spans daily boundaries
+
+### Important Note on Existing Sessions
+
+**Currently, sessions created while `CHAT_MODE_CLEANUP_SESSIONS=false` will NOT be automatically cleaned up when switching to `CHAT_MODE_CLEANUP_SESSIONS=true`.** Only new sessions created after enabling cleanup will be tracked and cleaned. To manually clean old sessions, you'll need to delete them from `~/.claude/projects/` directories containing "claude-chat-sandbox" in their names.
 
 ### Example Usage
 
