@@ -2,7 +2,9 @@
 Chat mode implementation for Claude Code OpenAI wrapper.
 
 This module provides secure sandboxed execution when CHAT_MODE=true,
-disabling file system access and limiting available tools.
+disabling file system access and limiting available tools. Sessions
+created in chat mode are automatically cleaned up to prevent them
+from appearing in Claude Code's /resume command.
 """
 
 import os

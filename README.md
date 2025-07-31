@@ -150,6 +150,10 @@ CORS_ORIGINS=["*"]
 # Chat mode - enables sandboxed execution with no file access
 # CHAT_MODE=false
 
+# Chat mode session cleanup - automatically remove Claude Code session files
+# Set to false to keep sessions (they will appear in /resume command)
+# CHAT_MODE_CLEANUP_SESSIONS=true
+
 # Progress markers - show streaming progress indicators
 # SHOW_PROGRESS_MARKERS=true
 
@@ -724,13 +728,15 @@ When chat mode is enabled:
 - **No Sessions**: Sessions are automatically disabled (clients should manage conversation state)
 - **Format Support**: Automatic detection and support for XML tool formats and JSON responses
 - **Prompt Engineering**: Multiple system prompts ensure chat-only behavior
+- **Automatic Cleanup**: Session files created by Claude Code are automatically removed after each request
 
 ### Security Properties
 
 - **Complete Isolation**: Each request is stateless and runs in a fresh sandbox
 - **Path Hiding**: Environment variables that could reveal system paths are removed
 - **Tool Restrictions**: Only web-based tools allowed, no local system access
-- **Automatic Cleanup**: Temporary directories are cleaned up after each request
+- **Automatic Cleanup**: Both temporary directories and Claude Code session files are cleaned up after each request
+- **No Session Persistence**: Sessions don't appear in Claude Code's `/resume` command (configurable via `CHAT_MODE_CLEANUP_SESSIONS`)
 
 ### Important Notes
 
@@ -738,6 +744,12 @@ When chat mode is enabled:
 - **Client Responsibility**: Chat clients should handle their own conversation continuity
 - **No Persistence**: Nothing is saved between requests
 - **Tool Override**: The `enable_tools` parameter is ignored; only chat mode tools are available
+
+### Monitoring Considerations
+
+- **Usage Monitoring Tools**: If you use tools that monitor Claude Code usage by analyzing session logs (e.g., usage tracking dashboards, cost analysis tools), be aware that enabling `CHAT_MODE_CLEANUP_SESSIONS=true` (default) will delete session files immediately after each request
+- **To preserve logs for monitoring**: Set `CHAT_MODE_CLEANUP_SESSIONS=false` in your environment variables
+- **Trade-off**: Disabling cleanup will cause sessions to accumulate in Claude's `/resume` command, but allows monitoring tools to access the session data
 
 ### Example Usage
 

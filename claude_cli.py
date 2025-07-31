@@ -30,6 +30,7 @@ class ClaudeCodeCLI:
         self.format_detector = FormatDetector()
         self.prompts = ChatModePrompts()
         self.xml_detector = DeterministicXMLDetector()
+        self.last_session_id = None  # Track session ID for cleanup
         
         if self.chat_mode:
             # In chat mode, we'll create sandbox directories per request
@@ -527,9 +528,23 @@ class ClaudeCodeCLI:
                         pass
             
             logger.debug(f"Converted message dict: {message_dict}")
-            return message_dict
+            processed_msg = message_dict
         else:
-            return message
+            processed_msg = message
+            
+        # Extract session ID from init messages in chat mode
+        if self.chat_mode:
+            if processed_msg.get("type") == "system" and processed_msg.get("subtype") == "init":
+                if "session_id" in processed_msg:
+                    self.last_session_id = processed_msg["session_id"]
+                    logger.info(f"Tracked Claude session ID: {self.last_session_id}")
+                elif "data" in processed_msg and isinstance(processed_msg["data"], dict):
+                    session_id = processed_msg["data"].get("session_id")
+                    if session_id:
+                        self.last_session_id = session_id
+                        logger.info(f"Tracked Claude session ID from data: {self.last_session_id}")
+            
+        return processed_msg
     
     def parse_claude_message(self, messages: List[Dict[str, Any]]) -> Optional[str]:
         """Extract the assistant message from Claude Code SDK messages."""
@@ -607,3 +622,7 @@ class ClaudeCodeCLI:
                 })
                 
         return metadata
+    
+    def get_last_session_id(self) -> Optional[str]:
+        """Get the last tracked session ID (only available in chat mode)."""
+        return self.last_session_id

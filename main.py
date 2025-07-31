@@ -45,6 +45,7 @@ DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() in ('true', '1', 'yes', 'o
 VERBOSE = os.getenv('VERBOSE', 'false').lower() in ('true', '1', 'yes', 'on')
 SHOW_PROGRESS_MARKERS = os.getenv('SHOW_PROGRESS_MARKERS', 'true').lower() in ('true', '1', 'yes', 'on')
 SSE_KEEPALIVE_INTERVAL = int(os.getenv('SSE_KEEPALIVE_INTERVAL', '30'))  # seconds
+CHAT_MODE_CLEANUP_SESSIONS = os.getenv('CHAT_MODE_CLEANUP_SESSIONS', 'true').lower() in ('true', '1', 'yes', 'on')
 
 # Set logging level based on debug/verbose mode
 log_level = logging.DEBUG if (DEBUG_MODE or VERBOSE) else logging.INFO
@@ -453,6 +454,78 @@ def extract_content_from_chunk(chunk: Dict[str, Any]) -> Optional[str]:
     return None  # Only if chunk has no content field
 
 
+def cleanup_claude_session(sandbox_dir: str, session_id: str) -> bool:
+    """Delete Claude Code session file for chat mode requests.
+    
+    Args:
+        sandbox_dir: The sandbox directory path (e.g., /private/var/folders/.../claude_chat_sandbox_xxx)
+        session_id: The Claude session ID (UUID format)
+        
+    Returns:
+        True if cleanup was successful, False otherwise
+    """
+    try:
+        # Two places to check for session files:
+        # 1. In the sandbox-specific project directory
+        # 2. In the main wrapper project directory (if running from the wrapper directory)
+        
+        files_removed = []
+        
+        # First check sandbox-specific directory
+        # Claude transforms the path by:
+        # 1. Replacing all slashes with dashes
+        # 2. Replacing underscores with dashes
+        # 3. Prepending a dash to the whole path
+        transformed_path = sandbox_dir.replace('/', '-').replace('_', '-')
+        if not transformed_path.startswith('-'):
+            transformed_path = '-' + transformed_path
+            
+        claude_project_dir = os.path.expanduser(f"~/.claude/projects/{transformed_path}")
+        session_file = os.path.join(claude_project_dir, f"{session_id}.jsonl")
+        
+        if os.path.exists(session_file):
+            os.remove(session_file)
+            files_removed.append(session_file)
+            logger.info(f"Deleted Claude session file: {session_file}")
+            
+            # Try to remove the project directory if empty
+            try:
+                if os.path.exists(claude_project_dir) and not os.listdir(claude_project_dir):
+                    os.rmdir(claude_project_dir)
+                    logger.info(f"Removed empty Claude project directory: {claude_project_dir}")
+            except Exception as dir_err:
+                logger.debug(f"Could not remove project directory (may not be empty): {dir_err}")
+        
+        # Also check the main wrapper project directory
+        # This handles cases where Claude creates sessions in the current working directory
+        wrapper_project_dir = os.path.expanduser("~/.claude/projects/-Users-val-claude-code-openai-wrapper")
+        wrapper_session_file = os.path.join(wrapper_project_dir, f"{session_id}.jsonl")
+        
+        if os.path.exists(wrapper_session_file):
+            # Check if this is a chat mode session by reading first line
+            try:
+                with open(wrapper_session_file, 'r') as f:
+                    first_line = f.readline()
+                    if first_line:
+                        data = json.loads(first_line)
+                        # Only remove if it's a Hello session or has our chat mode markers
+                        content = data.get('message', {}).get('content', '')
+                        if (content == 'Hello' or 
+                            'digital black hole' in str(content) or
+                            'sandboxed environment' in str(content)):
+                            os.remove(wrapper_session_file)
+                            files_removed.append(wrapper_session_file)
+                            logger.info(f"Deleted wrapper project session: {wrapper_session_file}")
+            except Exception as e:
+                logger.debug(f"Could not check/remove wrapper session: {e}")
+        
+        if not files_removed:
+            logger.debug(f"No session files found to remove for session {session_id}")
+            
+        return True
+    except Exception as e:
+        logger.error(f"Failed to cleanup Claude session {session_id}: {e}")
+        return False
 
 
 async def stream_final_content_only(
@@ -462,6 +535,7 @@ async def stream_final_content_only(
 ) -> AsyncGenerator[str, None]:
     """Generate SSE formatted streaming response with only final content (no intermediate tool uses)."""
     sandbox_dir = None
+    session_id = None  # Track Claude session ID for cleanup
     final_content = ""
     buffered_chunks = []
     
@@ -628,12 +702,20 @@ async def stream_final_content_only(
                         
                         buffered_chunks.append(chunk)
                         
-                        # Extract sandbox directory from init message in chat mode
-                        if CHAT_MODE and not sandbox_dir and chunk_subtype == "init":
+                        # Extract sandbox directory and session ID from init message in chat mode
+                        if CHAT_MODE and chunk_subtype == "init":
                             data = chunk.get("data", {})
-                            if isinstance(data, dict) and "cwd" in data:
-                                sandbox_dir = data["cwd"]
-                                logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
+                            if isinstance(data, dict):
+                                if "cwd" in data and not sandbox_dir:
+                                    sandbox_dir = data["cwd"]
+                                    logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
+                                if "session_id" in data and not session_id:
+                                    session_id = data["session_id"]
+                                    logger.debug(f"Tracked Claude session ID: {session_id}")
+                            # Also check top-level session_id
+                            if "session_id" in chunk and not session_id:
+                                session_id = chunk["session_id"]
+                                logger.debug(f"Tracked Claude session ID from chunk: {session_id}")
                         
                         # More precise detection of assistant messages
                         # Check for content that could be assistant text
@@ -831,8 +913,24 @@ async def stream_final_content_only(
                 except asyncio.CancelledError:
                     pass
         
-        # Cleanup sandbox directory if in chat mode
+        # Cleanup sandbox directory and session if in chat mode
         if CHAT_MODE and sandbox_dir:
+            # First cleanup Claude session file
+            # Try to get session_id from claude_cli if we didn't get it from messages
+            if not session_id and hasattr(claude_cli, 'get_last_session_id'):
+                session_id = claude_cli.get_last_session_id()
+                if session_id:
+                    logger.debug(f"Got session ID from claude_cli: {session_id}")
+            
+            if session_id and CHAT_MODE_CLEANUP_SESSIONS:
+                try:
+                    cleanup_claude_session(sandbox_dir, session_id)
+                except Exception as e:
+                    logger.error(f"Failed to cleanup Claude session: {e}")
+            elif session_id and not CHAT_MODE_CLEANUP_SESSIONS:
+                logger.debug(f"Session cleanup disabled - session {session_id} retained")
+            
+            # Then cleanup sandbox directory
             try:
                 ChatMode.cleanup_sandbox(sandbox_dir)
                 logger.debug(f"Cleaned up sandbox directory: {sandbox_dir}")
@@ -1162,6 +1260,7 @@ async def generate_streaming_response(
 ) -> AsyncGenerator[str, None]:
     """Generate SSE formatted streaming response."""
     sandbox_dir = None  # Track sandbox for cleanup
+    session_id = None  # Track Claude session ID for cleanup
     try:
         # In chat mode, skip session management
         if CHAT_MODE:
@@ -1271,12 +1370,20 @@ async def generate_streaming_response(
             
             chunks_buffer.append(chunk)
             
-            # Extract sandbox directory from init message in chat mode
-            if CHAT_MODE and not sandbox_dir and chunk.get("subtype") == "init":
+            # Extract sandbox directory and session ID from init message in chat mode
+            if CHAT_MODE and chunk.get("subtype") == "init":
                 data = chunk.get("data", {})
-                if isinstance(data, dict) and "cwd" in data:
-                    sandbox_dir = data["cwd"]
-                    logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
+                if isinstance(data, dict):
+                    if "cwd" in data and not sandbox_dir:
+                        sandbox_dir = data["cwd"]
+                        logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
+                    if "session_id" in data and not session_id:
+                        session_id = data["session_id"]
+                        logger.debug(f"Tracked Claude session ID: {session_id}")
+                # Also check top-level session_id
+                if "session_id" in chunk and not session_id:
+                    session_id = chunk["session_id"]
+                    logger.debug(f"Tracked Claude session ID from chunk: {session_id}")
             
             # Extract content using unified method
             extracted_text = extract_content_from_chunk(chunk)
@@ -1370,8 +1477,24 @@ async def generate_streaming_response(
         }
         yield f"data: {json.dumps(error_chunk)}\n\n"
     finally:
-        # Cleanup sandbox directory if in chat mode
+        # Cleanup sandbox directory and session if in chat mode
         if CHAT_MODE and sandbox_dir:
+            # First cleanup Claude session file
+            # Try to get session_id from claude_cli if we didn't get it from messages
+            if not session_id and hasattr(claude_cli, 'get_last_session_id'):
+                session_id = claude_cli.get_last_session_id()
+                if session_id:
+                    logger.debug(f"Got session ID from claude_cli: {session_id}")
+            
+            if session_id and CHAT_MODE_CLEANUP_SESSIONS:
+                try:
+                    cleanup_claude_session(sandbox_dir, session_id)
+                except Exception as e:
+                    logger.error(f"Failed to cleanup Claude session: {e}")
+            elif session_id and not CHAT_MODE_CLEANUP_SESSIONS:
+                logger.debug(f"Session cleanup disabled - session {session_id} retained")
+            
+            # Then cleanup sandbox directory
             try:
                 ChatMode.cleanup_sandbox(sandbox_dir)
                 logger.debug(f"Cleaned up sandbox directory: {sandbox_dir}")
