@@ -6,5 +6,30 @@ services:
       - "8000:8000"
     volumes:
       - ~/.claude:/root/.claude
+      - ~/.claude-wrapper:/root/.claude-wrapper  # For session tracking
     environment:
-      - PORT=8000
+      # Claude CLI Configuration
+      - CLAUDE_CLI_PATH=${CLAUDE_CLI_PATH:-claude}
+      # API Configuration
+      - PORT=${PORT:-8000}
+      - API_KEY=${API_KEY:-}
+      # Timeout Configuration
+      - MAX_TIMEOUT=${MAX_TIMEOUT:-600000}
+      # CORS Configuration
+      - CORS_ORIGINS=${CORS_ORIGINS:-["*"]}
+      # Chat Mode Configuration
+      - CHAT_MODE=${CHAT_MODE:-false}
+      - CHAT_MODE_CLEANUP_SESSIONS=${CHAT_MODE_CLEANUP_SESSIONS:-true}
+      - CHAT_MODE_CLEANUP_DELAY_MINUTES=${CHAT_MODE_CLEANUP_DELAY_MINUTES:-720}
+      # Progress Markers
+      - SHOW_PROGRESS_MARKERS=${SHOW_PROGRESS_MARKERS:-true}
+      # SSE Keep-alive
+      - SSE_KEEPALIVE_INTERVAL=${SSE_KEEPALIVE_INTERVAL:-30}
+      # Rate Limiting Configuration
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
+      - RATE_LIMIT_CHAT_PER_MINUTE=${RATE_LIMIT_CHAT_PER_MINUTE:-10}
+      - RATE_LIMIT_DEBUG_PER_MINUTE=${RATE_LIMIT_DEBUG_PER_MINUTE:-2}
+      - RATE_LIMIT_AUTH_PER_MINUTE=${RATE_LIMIT_AUTH_PER_MINUTE:-10}
+      - RATE_LIMIT_SESSION_PER_MINUTE=${RATE_LIMIT_SESSION_PER_MINUTE:-15}
+      - RATE_LIMIT_HEALTH_PER_MINUTE=${RATE_LIMIT_HEALTH_PER_MINUTE:-30}
