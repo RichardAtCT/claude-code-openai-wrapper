@@ -1386,6 +1386,11 @@ async def generate_streaming_response(
                     logger.debug(f"Tracked Claude session ID from chunk: {session_id}")
             
             # Extract content using unified method
+            # Skip result messages to avoid duplication - they contain the full response
+            if chunk.get("subtype") == "success":
+                logger.debug("Skipping result message to avoid content duplication")
+                continue
+                
             extracted_text = extract_content_from_chunk(chunk)
             
             if extracted_text is not None:
