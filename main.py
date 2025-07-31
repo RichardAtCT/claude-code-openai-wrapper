@@ -1319,6 +1319,7 @@ async def generate_streaming_response(
         chunks_buffer = []
         role_sent = False  # Track if we've sent the initial role chunk
         content_sent = False  # Track if we've sent any content
+        assistant_content_seen = False  # Track if we've seen AssistantMessage content
         
         # Create a wrapper for the SDK stream
         
@@ -1386,12 +1387,18 @@ async def generate_streaming_response(
                     logger.debug(f"Tracked Claude session ID from chunk: {session_id}")
             
             # Extract content using unified method
-            # Skip result messages to avoid duplication - they contain the full response
-            if chunk.get("subtype") == "success":
-                logger.debug("Skipping result message to avoid content duplication")
-                continue
-                
             extracted_text = extract_content_from_chunk(chunk)
+            
+            # Track if we've seen AssistantMessage content
+            if extracted_text is not None and "content" in chunk and isinstance(chunk["content"], list):
+                # This is likely an AssistantMessage chunk
+                assistant_content_seen = True
+                logger.debug("Detected AssistantMessage content")
+            
+            # Skip ResultMessage content if we've already seen AssistantMessage content
+            if extracted_text is not None and chunk.get("subtype") == "success" and assistant_content_seen:
+                logger.debug("Skipping ResultMessage content to avoid duplication (already have AssistantMessage)")
+                continue
             
             if extracted_text is not None:
                 # Send initial role chunk if we haven't already
