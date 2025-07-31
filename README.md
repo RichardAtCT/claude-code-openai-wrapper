@@ -131,38 +131,57 @@ poetry run python test_endpoints.py
 Edit the `.env` file:
 
 ```env
-# Claude CLI path (usually just "claude")
+# Claude CLI Configuration
 CLAUDE_CLI_PATH=claude
 
-# Optional API key for client authentication
-# If not set, server will prompt for interactive API key protection on startup
-# API_KEY=your-optional-api-key
-
-# Server port
+# API Configuration
+# If API_KEY is not set, server will prompt for interactive API key protection on startup
+# Leave commented out to enable interactive prompt, or uncomment to use a fixed API key
+# API_KEY=your-optional-api-key-here
 PORT=8000
 
-# Timeout in milliseconds
+# Timeout Configuration (milliseconds)
 MAX_TIMEOUT=600000
 
-# CORS origins
+# CORS Configuration
 CORS_ORIGINS=["*"]
 
-# Chat mode - enables sandboxed execution with no file access
-# CHAT_MODE=false
+# Chat Mode Configuration
+# Set to true to enable sandboxed execution with no file system access
+# This disables sessions and restricts tools to WebSearch and WebFetch only
+CHAT_MODE=false
 
-# Chat mode session cleanup - automatically remove Claude Code session files
-# Set to false to keep sessions (they will appear in /resume command)
-# CHAT_MODE_CLEANUP_SESSIONS=true
+# Chat Mode Session Cleanup
+# Set to false to disable automatic Claude Code session cleanup in chat mode
+# When disabled, sessions will appear in Claude's /resume command
+CHAT_MODE_CLEANUP_SESSIONS=true
 
 # Cleanup delay in minutes (default: 720 = 12 hours)
+# Sessions are tracked and cleaned up after this delay
 # Set to 0 for immediate cleanup after request completion
-# CHAT_MODE_CLEANUP_DELAY_MINUTES=720
+# Note: Claude Code tracks token usage per session. For accurate usage monitoring,
+# sessions should persist long enough to capture complete usage data.
+# 12 hours ensures sessions span daily usage boundaries for better tracking.
+CHAT_MODE_CLEANUP_DELAY_MINUTES=720
 
-# Progress markers - show streaming progress indicators
-# SHOW_PROGRESS_MARKERS=true
+# Progress Markers Configuration
+# Set to true to show progress indicators during streaming (⏳ followed by rotating circles ◐◓◑◒ with dots ·)
+# Set to false to buffer and only stream the final response (filters out all intermediate tool uses)
+SHOW_PROGRESS_MARKERS=true
 
-# SSE keepalive interval - prevents connection timeouts (seconds)
-# SSE_KEEPALIVE_INTERVAL=30
+# SSE Keep-alive Configuration
+# Interval in seconds between SSE keepalive comments to prevent connection timeouts
+# These are invisible comments (lines starting with ':') that keep the connection alive
+SSE_KEEPALIVE_INTERVAL=30
+
+# Rate Limiting Configuration
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_PER_MINUTE=30
+RATE_LIMIT_CHAT_PER_MINUTE=10
+RATE_LIMIT_DEBUG_PER_MINUTE=2
+RATE_LIMIT_AUTH_PER_MINUTE=10
+RATE_LIMIT_SESSION_PER_MINUTE=15
+RATE_LIMIT_HEALTH_PER_MINUTE=30
 ```
 
 ### 🔐 **API Security Configuration**
@@ -867,10 +886,12 @@ response = client.chat.completions.create(
 ### Use Cases
 
 Chat mode is ideal for:
+- **AI Coding Assistants**: Integration with tools like Roo Code, Cline, Cursor, and other AI coding assistants that expect OpenAI-compatible APIs
 - **Public APIs**: Safely expose Claude as a chat service
 - **Chat Applications**: Integration with chat clients that manage their own state
 - **Restricted Environments**: When you need Claude's capabilities without system access
 - **Multi-tenant Services**: Ensure complete isolation between requests
+- **Development Tools**: IDEs and extensions that need AI assistance without file system access
 
 ## API Endpoints
 
