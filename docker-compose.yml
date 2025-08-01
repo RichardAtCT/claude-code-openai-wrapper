@@ -11,6 +11,7 @@ services:
     environment:
       # Claude CLI Configuration
       - CLAUDE_CLI_PATH=${CLAUDE_CLI_PATH:-claude}
+      - CLAUDE_CWD=${CLAUDE_CWD:-/app}
       # API Configuration
       - PORT=${PORT:-8000}
       - API_KEY=${API_KEY:-}
@@ -18,12 +19,16 @@ services:
       - MAX_TIMEOUT=${MAX_TIMEOUT:-600000}
       # CORS Configuration
       - CORS_ORIGINS=${CORS_ORIGINS:-["*"]}
+      # Logging Configuration
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      - VERBOSE=${VERBOSE:-false}
       # Chat Mode Configuration
       - CHAT_MODE=${CHAT_MODE:-false}
       - CHAT_MODE_CLEANUP_SESSIONS=${CHAT_MODE_CLEANUP_SESSIONS:-true}
       - CHAT_MODE_CLEANUP_DELAY_MINUTES=${CHAT_MODE_CLEANUP_DELAY_MINUTES:-720}
       # Progress Markers
       - SHOW_PROGRESS_MARKERS=${SHOW_PROGRESS_MARKERS:-true}
+      - PROGRESS_STYLE=${PROGRESS_STYLE:-text}
       # SSE Keep-alive
       - SSE_KEEPALIVE_INTERVAL=${SSE_KEEPALIVE_INTERVAL:-30}
       # Rate Limiting Configuration
@@ -34,6 +39,7 @@ services:
       - RATE_LIMIT_AUTH_PER_MINUTE=${RATE_LIMIT_AUTH_PER_MINUTE:-10}
       - RATE_LIMIT_SESSION_PER_MINUTE=${RATE_LIMIT_SESSION_PER_MINUTE:-15}
       - RATE_LIMIT_HEALTH_PER_MINUTE=${RATE_LIMIT_HEALTH_PER_MINUTE:-30}
-    # Dev example with hot reload - uncomment the line below and comment out the default CMD in Dockerfile
-    # command: ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # Production mode example - uncomment the line below to run without hot reload
+    # command: ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # Note: The default Dockerfile CMD includes --reload for development mode
     restart: unless-stopped
