@@ -22,8 +22,7 @@ services:
       # Logging Configuration
       - DEBUG_MODE=${DEBUG_MODE:-false}
       - VERBOSE=${VERBOSE:-false}
-      # Chat Mode Configuration
-      - CHAT_MODE=${CHAT_MODE:-false}
+      # Chat Mode Session Cleanup Configuration
       - CHAT_MODE_CLEANUP_SESSIONS=${CHAT_MODE_CLEANUP_SESSIONS:-true}
       - CHAT_MODE_CLEANUP_DELAY_MINUTES=${CHAT_MODE_CLEANUP_DELAY_MINUTES:-720}
       # Progress Markers

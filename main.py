@@ -36,6 +36,7 @@ from parameter_validator import ParameterValidator, CompatibilityReporter
 from session_manager import session_manager
 from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
 from chat_mode import ChatMode, get_chat_mode_info
+from model_utils import ModelUtils
 from session_tracker import get_tracker, scan_claude_projects_for_sandbox_sessions
 
 # Load environment variables
@@ -67,9 +68,6 @@ ALL_CLAUDE_TOOLS = [
 # Global variable to store runtime-generated API key
 runtime_api_key = None
 
-# Check if chat mode is enabled
-CHAT_MODE = ChatMode.is_enabled()
-
 
 def create_error_response(error: Exception, context: str) -> Dict[str, Any]:
     """Create standardized error response."""
@@ -81,8 +79,6 @@ def create_error_response(error: Exception, context: str) -> Dict[str, Any]:
             "context": context
         }
     }
-if CHAT_MODE:
-    logger.info(f"🔒 Chat mode enabled - sessions disabled, sandboxed execution active, progress markers: {'enabled' if SHOW_PROGRESS_MARKERS else 'disabled'}")
 
 def generate_secure_token(length: int = 32) -> str:
     """Generate a secure random token for API authentication."""
@@ -244,15 +240,12 @@ async def lifespan(app: FastAPI):
         logger.debug(f"   GET  /health - Health check")
         logger.debug(f"🔧 API Key protection: {'Enabled' if (os.getenv('API_KEY') or runtime_api_key) else 'Disabled'}")
     
-    # Start session cleanup task only if not in chat mode
-    if not CHAT_MODE:
-        session_manager.start_cleanup_task()
-    else:
-        logger.info("Session manager disabled in chat mode")
+    # Start session cleanup task for normal mode requests
+    session_manager.start_cleanup_task()
     
     # Start sandbox session cleanup task if enabled
     sandbox_cleanup_task = None
-    if CHAT_MODE and CHAT_MODE_CLEANUP_SESSIONS:
+    if CHAT_MODE_CLEANUP_SESSIONS:
         # Perform startup cleanup of old sessions
         logger.info(f"Starting sandbox session cleanup (delay: {CHAT_MODE_CLEANUP_DELAY_MINUTES} minutes)")
         
@@ -287,9 +280,8 @@ async def lifespan(app: FastAPI):
             pass
         logger.info("Stopped sandbox session cleanup task")
     
-    if not CHAT_MODE:
-        logger.info("Shutting down session manager...")
-        session_manager.shutdown()
+    logger.info("Shutting down session manager...")
+    session_manager.shutdown()
 
 
 # Create FastAPI app
@@ -622,7 +614,8 @@ def cleanup_claude_session(sandbox_dir: str, session_id: str) -> bool:
 async def stream_final_content_only(
     request: ChatCompletionRequest,
     request_id: str,
-    claude_headers: Optional[Dict[str, Any]] = None
+    claude_headers: Optional[Dict[str, Any]] = None,
+    is_chat_mode: bool = False
 ) -> AsyncGenerator[str, None]:
     """Generate SSE formatted streaming response with only final content (no intermediate tool uses)."""
     sandbox_dir = None
@@ -632,7 +625,7 @@ async def stream_final_content_only(
     
     try:
         # Get session info
-        if CHAT_MODE:
+        if is_chat_mode:
             all_messages = request.messages
             actual_session_id = None
             logger.info("Chat mode active - sessions disabled")
@@ -648,7 +641,7 @@ async def stream_final_content_only(
         
         
         # Filter content for unsupported features (skip in chat mode to preserve XML)
-        if not CHAT_MODE:
+        if not is_chat_mode:
             prompt = MessageAdapter.filter_content(prompt)
             if system_prompt:
                 system_prompt = MessageAdapter.filter_content(system_prompt)
@@ -663,7 +656,7 @@ async def stream_final_content_only(
             claude_options.update(claude_headers)
         
         # Handle tools
-        if CHAT_MODE:
+        if is_chat_mode:
             logger.info("Chat mode: using restricted tool set")
             claude_options['allowed_tools'] = ChatMode.get_allowed_tools()
             claude_options['disallowed_tools'] = None
@@ -700,7 +693,7 @@ async def stream_final_content_only(
         
         # CRITICAL: Log if we expect XML format
         expects_xml = False
-        if CHAT_MODE and prompt:
+        if is_chat_mode and prompt:
             prompt_lower = prompt.lower()
             expects_xml = any([
                 "tool uses are formatted" in prompt_lower,
@@ -728,7 +721,8 @@ async def stream_final_content_only(
                     allowed_tools=claude_options.get('allowed_tools'),
                     disallowed_tools=claude_options.get('disallowed_tools'),
                     stream=True,
-                    messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]
+                    messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages],
+                    is_chat_mode=is_chat_mode
                 ):
                     await chunk_queue.put(chunk)
                 logger.debug("SDK stream consumer completed normally")
@@ -794,7 +788,7 @@ async def stream_final_content_only(
                         buffered_chunks.append(chunk)
                         
                         # Extract sandbox directory and session ID from init message in chat mode
-                        if CHAT_MODE and chunk_subtype == "init":
+                        if is_chat_mode and chunk_subtype == "init":
                             data = chunk.get("data", {})
                             if isinstance(data, dict):
                                 if "cwd" in data and not sandbox_dir:
@@ -936,7 +930,7 @@ async def stream_final_content_only(
             yield f"data: {initial_chunk.model_dump_json()}\n\n"
             
             # Filter content if not in chat mode
-            if CHAT_MODE:
+            if is_chat_mode:
                 filtered_content = final_content
             else:
                 filtered_content = MessageAdapter.filter_content(final_content)
@@ -1005,7 +999,7 @@ async def stream_final_content_only(
                     pass
         
         # Cleanup sandbox directory and session if in chat mode
-        if CHAT_MODE and sandbox_dir:
+        if is_chat_mode and sandbox_dir:
             # First cleanup Claude session file
             # Try to get session_id from claude_cli if we didn't get it from messages
             if not session_id and hasattr(claude_cli, 'get_last_session_id'):
@@ -1358,14 +1352,15 @@ async def stream_with_progress_injection(
 async def generate_streaming_response(
     request: ChatCompletionRequest,
     request_id: str,
-    claude_headers: Optional[Dict[str, Any]] = None
+    claude_headers: Optional[Dict[str, Any]] = None,
+    is_chat_mode: bool = False
 ) -> AsyncGenerator[str, None]:
     """Generate SSE formatted streaming response."""
     sandbox_dir = None  # Track sandbox for cleanup
     session_id = None  # Track Claude session ID for cleanup
     try:
         # In chat mode, skip session management
-        if CHAT_MODE:
+        if is_chat_mode:
             all_messages = request.messages  # Keep as Message objects
             actual_session_id = None
             logger.info("Chat mode active - sessions disabled")
@@ -1384,7 +1379,7 @@ async def generate_streaming_response(
         logger.debug(f"Converted prompt length: {len(prompt)}, system prompt: {len(system_prompt) if system_prompt else 0} chars")
         
         # Filter content for unsupported features (skip in chat mode to preserve XML)
-        if not CHAT_MODE:
+        if not is_chat_mode:
             prompt = MessageAdapter.filter_content(prompt)
             if system_prompt:
                 system_prompt = MessageAdapter.filter_content(system_prompt)
@@ -1403,7 +1398,7 @@ async def generate_streaming_response(
             ParameterValidator.validate_model(claude_options['model'])
         
         # Handle tools - disabled by default for OpenAI compatibility
-        if CHAT_MODE:
+        if is_chat_mode:
             # Chat mode overrides all tool settings
             logger.info("Chat mode: using restricted tool set")
             claude_options['allowed_tools'] = ChatMode.get_allowed_tools()
@@ -1436,7 +1431,8 @@ async def generate_streaming_response(
                     allowed_tools=claude_options.get('allowed_tools'),
                     disallowed_tools=claude_options.get('disallowed_tools'),
                     stream=True,
-                    messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]  # Convert to dicts for format detection
+                    messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages],  # Convert to dicts for format detection
+                    is_chat_mode=is_chat_mode
                 ):
                     yield chunk
             except asyncio.CancelledError:
@@ -1474,7 +1470,7 @@ async def generate_streaming_response(
             chunks_buffer.append(chunk)
             
             # Extract sandbox directory and session ID from init message in chat mode
-            if CHAT_MODE and chunk.get("subtype") == "init":
+            if is_chat_mode and chunk.get("subtype") == "init":
                 data = chunk.get("data", {})
                 if isinstance(data, dict):
                     if "cwd" in data and not sandbox_dir:
@@ -1518,7 +1514,7 @@ async def generate_streaming_response(
                     role_sent = True
                 
                 # Filter content if not in chat mode
-                if CHAT_MODE:
+                if is_chat_mode:
                     filtered_text = extracted_text
                 else:
                     filtered_text = MessageAdapter.filter_content(extracted_text)
@@ -1592,7 +1588,7 @@ async def generate_streaming_response(
         yield f"data: {json.dumps(error_chunk)}\n\n"
     finally:
         # Cleanup sandbox directory and session if in chat mode
-        if CHAT_MODE and sandbox_dir:
+        if is_chat_mode and sandbox_dir:
             # First cleanup Claude session file
             # Try to get session_id from claude_cli if we didn't get it from messages
             if not session_id and hasattr(claude_cli, 'get_last_session_id'):
@@ -1656,6 +1652,16 @@ async def chat_completions(
     try:
         request_id = f"chatcmpl-{os.urandom(8).hex()}"
         
+        # Parse model to determine chat mode
+        base_model, is_chat_mode = ModelUtils.parse_model_and_mode(request_body.model)
+        
+        # Update request to use base model
+        request_body.model = base_model
+        
+        # Log the mode
+        if is_chat_mode:
+            logger.info(f"Chat mode activated via model suffix for {base_model}")
+        
         # Extract Claude-specific parameters from headers
         claude_headers = ParameterValidator.extract_claude_headers(dict(request.headers))
         
@@ -1666,21 +1672,21 @@ async def chat_completions(
         
         if request_body.stream:
             # Return streaming response
-            if CHAT_MODE and SHOW_PROGRESS_MARKERS:
+            if is_chat_mode and SHOW_PROGRESS_MARKERS:
                 # In chat mode with progress markers enabled
                 logger.info("Chat mode: Wrapping stream with progress indicators")
                 stream_generator = stream_with_progress_injection(
-                    generate_streaming_response(request_body, request_id, claude_headers),
+                    generate_streaming_response(request_body, request_id, claude_headers, is_chat_mode),
                     request_id,
                     request_body.model
                 )
             elif not SHOW_PROGRESS_MARKERS:
                 # Progress markers disabled - show only final content
                 logger.info("Progress markers disabled: Streaming final content only")
-                stream_generator = stream_final_content_only(request_body, request_id, claude_headers)
+                stream_generator = stream_final_content_only(request_body, request_id, claude_headers, is_chat_mode)
             else:
                 # Normal mode - all chunks without progress injection
-                stream_generator = generate_streaming_response(request_body, request_id, claude_headers)
+                stream_generator = generate_streaming_response(request_body, request_id, claude_headers, is_chat_mode)
             
             return StreamingResponse(
                 stream_generator,
@@ -1693,7 +1699,7 @@ async def chat_completions(
         else:
             # Non-streaming response
             # In chat mode, skip session management
-            if CHAT_MODE:
+            if is_chat_mode:
                 all_messages = request_body.messages  # Keep as Message objects
                 actual_session_id = None
                 logger.info("Chat mode active - sessions disabled")
@@ -1709,7 +1715,7 @@ async def chat_completions(
             prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
             
             # Filter content (skip in chat mode to preserve XML)
-            if not CHAT_MODE:
+            if not is_chat_mode:
                 prompt = MessageAdapter.filter_content(prompt)
                 if system_prompt:
                     system_prompt = MessageAdapter.filter_content(system_prompt)
@@ -1728,7 +1734,7 @@ async def chat_completions(
                 ParameterValidator.validate_model(claude_options['model'])
             
             # Handle tools - disabled by default for OpenAI compatibility
-            if CHAT_MODE:
+            if is_chat_mode:
                 # Chat mode overrides all tool settings
                 logger.info("Chat mode: using restricted tool set")
                 claude_options['allowed_tools'] = ChatMode.get_allowed_tools()
@@ -1752,7 +1758,8 @@ async def chat_completions(
                 allowed_tools=claude_options.get('allowed_tools'),
                 disallowed_tools=claude_options.get('disallowed_tools'),
                 stream=False,
-                messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages]  # Convert to dicts for format detection
+                messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages],  # Convert to dicts for format detection
+                is_chat_mode=is_chat_mode
             ):
                 chunks.append(chunk)
             
@@ -1763,7 +1770,7 @@ async def chat_completions(
                 raise HTTPException(status_code=500, detail="No response from Claude Code")
             
             # Filter out tool usage and thinking blocks (skip in chat mode)
-            if CHAT_MODE:
+            if is_chat_mode:
                 # In chat mode, preserve the exact response format
                 assistant_content = raw_assistant_content
                 logger.debug(f"Chat mode: Preserving raw response format, length: {len(assistant_content)}")
@@ -1813,15 +1820,27 @@ async def list_models(
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
     
+    # Base models from ParameterValidator
+    base_models = list(ParameterValidator.SUPPORTED_MODELS)
+    
+    models_data = []
+    for base_model in sorted(base_models):
+        # Add base model (normal mode)
+        models_data.append({
+            "id": base_model,
+            "object": "model",
+            "owned_by": "anthropic"
+        })
+        # Add chat variant
+        models_data.append({
+            "id": ModelUtils.create_chat_variant(base_model),
+            "object": "model",
+            "owned_by": "anthropic"
+        })
+    
     return {
         "object": "list",
-        "data": [
-            {"id": "claude-sonnet-4-20250514", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-opus-4-20250514", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-3-7-sonnet-20250219", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-3-5-sonnet-20241022", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-3-5-haiku-20241022", "object": "model", "owned_by": "anthropic"},
-        ]
+        "data": models_data
     }
 
 
@@ -1931,9 +1950,9 @@ async def get_auth_status(request: Request):
     auth_info = get_claude_code_auth_info()
     active_api_key = auth_manager.get_api_key()
     
-    # Get sandbox cleanup info if in chat mode
+    # Get sandbox cleanup info
     sandbox_cleanup_info = None
-    if CHAT_MODE and CHAT_MODE_CLEANUP_SESSIONS:
+    if CHAT_MODE_CLEANUP_SESSIONS:
         tracker = get_tracker()
         sandbox_cleanup_info = {
             "enabled": True,
@@ -1947,7 +1966,7 @@ async def get_auth_status(request: Request):
             "api_key_required": bool(active_api_key),
             "api_key_source": "environment" if os.getenv("API_KEY") else ("runtime" if runtime_api_key else "none"),
             "version": "1.0.0",
-            "chat_mode": get_chat_mode_info(),
+            "chat_mode": get_chat_mode_info(False),  # Server-level info
             "progress_markers_enabled": SHOW_PROGRESS_MARKERS,
             "sandbox_cleanup": sandbox_cleanup_info
         }
@@ -1959,17 +1978,7 @@ async def get_session_stats(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Get session manager statistics."""
-    if CHAT_MODE:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": {
-                    "message": "Sessions are disabled in chat mode. Conversation continuity should be handled by your chat client.",
-                    "type": "invalid_request_error",
-                    "code": "chat_mode_active"
-                }
-            }
-        )
+    # Sessions are only disabled when using chat mode models
     stats = session_manager.get_stats()
     return {
         "session_stats": stats,
@@ -1983,17 +1992,7 @@ async def list_sessions(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """List all active sessions."""
-    if CHAT_MODE:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": {
-                    "message": "Sessions are disabled in chat mode. Conversation continuity should be handled by your chat client.",
-                    "type": "invalid_request_error",
-                    "code": "chat_mode_active"
-                }
-            }
-        )
+    # Sessions work normally - they're only disabled for chat mode models
     sessions = session_manager.list_sessions()
     return SessionListResponse(sessions=sessions, total=len(sessions))
 
@@ -2004,17 +2003,7 @@ async def get_session(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Get information about a specific session."""
-    if CHAT_MODE:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": {
-                    "message": "Sessions are disabled in chat mode. Conversation continuity should be handled by your chat client.",
-                    "type": "invalid_request_error",
-                    "code": "chat_mode_active"
-                }
-            }
-        )
+    # Sessions work normally - they're only disabled for chat mode models
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -2028,17 +2017,7 @@ async def delete_session(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Delete a specific session."""
-    if CHAT_MODE:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": {
-                    "message": "Sessions are disabled in chat mode. Conversation continuity should be handled by your chat client.",
-                    "type": "invalid_request_error",
-                    "code": "chat_mode_active"
-                }
-            }
-        )
+    # Sessions work normally - they're only disabled for chat mode models
     deleted = session_manager.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")

@@ -25,19 +25,14 @@ class ClaudeCodeCLI:
     def __init__(self, timeout: int = 600000, cwd: Optional[str] = None):
         self.timeout = timeout / 1000  # Convert ms to seconds
         
-        # Check if chat mode is enabled
-        self.chat_mode = ChatMode.is_enabled()
+        # Chat mode is determined per request, not at initialization
         self.format_detector = FormatDetector()
         self.prompts = ChatModePrompts()
         self.xml_detector = DeterministicXMLDetector()
         self.last_session_id = None  # Track session ID for cleanup
         
-        if self.chat_mode:
-            # In chat mode, we'll create sandbox directories per request
-            self.cwd = None
-            logger.info("Chat mode enabled - sessions disabled, sandbox execution active")
-        else:
-            self.cwd = Path(cwd) if cwd else Path.cwd()
+        # Default working directory - may be overridden in chat mode
+        self.cwd = Path(cwd) if cwd else Path.cwd()
         
         # Import auth manager
         from auth import auth_manager, validate_claude_code_auth
@@ -89,9 +84,9 @@ class ClaudeCodeCLI:
             return False
     
     
-    def _prepare_prompt_with_injections(self, prompt: str, messages: Optional[List[Dict]] = None) -> str:
+    def _prepare_prompt_with_injections(self, prompt: str, messages: Optional[List[Dict]] = None, is_chat_mode: bool = False) -> str:
         """Prepare prompt with system injections based on mode and format detection."""
-        logger.debug(f"Preparing prompt with injections, chat_mode={self.chat_mode}")
+        logger.debug(f"Preparing prompt with injections, is_chat_mode={is_chat_mode}")
         # Import MessageAdapter to use the format detection
         from message_adapter import MessageAdapter
         import re
@@ -117,7 +112,7 @@ class ClaudeCodeCLI:
             if xml_tool_names:
                 logger.info(f"   Tools: {', '.join(xml_tool_names)}")
             
-            if xml_required and self.chat_mode:
+            if xml_required and is_chat_mode:
                 # Layer 1: Prime at the beginning
                 pre_injections.append(
                     "ATTENTION: This conversation uses XML-formatted tools. "
@@ -164,7 +159,7 @@ class ClaudeCodeCLI:
                 post_injections.append(tool_instruction)
                 logger.info("XML ENFORCEMENT ACTIVE: Multi-layer XML response formatting enforcement applied")
                 logger.debug(f"Enforcement layers: pre={len(pre_injections)}, mid={len(mid_injections)}, post={len(post_injections)}")
-            elif self.chat_mode and not xml_required:
+            elif is_chat_mode and not xml_required:
                 # Only add full chat mode prompt if there are no XML requirements
                 pre_injections.append(self.prompts.CHAT_MODE_NO_FILES_PROMPT)
                 # Add completeness instruction for non-tool responses
@@ -192,7 +187,7 @@ class ClaudeCodeCLI:
                 final_prompt = final_prompt + "\n\n" + "\n\n".join(post_injections)
             
             # VERIFICATION: If we detected XML tools but no enforcement was added, add it now
-            if xml_required and self.chat_mode:
+            if xml_required and is_chat_mode:
                 # Check if XML enforcement is present in the final prompt
                 enforcement_present = any([
                     "CRITICAL - THIS IS MANDATORY" in final_prompt,
@@ -220,7 +215,7 @@ class ClaudeCodeCLI:
             final_parts = []
             
             # Add response reinforcement only in chat mode
-            if self.chat_mode:
+            if is_chat_mode:
                 prompt_parts.append(f"System: {self.prompts.RESPONSE_REINFORCEMENT_PROMPT}")
                 prompt_parts.append(f"System: {self.prompts.CHAT_MODE_NO_FILES_PROMPT}")
                 # Add completeness instruction
@@ -231,14 +226,14 @@ class ClaudeCodeCLI:
                 )
             
             # Add user prompt
-            if self.chat_mode:
+            if is_chat_mode:
                 prompt_parts.append(f"User: {prompt}")
             else:
                 # In normal mode, return prompt as-is
                 return prompt
             
             # Detect formats and add final reinforcement if we have messages (chat mode only)
-            if messages and self.chat_mode:
+            if messages and is_chat_mode:
                 has_tool_defs, has_json_req = self.format_detector.detect_special_formats(messages)
                 
                 final_reinforcement = self.prompts.get_final_reinforcement(has_tool_defs, has_json_req)
@@ -264,12 +259,13 @@ class ClaudeCodeCLI:
         disallowed_tools: Optional[List[str]] = None,
         session_id: Optional[str] = None,
         continue_session: bool = False,
-        messages: Optional[List[Dict]] = None
+        messages: Optional[List[Dict]] = None,
+        is_chat_mode: bool = False
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run Claude Code using the Python SDK and yield response chunks."""
         
         # In chat mode, override certain behaviors
-        if self.chat_mode:
+        if is_chat_mode:
             # Log if session parameters were provided
             if session_id or continue_session:
                 logger.warning("Session parameters ignored in chat mode - each request is stateless")
@@ -283,7 +279,7 @@ class ClaudeCodeCLI:
             
             # Prepare prompt with injections
             logger.debug(f"Original prompt length: {len(prompt)}")
-            enhanced_prompt = self._prepare_prompt_with_injections(prompt, messages)
+            enhanced_prompt = self._prepare_prompt_with_injections(prompt, messages, is_chat_mode)
             logger.debug(f"Enhanced prompt length: {len(enhanced_prompt)}")
             if enhanced_prompt != prompt:
                 logger.info(f"Prompt was enhanced with injections (added {len(enhanced_prompt) - len(prompt)} chars)")
@@ -329,7 +325,7 @@ class ClaudeCodeCLI:
             try:
                 # Execute in chat mode without environment sanitization
                 # The SDK needs auth env vars, but execution is still sandboxed via cwd
-                if self.chat_mode:
+                if is_chat_mode:
                     # Build SDK options with sandbox
                     options = ClaudeCodeOptions(
                         max_turns=max_turns,
@@ -415,7 +411,12 @@ class ClaudeCodeCLI:
                             logger.error("=== SDK EXECUTION FAILED ===")
                             raise
                 else:
-                    # Normal mode - existing logic
+                    # Normal mode - use default working directory
+                    cwd = self.cwd
+                    
+                    # Normal mode - no prompt injection for standard requests
+                    enhanced_prompt = prompt
+                    
                     options = ClaudeCodeOptions(
                         max_turns=max_turns,
                         cwd=cwd
@@ -532,17 +533,16 @@ class ClaudeCodeCLI:
         else:
             processed_msg = message
             
-        # Extract session ID from init messages in chat mode
-        if self.chat_mode:
-            if processed_msg.get("type") == "system" and processed_msg.get("subtype") == "init":
-                if "session_id" in processed_msg:
-                    self.last_session_id = processed_msg["session_id"]
-                    logger.info(f"Tracked Claude session ID: {self.last_session_id}")
-                elif "data" in processed_msg and isinstance(processed_msg["data"], dict):
-                    session_id = processed_msg["data"].get("session_id")
-                    if session_id:
-                        self.last_session_id = session_id
-                        logger.info(f"Tracked Claude session ID from data: {self.last_session_id}")
+        # Extract session ID from init messages (used for cleanup tracking)
+        if processed_msg.get("type") == "system" and processed_msg.get("subtype") == "init":
+            if "session_id" in processed_msg:
+                self.last_session_id = processed_msg["session_id"]
+                logger.info(f"Tracked Claude session ID: {self.last_session_id}")
+            elif "data" in processed_msg and isinstance(processed_msg["data"], dict):
+                session_id = processed_msg["data"].get("session_id")
+                if session_id:
+                    self.last_session_id = session_id
+                    logger.info(f"Tracked Claude session ID from data: {self.last_session_id}")
             
         return processed_msg
     

@@ -147,9 +147,8 @@ MAX_TIMEOUT=600000
 CORS_ORIGINS=["*"]
 
 # Chat Mode Configuration
-# Set to true to enable sandboxed execution with no file system access
-# This disables sessions and restricts tools to WebSearch and WebFetch only
-CHAT_MODE=false
+# Chat mode is activated per-request by using model names with -chat suffix
+# Example: claude-3-5-sonnet-20241022-chat
 
 # Chat Mode Session Cleanup
 # Set to false to disable automatic Claude Code session cleanup in chat mode
@@ -421,8 +420,7 @@ services:
       - MAX_TIMEOUT=${MAX_TIMEOUT:-600000}
       # CORS Configuration
       - CORS_ORIGINS=${CORS_ORIGINS:-["*"]}
-      # Chat Mode Configuration
-      - CHAT_MODE=${CHAT_MODE:-false}
+      # Chat Mode Session Cleanup Configuration
       - CHAT_MODE_CLEANUP_SESSIONS=${CHAT_MODE_CLEANUP_SESSIONS:-true}
       - CHAT_MODE_CLEANUP_DELAY_MINUTES=${CHAT_MODE_CLEANUP_DELAY_MINUTES:-720}
       # Progress Markers
@@ -471,7 +469,7 @@ Env vars override defaults and can be set at runtime with `-e` flags or in `dock
 
 - **Security and API Protection**:
   - `API_KEY=your-key`: Single API key required for endpoint access (clients must send `Authorization: Bearer <key>`). Leave unset for interactive prompt.
-  - `CHAT_MODE=true`: Enable chat mode for sandboxed execution with no file system access (disables sessions, restricts tools).
+  - Chat mode is activated per-request by using model names with `-chat` suffix (e.g., `claude-3-5-sonnet-20241022-chat`).
   - `CHAT_MODE_CLEANUP_SESSIONS=true`: Enable automatic Claude Code session cleanup in chat mode (default: true).
   - `CHAT_MODE_CLEANUP_DELAY_MINUTES=720`: Minutes to wait before cleanup (default: 720 = 12 hours). Set to 0 for immediate cleanup.
   - `SHOW_PROGRESS_MARKERS=false`: Disable streaming progress indicators (default: true). When false, buffers the entire response and only streams the final assistant message, filtering out all intermediate tool uses and preliminary responses.
@@ -775,17 +773,23 @@ The wrapper supports a secure **chat mode** that transforms Claude Code into a s
 
 ### Enabling Chat Mode
 
-Set the `CHAT_MODE` environment variable to enable secure chat mode:
+Chat mode is activated by using model names with the `-chat` suffix. The `/v1/models` endpoint lists both normal and chat variants of all supported models:
 
 ```bash
-# Enable chat mode
-export CHAT_MODE=true
-python main.py
+# Normal mode (full capabilities)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -d '{"model": "claude-3-5-sonnet-20241022", ...}'
+
+# Chat mode (sandboxed)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -d '{"model": "claude-3-5-sonnet-20241022-chat", ...}'
 ```
+
+This approach allows each request to independently choose its mode, providing maximum flexibility for different use cases.
 
 ### Chat Mode Features
 
-When chat mode is enabled:
+When using chat mode:
 
 - **No File System Access**: All file operations are completely blocked
 - **Limited Tools**: Only WebSearch, WebFetch, and Task tools are available
@@ -806,7 +810,7 @@ When chat mode is enabled:
 
 ### Important Notes
 
-- **Sessions Disabled**: When chat mode is active, all session endpoints return errors
+- **Sessions Disabled**: In chat mode, all session endpoints return errors
 - **Client Responsibility**: Chat clients should handle their own conversation continuity
 - **No Persistence**: Nothing is saved between requests
 - **Tool Override**: The `enable_tools` parameter is ignored; only chat mode tools are available
@@ -844,12 +848,24 @@ Claude Code tracks token usage at the session level. Each session file contains 
 ### Example Usage
 
 ```python
-# Chat mode automatically handles format detection for compatibility
+# Example showing dynamic mode selection per request
 import openai
 
 client = openai.OpenAI(
     base_url="http://localhost:8000/v1",
     api_key="your-api-key"
+)
+
+# Normal mode - full capabilities with file access
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",  # Normal mode
+    messages=[{"role": "user", "content": "Read the file README.md and summarize it"}]
+)
+
+# Chat mode - sandboxed without file access
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022-chat",  # Chat mode (note the -chat suffix)
+    messages=[{"role": "user", "content": "Explain quantum computing"}]
 )
 
 # Simple chat request - runs in complete isolation

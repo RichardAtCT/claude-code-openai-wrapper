@@ -1,10 +1,10 @@
 """
 Chat mode implementation for Claude Code OpenAI wrapper.
 
-This module provides secure sandboxed execution when CHAT_MODE=true,
-disabling file system access and limiting available tools. Sessions
-created in chat mode are automatically cleaned up to prevent them
-from appearing in Claude Code's /resume command.
+This module provides secure sandboxed execution when chat mode is activated
+via model name suffix (-chat), disabling file system access and limiting 
+available tools. Sessions created in chat mode are automatically cleaned up 
+to prevent them from appearing in Claude Code's /resume command.
 """
 
 import os
@@ -19,11 +19,6 @@ logger = logging.getLogger(__name__)
 
 class ChatMode:
     """Core chat mode functionality."""
-    
-    @staticmethod
-    def is_enabled() -> bool:
-        """Check if chat mode is enabled via environment variable."""
-        return os.getenv('CHAT_MODE', 'false').lower() == 'true'
     
     @staticmethod
     def get_allowed_tools() -> List[str]:
@@ -79,10 +74,17 @@ def sanitized_environment():
             logger.debug(f"Restored environment variable: {var}")
 
 
-def get_chat_mode_info() -> Dict[str, Any]:
-    """Get current chat mode configuration and status."""
+def get_chat_mode_info(is_chat_mode: bool = False) -> Dict[str, Any]:
+    """Get current chat mode configuration and status.
+    
+    Args:
+        is_chat_mode: Whether chat mode is currently active for the request
+        
+    Returns:
+        Dict containing chat mode configuration
+    """
     return {
-        "enabled": ChatMode.is_enabled(),
+        "enabled": is_chat_mode,
         "allowed_tools": ChatMode.get_allowed_tools(),
         "sandbox_enabled": True,
         "sessions_disabled": True,
