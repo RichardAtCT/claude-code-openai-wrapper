@@ -25,9 +25,6 @@ services:
       # Chat Mode Session Cleanup Configuration
       - CHAT_MODE_CLEANUP_SESSIONS=${CHAT_MODE_CLEANUP_SESSIONS:-true}
       - CHAT_MODE_CLEANUP_DELAY_MINUTES=${CHAT_MODE_CLEANUP_DELAY_MINUTES:-720}
-      # Progress Markers
-      - SHOW_PROGRESS_MARKERS=${SHOW_PROGRESS_MARKERS:-true}
-      - PROGRESS_STYLE=${PROGRESS_STYLE:-text}
       # SSE Keep-alive
       - SSE_KEEPALIVE_INTERVAL=${SSE_KEEPALIVE_INTERVAL:-30}
       # Rate Limiting Configuration

@@ -30,13 +30,13 @@ class ParameterValidator:
         """Validate that the model is supported by Claude Code SDK.
         
         Args:
-            model: Model name, potentially with -chat suffix
+            model: Model name, potentially with -chat or -chat-progress suffix
             
         Returns:
             bool: True if the base model is supported
         """
         # Extract base model for validation
-        base_model, _ = ModelUtils.parse_model_and_mode(model)
+        base_model, _, _ = ModelUtils.parse_model_and_mode(model)
         
         if base_model not in cls.SUPPORTED_MODELS:
             logger.warning(f"Model '{base_model}' may not be supported by Claude Code SDK. Supported models: {cls.SUPPORTED_MODELS}")

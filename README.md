@@ -147,8 +147,10 @@ MAX_TIMEOUT=600000
 CORS_ORIGINS=["*"]
 
 # Chat Mode Configuration
-# Chat mode is activated per-request by using model names with -chat suffix
-# Example: claude-3-5-sonnet-20241022-chat
+# Chat mode is activated per-request by using model names with suffixes:
+# -chat: Enable chat mode (no progress markers)
+# -chat-progress: Enable chat mode with streaming progress indicators
+# Example: claude-3-5-sonnet-20241022-chat-progress
 
 # Chat Mode Session Cleanup
 # Set to false to disable automatic Claude Code session cleanup in chat mode
@@ -162,11 +164,6 @@ CHAT_MODE_CLEANUP_SESSIONS=true
 # sessions should persist long enough to capture complete usage data.
 # 12 hours ensures sessions span daily usage boundaries for better tracking.
 CHAT_MODE_CLEANUP_DELAY_MINUTES=720
-
-# Progress Markers Configuration
-# Set to true to show progress indicators during streaming (⏳ followed by rotating circles ◐◓◑◒ with dots ·)
-# Set to false to buffer and only stream the final response (filters out all intermediate tool uses)
-SHOW_PROGRESS_MARKERS=true
 
 # SSE Keep-alive Configuration
 # Interval in seconds between SSE keepalive comments to prevent connection timeouts
@@ -224,20 +221,24 @@ poetry run python main.py
 
 ### 📊 **Progress Markers**
 
-Control streaming progress indicators for long-running operations:
+Control streaming progress indicators through model name suffixes:
 
-- **Enabled by default** (`SHOW_PROGRESS_MARKERS=true`)
-  - Shows progress messages like "Working on it", "Still processing", "Crafting your response"
+- **Chat mode with progress markers** (`model-name-chat-progress`)
+  - Shows initial hourglass (⏳) followed by rotating circles (◐ ◓ ◑ ◒) with dots
   - Uses exponential backoff to avoid being too chatty
-  - Perfect for user-facing applications where feedback is important
+  - Perfect for user-facing applications where visual feedback is important
 
-- **Disable for cleaner output** (`SHOW_PROGRESS_MARKERS=false`)
-  - **Only streams the final response** without any intermediate content
-  - Filters out ALL intermediate tool uses, thinking steps, and preliminary responses
-  - Waits for completion then sends only the final assistant message
+- **Chat mode without progress markers** (`model-name-chat`)
+  - **IMPORTANT**: Only streams the final assistant response - all intermediate content is filtered out
+  - Completely removes:
+    - Tool use messages and results
+    - Intermediate reasoning steps
+    - Multiple assistant messages (only the final one is sent)
+    - Any SDK internal messages
+  - Waits for Claude to complete all processing before streaming begins
   - SSE keepalives are sent every `SSE_KEEPALIVE_INTERVAL` seconds during SDK buffering
-  - Ideal for programmatic usage or when you only need the final result
-  - Note: This buffers the entire response, so initial latency will be higher
+  - Ideal for programmatic usage when you need clean, final responses only
+  - Note: Higher initial latency due to buffering, but cleaner output
 
 ### 🔄 **SSE Keepalive Configuration**
 
@@ -423,8 +424,6 @@ services:
       # Chat Mode Session Cleanup Configuration
       - CHAT_MODE_CLEANUP_SESSIONS=${CHAT_MODE_CLEANUP_SESSIONS:-true}
       - CHAT_MODE_CLEANUP_DELAY_MINUTES=${CHAT_MODE_CLEANUP_DELAY_MINUTES:-720}
-      # Progress Markers
-      - SHOW_PROGRESS_MARKERS=${SHOW_PROGRESS_MARKERS:-true}
       # SSE Keep-alive
       - SSE_KEEPALIVE_INTERVAL=${SSE_KEEPALIVE_INTERVAL:-30}
       # Rate Limiting Configuration
@@ -469,10 +468,11 @@ Env vars override defaults and can be set at runtime with `-e` flags or in `dock
 
 - **Security and API Protection**:
   - `API_KEY=your-key`: Single API key required for endpoint access (clients must send `Authorization: Bearer <key>`). Leave unset for interactive prompt.
-  - Chat mode is activated per-request by using model names with `-chat` suffix (e.g., `claude-3-5-sonnet-20241022-chat`).
+  - Chat mode is activated per-request by using model names with suffixes:
+    - `-chat`: Enable chat mode without progress markers
+    - `-chat-progress`: Enable chat mode with streaming progress indicators
   - `CHAT_MODE_CLEANUP_SESSIONS=true`: Enable automatic Claude Code session cleanup in chat mode (default: true).
   - `CHAT_MODE_CLEANUP_DELAY_MINUTES=720`: Minutes to wait before cleanup (default: 720 = 12 hours). Set to 0 for immediate cleanup.
-  - `SHOW_PROGRESS_MARKERS=false`: Disable streaming progress indicators (default: true). When false, buffers the entire response and only streams the final assistant message, filtering out all intermediate tool uses and preliminary responses.
   - `SSE_KEEPALIVE_INTERVAL=30`: Interval in seconds for sending SSE keepalive comments to prevent connection timeouts (default: 30).
 
 - **Rate Limiting Configuration**:
@@ -773,19 +773,23 @@ The wrapper supports a secure **chat mode** that transforms Claude Code into a s
 
 ### Enabling Chat Mode
 
-Chat mode is activated by using model names with the `-chat` suffix. The `/v1/models` endpoint lists both normal and chat variants of all supported models:
+Chat mode is activated by using model names with suffixes. The `/v1/models` endpoint lists all variants of supported models:
 
 ```bash
 # Normal mode (full capabilities)
 curl -X POST http://localhost:8000/v1/chat/completions \
   -d '{"model": "claude-3-5-sonnet-20241022", ...}'
 
-# Chat mode (sandboxed)
+# Chat mode without progress markers (clean output)
 curl -X POST http://localhost:8000/v1/chat/completions \
   -d '{"model": "claude-3-5-sonnet-20241022-chat", ...}'
+
+# Chat mode with progress markers (user-friendly feedback)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -d '{"model": "claude-3-5-sonnet-20241022-chat-progress", ...}'
 ```
 
-This approach allows each request to independently choose its mode, providing maximum flexibility for different use cases.
+This approach allows each request to independently choose its mode and streaming behavior, providing maximum flexibility for different use cases.
 
 ### Chat Mode Features
 

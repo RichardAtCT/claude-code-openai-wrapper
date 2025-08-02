@@ -45,7 +45,6 @@ load_dotenv()
 # Configure logging based on debug mode
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() in ('true', '1', 'yes', 'on')
 VERBOSE = os.getenv('VERBOSE', 'false').lower() in ('true', '1', 'yes', 'on')
-SHOW_PROGRESS_MARKERS = os.getenv('SHOW_PROGRESS_MARKERS', 'true').lower() in ('true', '1', 'yes', 'on')
 SSE_KEEPALIVE_INTERVAL = int(os.getenv('SSE_KEEPALIVE_INTERVAL', '30'))  # seconds
 CHAT_MODE_CLEANUP_SESSIONS = os.getenv('CHAT_MODE_CLEANUP_SESSIONS', 'true').lower() in ('true', '1', 'yes', 'on')
 CHAT_MODE_CLEANUP_DELAY_MINUTES = int(os.getenv('CHAT_MODE_CLEANUP_DELAY_MINUTES', '720'))  # 12 hours default
@@ -227,7 +226,6 @@ async def lifespan(app: FastAPI):
         logger.debug(f"🔧 Environment variables:")
         logger.debug(f"   DEBUG_MODE: {DEBUG_MODE}")
         logger.debug(f"   VERBOSE: {VERBOSE}")
-        logger.debug(f"   SHOW_PROGRESS_MARKERS: {SHOW_PROGRESS_MARKERS}")
         logger.debug(f"   PORT: {os.getenv('PORT', '8000')}")
         logger.debug(f"   CORS_ORIGINS: {os.getenv('CORS_ORIGINS', '[\"*\"]')}")
         logger.debug(f"   MAX_TIMEOUT: {os.getenv('MAX_TIMEOUT', '600000')}")
@@ -1652,15 +1650,18 @@ async def chat_completions(
     try:
         request_id = f"chatcmpl-{os.urandom(8).hex()}"
         
-        # Parse model to determine chat mode
-        base_model, is_chat_mode = ModelUtils.parse_model_and_mode(request_body.model)
+        # Parse model to determine chat mode and progress markers
+        base_model, is_chat_mode, show_progress_markers = ModelUtils.parse_model_and_mode(request_body.model)
         
         # Update request to use base model
         request_body.model = base_model
         
         # Log the mode
         if is_chat_mode:
-            logger.info(f"Chat mode activated via model suffix for {base_model}")
+            if show_progress_markers:
+                logger.info(f"Chat mode with progress markers activated via model suffix for {base_model}")
+            else:
+                logger.info(f"Chat mode activated via model suffix for {base_model}")
         
         # Extract Claude-specific parameters from headers
         claude_headers = ParameterValidator.extract_claude_headers(dict(request.headers))
@@ -1672,15 +1673,15 @@ async def chat_completions(
         
         if request_body.stream:
             # Return streaming response
-            if is_chat_mode and SHOW_PROGRESS_MARKERS:
-                # In chat mode with progress markers enabled
+            if is_chat_mode and show_progress_markers:
+                # Chat mode with progress markers enabled
                 logger.info("Chat mode: Wrapping stream with progress indicators")
                 stream_generator = stream_with_progress_injection(
                     generate_streaming_response(request_body, request_id, claude_headers, is_chat_mode),
                     request_id,
                     request_body.model
                 )
-            elif not SHOW_PROGRESS_MARKERS:
+            elif not show_progress_markers:
                 # Progress markers disabled - show only final content
                 logger.info("Progress markers disabled: Streaming final content only")
                 stream_generator = stream_final_content_only(request_body, request_id, claude_headers, is_chat_mode)
@@ -1831,9 +1832,15 @@ async def list_models(
             "object": "model",
             "owned_by": "anthropic"
         })
-        # Add chat variant
+        # Add chat variant (without progress markers)
         models_data.append({
             "id": ModelUtils.create_chat_variant(base_model),
+            "object": "model",
+            "owned_by": "anthropic"
+        })
+        # Add chat-progress variant (with progress markers)
+        models_data.append({
+            "id": ModelUtils.create_chat_progress_variant(base_model),
             "object": "model",
             "owned_by": "anthropic"
         })
@@ -1967,7 +1974,6 @@ async def get_auth_status(request: Request):
             "api_key_source": "environment" if os.getenv("API_KEY") else ("runtime" if runtime_api_key else "none"),
             "version": "1.0.0",
             "chat_mode": get_chat_mode_info(False),  # Server-level info
-            "progress_markers_enabled": SHOW_PROGRESS_MARKERS,
             "sandbox_cleanup": sandbox_cleanup_info
         }
     }
