@@ -16,6 +16,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - ✅ **Real-time cost and token tracking** from SDK
 - ✅ **Session continuity** with conversation history across requests 🆕
 - ✅ **Session management endpoints** for full session control 🆕
+- ✅ **Chat mode** for sandboxed, secure chat-only operation 🔒
 - ✅ Health, auth status, and models endpoints
 - ✅ **Development mode** with auto-reload
 
@@ -45,6 +46,8 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - **System prompt support** via SDK options
 - **Optional tool usage** - Enable Claude Code tools (Read, Write, Bash, etc.) when needed
 - **Fast default mode** - Tools disabled by default for OpenAI API compatibility
+- **Chat mode** - Sandboxed execution with no file system access for secure chat APIs
+- **Progress markers** - Optional streaming progress indicators ("Working on it...", "Still processing...") with exponential backoff
 - **Development mode** with auto-reload (`uvicorn --reload`)
 - **Interactive API key protection** - Optional security with auto-generated tokens
 - **Comprehensive logging** and debugging capabilities
@@ -128,21 +131,53 @@ poetry run python test_endpoints.py
 Edit the `.env` file:
 
 ```env
-# Claude CLI path (usually just "claude")
+# Claude CLI Configuration
 CLAUDE_CLI_PATH=claude
 
-# Optional API key for client authentication
-# If not set, server will prompt for interactive API key protection on startup
-# API_KEY=your-optional-api-key
-
-# Server port
+# API Configuration
+# If API_KEY is not set, server will prompt for interactive API key protection on startup
+# Leave commented out to enable interactive prompt, or uncomment to use a fixed API key
+# API_KEY=your-optional-api-key-here
 PORT=8000
 
-# Timeout in milliseconds
+# Timeout Configuration (milliseconds)
 MAX_TIMEOUT=600000
 
-# CORS origins
+# CORS Configuration
 CORS_ORIGINS=["*"]
+
+# Chat Mode Configuration
+# Chat mode is activated per-request by using model names with suffixes:
+# -chat: Enable chat mode (no progress markers)
+# -chat-progress: Enable chat mode with streaming progress indicators
+# Example: claude-3-5-sonnet-20241022-chat-progress
+
+# Chat Mode Session Cleanup
+# Set to false to disable automatic Claude Code session cleanup in chat mode
+# When disabled, sessions will appear in Claude's /resume command
+CHAT_MODE_CLEANUP_SESSIONS=true
+
+# Cleanup delay in minutes (default: 720 = 12 hours)
+# Sessions are tracked and cleaned up after this delay
+# Set to 0 for immediate cleanup after request completion
+# Note: Claude Code tracks token usage per session. For accurate usage monitoring,
+# sessions should persist long enough to capture complete usage data.
+# 12 hours ensures sessions span daily usage boundaries for better tracking.
+CHAT_MODE_CLEANUP_DELAY_MINUTES=720
+
+# SSE Keep-alive Configuration
+# Interval in seconds between SSE keepalive comments to prevent connection timeouts
+# These are invisible comments (lines starting with ':') that keep the connection alive
+SSE_KEEPALIVE_INTERVAL=30
+
+# Rate Limiting Configuration
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_PER_MINUTE=30
+RATE_LIMIT_CHAT_PER_MINUTE=10
+RATE_LIMIT_DEBUG_PER_MINUTE=2
+RATE_LIMIT_AUTH_PER_MINUTE=10
+RATE_LIMIT_SESSION_PER_MINUTE=15
+RATE_LIMIT_HEALTH_PER_MINUTE=30
 ```
 
 ### 🔐 **API Security Configuration**
@@ -183,6 +218,50 @@ poetry run python main.py
 - 🏠 **Local development** - No authentication needed
 - 🌐 **Remote access** - Secure with generated tokens
 - 🔒 **VPN/Tailscale** - Add security layer for remote endpoints
+
+### 📊 **Progress Markers**
+
+Control streaming progress indicators through model name suffixes:
+
+- **Chat mode with progress markers** (`model-name-chat-progress`)
+  - Shows initial hourglass (⏳) followed by rotating circles (◐ ◓ ◑ ◒) with dots
+  - Uses exponential backoff to avoid being too chatty
+  - Perfect for user-facing applications where visual feedback is important
+
+- **Chat mode without progress markers** (`model-name-chat`)
+  - **IMPORTANT**: Only streams the final assistant response - all intermediate content is filtered out
+  - Completely removes:
+    - Tool use messages and results
+    - Intermediate reasoning steps
+    - Multiple assistant messages (only the final one is sent)
+    - Any SDK internal messages
+  - Waits for Claude to complete all processing before streaming begins
+  - SSE keepalives are sent every `SSE_KEEPALIVE_INTERVAL` seconds during SDK buffering
+  - Ideal for programmatic usage when you need clean, final responses only
+  - Note: Higher initial latency due to buffering, but cleaner output
+
+### 🔄 **SSE Keepalive Configuration**
+
+Prevents connection timeouts during long-running requests by sending invisible keepalive comments:
+
+- **Default interval**: 30 seconds (`SSE_KEEPALIVE_INTERVAL=30`)
+- **How it works**: Sends SSE comments (lines starting with `:`) that are automatically ignored by clients
+- **When it's used**: During any pause in streaming longer than the configured interval
+- **Invisible to clients**: Keepalive comments don't appear in the response content
+
+This feature ensures that:
+- Long Claude processing times don't cause connection timeouts
+- Proxies and load balancers don't close "idle" connections
+- Works identically in both progress marker modes:
+  - With progress markers: Keepalives sent between progress updates
+  - Without progress markers: Keepalives sent during SDK response buffering
+- Connections remain active even when the SDK takes time to respond
+
+The progress indicators use universal, language-agnostic symbols:
+- Starts with ⏳ (hourglass) to indicate processing has begun
+- Transitions to rotating circles (◐ ◓ ◑ ◒) for ongoing progress
+- Adds dots (·) incrementally to show continued activity
+- Example progression: ⏳ → ⏳· → ◐ → ◐· → ◐·· → ◓ → ◓·
 
 ### 🛡️ **Rate Limiting**
 
@@ -295,12 +374,14 @@ For stable, background operation:
 ```bash
 docker run -d -p 8000:8000 \
   -v ~/.claude:/root/.claude \
+  -v ~/.claude-wrapper:/root/.claude-wrapper \
   --name claude-wrapper-container \
   claude-wrapper:latest
 ```
 - `-d`: Detached mode (runs in background).
 - `-p 8000:8000`: Maps host port 8000 to the container's 8000 (change left side for host conflicts, e.g., `-p 9000:8000`).
 - `-v ~/.claude:/root/.claude`: Mounts your host's authentication directory for persistent subscription tokens (essential for Claude Max access).
+- `-v ~/.claude-wrapper:/root/.claude-wrapper`: Mounts session tracking directory for chat mode cleanup functionality.
 - `--name claude-wrapper-container`: Names the container for easy management.
 
 ### Development Run with Hot Reload
@@ -308,6 +389,7 @@ For coding/debugging (auto-reloads on file changes):
 ```bash
 docker run -d -p 8000:8000 \
   -v ~/.claude:/root/.claude \
+  -v ~/.claude-wrapper:/root/.claude-wrapper \
   -v $(pwd):/app \
   --name claude-wrapper-container \
   claude-wrapper:latest \
@@ -319,7 +401,7 @@ docker run -d -p 8000:8000 \
 ### Using Docker Compose for Simplified Runs
 Create or use an existing `docker-compose.yml` in the root for declarative configuration:
 ```yaml
-version: '3.8'
+version: '3'
 services:
   claude-wrapper:
     build: .
@@ -327,11 +409,33 @@ services:
       - "8000:8000"
     volumes:
       - ~/.claude:/root/.claude
-      - .:/app  # Optional for dev
+      - ~/.claude-wrapper:/root/.claude-wrapper  # For session tracking
+      # - .:/app  # Optional for dev - uncomment to mount code for hot reload
     environment:
-      - PORT=8000
-      - MAX_TIMEOUT=600
-    command: ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]  # Dev example
+      # Claude CLI Configuration
+      - CLAUDE_CLI_PATH=${CLAUDE_CLI_PATH:-claude}
+      # API Configuration
+      - PORT=${PORT:-8000}
+      - API_KEY=${API_KEY:-}
+      # Timeout Configuration
+      - MAX_TIMEOUT=${MAX_TIMEOUT:-600000}
+      # CORS Configuration
+      - CORS_ORIGINS=${CORS_ORIGINS:-["*"]}
+      # Chat Mode Session Cleanup Configuration
+      - CHAT_MODE_CLEANUP_SESSIONS=${CHAT_MODE_CLEANUP_SESSIONS:-true}
+      - CHAT_MODE_CLEANUP_DELAY_MINUTES=${CHAT_MODE_CLEANUP_DELAY_MINUTES:-720}
+      # SSE Keep-alive
+      - SSE_KEEPALIVE_INTERVAL=${SSE_KEEPALIVE_INTERVAL:-30}
+      # Rate Limiting Configuration
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
+      - RATE_LIMIT_CHAT_PER_MINUTE=${RATE_LIMIT_CHAT_PER_MINUTE:-10}
+      - RATE_LIMIT_DEBUG_PER_MINUTE=${RATE_LIMIT_DEBUG_PER_MINUTE:-2}
+      - RATE_LIMIT_AUTH_PER_MINUTE=${RATE_LIMIT_AUTH_PER_MINUTE:-10}
+      - RATE_LIMIT_SESSION_PER_MINUTE=${RATE_LIMIT_SESSION_PER_MINUTE:-15}
+      - RATE_LIMIT_HEALTH_PER_MINUTE=${RATE_LIMIT_HEALTH_PER_MINUTE:-30}
+    # Dev example with hot reload - uncomment the line below and comment out the default CMD in Dockerfile
+    # command: ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     restart: unless-stopped
 ```
 - Run: `docker-compose up -d` (builds if needed, runs detached).
@@ -351,8 +455,10 @@ Customize the container's behavior through environment variables, volumes, and r
 Env vars override defaults and can be set at runtime with `-e` flags or in `docker-compose.yml` under `environment`. They control auth, server settings, and SDK behavior.
 
 - **Core Server Settings**:
+  - `CLAUDE_CLI_PATH=claude`: Path to Claude CLI executable (default: claude).
   - `PORT=9000`: Changes the internal listening port (default: 8000; update port mapping accordingly).
-  - `MAX_TIMEOUT=600`: Sets the request timeout in seconds (default: 300; increase for complex Claude queries).
+  - `MAX_TIMEOUT=600000`: Sets the request timeout in milliseconds (default: 600000 = 10 minutes; increase for complex Claude queries).
+  - `CORS_ORIGINS=["*"]`: CORS allowed origins (default: ["*"] allows all origins).
 
 - **Authentication and Providers**:
   - `ANTHROPIC_API_KEY=sk-your-key`: Enables direct API key auth (overrides subscription; generate at console.anthropic.com).
@@ -361,7 +467,22 @@ Env vars override defaults and can be set at runtime with `-e` flags or in `dock
   - `CLAUDE_USE_SUBSCRIPTION=true`: Forces subscription mode (default behavior; set to ensure no API fallback).
 
 - **Security and API Protection**:
-  - `API_KEYS=key1,key2`: Comma-separated list of API keys required for endpoint access (clients must send `Authorization: Bearer <key>`).
+  - `API_KEY=your-key`: Single API key required for endpoint access (clients must send `Authorization: Bearer <key>`). Leave unset for interactive prompt.
+  - Chat mode is activated per-request by using model names with suffixes:
+    - `-chat`: Enable chat mode without progress markers
+    - `-chat-progress`: Enable chat mode with streaming progress indicators
+  - `CHAT_MODE_CLEANUP_SESSIONS=true`: Enable automatic Claude Code session cleanup in chat mode (default: true).
+  - `CHAT_MODE_CLEANUP_DELAY_MINUTES=720`: Minutes to wait before cleanup (default: 720 = 12 hours). Set to 0 for immediate cleanup.
+  - `SSE_KEEPALIVE_INTERVAL=30`: Interval in seconds for sending SSE keepalive comments to prevent connection timeouts (default: 30).
+
+- **Rate Limiting Configuration**:
+  - `RATE_LIMIT_ENABLED=true`: Enable rate limiting for all endpoints (default: true).
+  - `RATE_LIMIT_PER_MINUTE=30`: General rate limit per minute (default: 30).
+  - `RATE_LIMIT_CHAT_PER_MINUTE=10`: Chat completions rate limit per minute (default: 10).
+  - `RATE_LIMIT_DEBUG_PER_MINUTE=2`: Debug endpoint rate limit per minute (default: 2).
+  - `RATE_LIMIT_AUTH_PER_MINUTE=10`: Auth endpoint rate limit per minute (default: 10).
+  - `RATE_LIMIT_SESSION_PER_MINUTE=15`: Session endpoint rate limit per minute (default: 15).
+  - `RATE_LIMIT_HEALTH_PER_MINUTE=30`: Health check rate limit per minute (default: 30).
 
 - **Custom/Advanced Vars**:
   - `MAX_THINKING_TOKENS=4096`: Custom token budget for extended thinking (if implemented in code; e.g., for `budget_tokens` in SDK calls).
@@ -379,6 +500,7 @@ For persistence across runs, use a `.env` file in the root (e.g., `PORT=8000`) a
 Volumes mount host directories/files into the container, enabling persistence and config overrides.
 
 - **Authentication Volume (Required for Subscriptions)**: `-v ~/.claude:/root/.claude` – Shares tokens and `settings.json` (edit on host for defaults like `"max_tokens": 8192`; restart container to apply).
+- **Session Tracking Volume**: `-v ~/.claude-wrapper:/root/.claude-wrapper` – Stores session tracking data for chat mode cleanup functionality.
 - **Code Volume (Dev Only)**: `-v $(pwd):/app` – Allows live edits without rebuilds.
 - **Custom Config Volumes**: 
   - Mount a custom config: `-v /path/to/custom.json:/app/config/custom.json` (load in code).
@@ -645,6 +767,152 @@ curl -X DELETE http://localhost:8000/v1/sessions/my-session
 
 See `examples/session_continuity.py` for comprehensive Python examples and `examples/session_curl_example.sh` for curl examples.
 
+## Chat Mode 🔒
+
+The wrapper supports a secure **chat mode** that transforms Claude Code into a sandboxed, chat-only AI with no file system access. This mode is perfect for exposing Claude as a general-purpose chat API while ensuring complete security isolation.
+
+### Enabling Chat Mode
+
+Chat mode is activated by using model names with suffixes. The `/v1/models` endpoint lists all variants of supported models:
+
+```bash
+# Normal mode (full capabilities)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -d '{"model": "claude-3-5-sonnet-20241022", ...}'
+
+# Chat mode without progress markers (clean output)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -d '{"model": "claude-3-5-sonnet-20241022-chat", ...}'
+
+# Chat mode with progress markers (user-friendly feedback)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -d '{"model": "claude-3-5-sonnet-20241022-chat-progress", ...}'
+```
+
+This approach allows each request to independently choose its mode and streaming behavior, providing maximum flexibility for different use cases.
+
+### Chat Mode Features
+
+When using chat mode:
+
+- **No File System Access**: All file operations are completely blocked
+- **Limited Tools**: Only WebSearch, WebFetch, and Task tools are available
+- **Sandboxed Execution**: Each request runs in an isolated temporary directory
+- **No Sessions**: Sessions are automatically disabled (clients should manage conversation state)
+- **Format Support**: Automatic detection and support for XML tool formats and JSON responses
+- **Prompt Engineering**: Multiple system prompts ensure chat-only behavior
+- **Automatic Cleanup**: Session files created by Claude Code are automatically removed after each request
+
+### Security Properties
+
+- **Complete Isolation**: Each request is stateless and runs in a fresh sandbox
+- **Path Hiding**: Environment variables that could reveal system paths are removed
+- **Tool Restrictions**: Only web-based tools allowed, no local system access
+- **Automatic Cleanup**: Temporary sandbox directories are cleaned immediately; Claude Code session files are cleaned based on configured delay
+- **Time-Based Cleanup**: Sessions are tracked and cleaned after a delay (default: 12 hours for complete usage tracking)
+- **No Session Persistence**: Sessions are removed after the delay period (configurable via `CHAT_MODE_CLEANUP_SESSIONS` and `CHAT_MODE_CLEANUP_DELAY_MINUTES`)
+
+### Important Notes
+
+- **Sessions Disabled**: In chat mode, all session endpoints return errors
+- **Client Responsibility**: Chat clients should handle their own conversation continuity
+- **No Persistence**: Nothing is saved between requests
+- **Tool Override**: The `enable_tools` parameter is ignored; only chat mode tools are available
+
+### Session Cleanup Configuration
+
+The wrapper provides flexible session cleanup options:
+
+- **`CHAT_MODE_CLEANUP_SESSIONS`**: Master on/off switch for session cleanup (default: `true`)
+- **`CHAT_MODE_CLEANUP_DELAY_MINUTES`**: Minutes to wait before cleanup (default: `720` = 12 hours)
+  - Set to `0` for immediate cleanup after request completion
+  - Sessions are tracked and cleaned up by a background task
+  - On startup, old sessions exceeding the delay are automatically cleaned
+
+### Token Usage Tracking and Monitoring
+
+Claude Code tracks token usage at the session level. Each session file contains the complete token consumption data for all requests within that session. This has important implications for usage monitoring:
+
+- **Token Usage Aggregation**: Claude Code aggregates token usage per session, not per request
+- **Daily Usage Tracking**: For accurate daily token consumption reports, sessions should persist across usage periods
+- **12-Hour Default**: The 12-hour delay ensures sessions span daily usage boundaries, capturing complete usage patterns
+- **Monitoring Tools**: Usage tracking dashboards and cost analysis tools need access to session files to calculate token consumption
+
+### Monitoring Considerations
+
+- **With delayed cleanup** (default 12 hours): Sessions remain available long enough for monitoring tools to capture complete daily usage data
+- **Immediate cleanup** (`CHAT_MODE_CLEANUP_DELAY_MINUTES=0`): May result in incomplete usage statistics as sessions are deleted before aggregation
+- **To preserve logs indefinitely**: Set `CHAT_MODE_CLEANUP_SESSIONS=false` - sessions accumulate but provide complete historical data
+- **Recommended for monitoring**: Use at least 12-24 hours delay to ensure usage data spans daily boundaries
+
+### Important Note on Existing Sessions
+
+**Currently, sessions created while `CHAT_MODE_CLEANUP_SESSIONS=false` will NOT be automatically cleaned up when switching to `CHAT_MODE_CLEANUP_SESSIONS=true`.** Only new sessions created after enabling cleanup will be tracked and cleaned. To manually clean old sessions, you'll need to delete them from `~/.claude/projects/` directories containing "claude-chat-sandbox" in their names.
+
+### Example Usage
+
+```python
+# Example showing dynamic mode selection per request
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="your-api-key"
+)
+
+# Normal mode - full capabilities with file access
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",  # Normal mode
+    messages=[{"role": "user", "content": "Read the file README.md and summarize it"}]
+)
+
+# Chat mode - sandboxed without file access
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022-chat",  # Chat mode (note the -chat suffix)
+    messages=[{"role": "user", "content": "Explain quantum computing"}]
+)
+
+# Simple chat request - runs in complete isolation
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[
+        {"role": "user", "content": "Write a Python function to calculate fibonacci numbers"}
+    ]
+)
+# Claude will output the code in markdown blocks, cannot create files
+
+# XML tool format automatically detected and supported
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet-20241022",
+    messages=[
+        {"role": "system", "content": "Tool uses are formatted using XML-style tags..."},
+        {"role": "user", "content": "Search for information about Python asyncio"}
+    ]
+)
+# Claude will use the XML format if provided by the client
+```
+
+### Chat Mode vs Normal Mode
+
+| Feature | Normal Mode | Chat Mode |
+|---------|------------|-----------|
+| File Operations | ✅ Available (when enabled) | ❌ Blocked |
+| System Commands | ✅ Available (when enabled) | ❌ Blocked |
+| Web Tools | ✅ Available | ✅ Available |
+| Sessions | ✅ Supported | ❌ Disabled |
+| Working Directory | Project directory | Temporary sandbox |
+| Environment | Full environment | Sanitized environment |
+
+### Use Cases
+
+Chat mode is ideal for:
+- **AI Coding Assistants**: Integration with tools like Roo Code, Cline, Cursor, and other AI coding assistants that expect OpenAI-compatible APIs
+- **Public APIs**: Safely expose Claude as a chat service
+- **Chat Applications**: Integration with chat clients that manage their own state
+- **Restricted Environments**: When you need Claude's capabilities without system access
+- **Multi-tenant Services**: Ensure complete isolation between requests
+- **Development Tools**: IDEs and extensions that need AI assistance without file system access
+
 ## API Endpoints
 
 ### Core Endpoints
@@ -700,6 +968,8 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 3. **Timeout errors**:
    - Increase `MAX_TIMEOUT` in `.env`
    - Note: Claude Code can take time for complex requests
+   - SSE keepalive comments are sent every 30 seconds (configurable via `SSE_KEEPALIVE_INTERVAL`)
+   - If you see connection timeouts after ~60 seconds, check your proxy/load balancer settings
 
 ## Testing
 

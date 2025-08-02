@@ -4,7 +4,8 @@ import asyncio
 import logging
 import secrets
 import string
-from typing import Optional, AsyncGenerator, Dict, Any
+import random
+from typing import Optional, AsyncGenerator, Dict, Any, Tuple
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -34,6 +35,9 @@ from auth import verify_api_key, security, validate_claude_code_auth, get_claude
 from parameter_validator import ParameterValidator, CompatibilityReporter
 from session_manager import session_manager
 from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
+from chat_mode import ChatMode, get_chat_mode_info
+from model_utils import ModelUtils
+from session_tracker import get_tracker, scan_claude_projects_for_sandbox_sessions
 
 # Load environment variables
 load_dotenv()
@@ -41,6 +45,9 @@ load_dotenv()
 # Configure logging based on debug mode
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() in ('true', '1', 'yes', 'on')
 VERBOSE = os.getenv('VERBOSE', 'false').lower() in ('true', '1', 'yes', 'on')
+SSE_KEEPALIVE_INTERVAL = int(os.getenv('SSE_KEEPALIVE_INTERVAL', '30'))  # seconds
+CHAT_MODE_CLEANUP_SESSIONS = os.getenv('CHAT_MODE_CLEANUP_SESSIONS', 'true').lower() in ('true', '1', 'yes', 'on')
+CHAT_MODE_CLEANUP_DELAY_MINUTES = int(os.getenv('CHAT_MODE_CLEANUP_DELAY_MINUTES', '720'))  # 12 hours default
 
 # Set logging level based on debug/verbose mode
 log_level = logging.DEBUG if (DEBUG_MODE or VERBOSE) else logging.INFO
@@ -50,8 +57,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Claude SDK tool names - maintain this list to match SDK capabilities
+ALL_CLAUDE_TOOLS = [
+    'Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode',
+    'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead',
+    'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch'
+]
+
 # Global variable to store runtime-generated API key
 runtime_api_key = None
+
+
+def create_error_response(error: Exception, context: str) -> Dict[str, Any]:
+    """Create standardized error response."""
+    logger.error(f"{context}: {type(error).__name__}: {str(error)}")
+    return {
+        "error": {
+            "message": str(error),
+            "type": type(error).__name__,
+            "context": context
+        }
+    }
 
 def generate_secure_token(length: int = 32) -> str:
     """Generate a secure random token for API authentication."""
@@ -111,6 +137,61 @@ claude_cli = ClaudeCodeCLI(
 )
 
 
+async def sandbox_session_cleanup_task():
+    """Background task to clean up expired sandbox sessions."""
+    tracker = get_tracker()
+    
+    while True:
+        try:
+            # Wait for check interval (1 minute)
+            await asyncio.sleep(60)
+            
+            # Skip if cleanup is disabled or delay is 0 (immediate cleanup)
+            if not CHAT_MODE_CLEANUP_SESSIONS or CHAT_MODE_CLEANUP_DELAY_MINUTES == 0:
+                continue
+            
+            # Get expired sessions
+            expired_sessions = tracker.get_expired_sandbox_sessions(CHAT_MODE_CLEANUP_DELAY_MINUTES)
+            
+            if expired_sessions:
+                logger.info(f"Found {len(expired_sessions)} expired sandbox sessions to clean up")
+                
+                for session_id, info in expired_sessions.items():
+                    try:
+                        sandbox_dir = info.get("sandbox_dir", "")
+                        
+                        # Safety check
+                        if "claude_chat_sandbox" not in sandbox_dir:
+                            logger.warning(f"Skipping non-sandbox session {session_id}")
+                            tracker.cleanup_tracked_session(session_id)
+                            continue
+                        
+                        # Clean up the session
+                        if cleanup_claude_session(sandbox_dir, session_id):
+                            logger.info(f"Cleaned up expired sandbox session {session_id}")
+                            tracker.cleanup_tracked_session(session_id)
+                        else:
+                            logger.warning(f"Failed to cleanup session {session_id}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error cleaning up session {session_id}: {e}")
+                        # Remove from tracking even if cleanup failed
+                        tracker.cleanup_tracked_session(session_id)
+            
+            # Also clean up stale tracker entries (older than 5 hours)
+            stale_count = tracker.cleanup_stale_entries()
+            if stale_count > 0:
+                logger.info(f"Removed {stale_count} stale tracker entries")
+                
+        except asyncio.CancelledError:
+            logger.info("Sandbox cleanup task cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Error in sandbox cleanup task: {e}")
+            # Continue running even if there's an error
+            await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Verify Claude Code authentication and CLI on startup."""
@@ -157,12 +238,46 @@ async def lifespan(app: FastAPI):
         logger.debug(f"   GET  /health - Health check")
         logger.debug(f"🔧 API Key protection: {'Enabled' if (os.getenv('API_KEY') or runtime_api_key) else 'Disabled'}")
     
-    # Start session cleanup task
+    # Start session cleanup task for normal mode requests
     session_manager.start_cleanup_task()
+    
+    # Start sandbox session cleanup task if enabled
+    sandbox_cleanup_task = None
+    if CHAT_MODE_CLEANUP_SESSIONS:
+        # Perform startup cleanup of old sessions
+        logger.info(f"Starting sandbox session cleanup (delay: {CHAT_MODE_CLEANUP_DELAY_MINUTES} minutes)")
+        
+        # Clean up old sessions on startup
+        if CHAT_MODE_CLEANUP_DELAY_MINUTES > 0:
+            old_sessions = scan_claude_projects_for_sandbox_sessions(CHAT_MODE_CLEANUP_DELAY_MINUTES)
+            for session_id, project_dir, age_minutes in old_sessions:
+                try:
+                    # Extract sandbox dir from project dir
+                    # Convert back from transformed path
+                    sandbox_dir_parts = project_dir.split('/')[-1].replace('-', '/')
+                    if sandbox_dir_parts.startswith('/'):
+                        sandbox_dir_parts = sandbox_dir_parts[1:]
+                    # This is approximate - we use the project dir for cleanup
+                    if cleanup_claude_session(project_dir, session_id):
+                        logger.info(f"Cleaned up old sandbox session {session_id} (age: {age_minutes:.1f} minutes)")
+                except Exception as e:
+                    logger.error(f"Failed to cleanup old session {session_id}: {e}")
+        
+        # Start background cleanup task
+        sandbox_cleanup_task = asyncio.create_task(sandbox_session_cleanup_task())
+        logger.info("Started sandbox session cleanup background task")
     
     yield
     
     # Cleanup on shutdown
+    if sandbox_cleanup_task:
+        sandbox_cleanup_task.cancel()
+        try:
+            await sandbox_cleanup_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Stopped sandbox session cleanup task")
+    
     logger.info("Shutting down session manager...")
     session_manager.shutdown()
 
@@ -311,25 +426,963 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+def create_progress_chunk(request_id: str, model: str, content: str) -> str:
+    """Create a progress indicator chunk in SSE format."""
+    chunk = ChatCompletionStreamResponse(
+        id=request_id,
+        model=model,
+        choices=[StreamChoice(
+            index=0,
+            delta={"content": content},
+            finish_reason=None
+        )]
+    )
+    return f"data: {chunk.model_dump_json()}\n\n"
+
+
+def create_sse_keepalive() -> str:
+    """Create an SSE comment for keep-alive. Comments are not shown to clients."""
+    return ": keepalive\n\n"
+
+
+async def create_keepalive_task(interval: int = None) -> Tuple[asyncio.Task, asyncio.Queue]:
+    """Create a keepalive task that sends SSE comments periodically.
+    
+    Args:
+        interval: Keepalive interval in seconds (defaults to SSE_KEEPALIVE_INTERVAL)
+        
+    Returns:
+        Tuple of (keepalive_task, keepalive_queue)
+    """
+    if interval is None:
+        interval = SSE_KEEPALIVE_INTERVAL
+        
+    keepalive_queue = asyncio.Queue()
+    
+    async def send_keepalives():
+        """Send SSE keepalive comments periodically"""
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await keepalive_queue.put(create_sse_keepalive())
+                logger.debug(f"Queued SSE keepalive comment")
+        except asyncio.CancelledError:
+            logger.debug("Keepalive task cancelled")
+    
+    keepalive_task = asyncio.create_task(send_keepalives())
+    return keepalive_task, keepalive_queue
+
+
+def extract_content_from_chunk(chunk: Dict[str, Any]) -> Optional[str]:
+    """Extract text content from ANY SDK chunk format.
+    Returns None only if the chunk genuinely has no content (not an error).
+    """
+    # Format 1: AssistantMessage with content array
+    if "content" in chunk and isinstance(chunk["content"], list):
+        text_parts = []
+        for block in chunk["content"]:
+            # Handle TextBlock objects from Claude Code SDK
+            if hasattr(block, 'text'):
+                text_parts.append(block.text)
+            # Handle dictionary format
+            elif isinstance(block, dict) and block.get("type") == "text":
+                text_parts.append(block.get("text", ""))
+        if text_parts:
+            return "".join(text_parts)
+    
+    # Format 2: Old assistant message format
+    if chunk.get("type") == "assistant" and "message" in chunk:
+        message = chunk["message"]
+        if isinstance(message, dict) and "content" in message:
+            content = message["content"]
+            # Recursively extract from message content
+            if isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if hasattr(block, 'text'):
+                        text_parts.append(block.text)
+                    elif isinstance(block, dict) and block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                if text_parts:
+                    return "".join(text_parts)
+            elif isinstance(content, str):
+                return content
+    
+    # Format 3: Result message
+    if chunk.get("subtype") == "success" and "result" in chunk:
+        return chunk["result"]
+    
+    # Format 4: Direct content string
+    if "content" in chunk and isinstance(chunk["content"], str):
+        return chunk["content"]
+    
+    # Format 5: Old format with type=assistant and direct content
+    if chunk.get("type") == "assistant" and isinstance(chunk.get("content"), str):
+        return chunk["content"]
+    
+    # Log unhandled format for investigation
+    # Check both type and subtype fields for known non-content types
+    chunk_type = chunk.get("type", "")
+    chunk_subtype = chunk.get("subtype", "")
+    known_non_content_types = ["init", "tool_use", "tool_result", "error", "progress"]
+    known_non_content_subtypes = ["init", "error", "success"]
+    
+    if (chunk_type not in known_non_content_types and 
+        chunk_subtype not in known_non_content_subtypes and
+        (chunk_type or chunk_subtype)):  # Only warn if there's actually a type/subtype
+        logger.warning(f"Unhandled chunk format for content extraction: {json.dumps(chunk)}")
+    
+    return None  # Only if chunk has no content field
+
+
+def cleanup_claude_session(sandbox_dir: str, session_id: str) -> bool:
+    """Delete Claude Code session file for chat mode requests.
+    
+    Args:
+        sandbox_dir: The sandbox directory path (e.g., /private/var/folders/.../claude_chat_sandbox_xxx)
+        session_id: The Claude session ID (UUID format)
+        
+    Returns:
+        True if cleanup was successful, False otherwise
+    """
+    try:
+        # Two places to check for session files:
+        # 1. In the sandbox-specific project directory
+        # 2. In the main wrapper project directory (if running from the wrapper directory)
+        
+        files_removed = []
+        
+        # First check sandbox-specific directory
+        # Claude transforms the path by:
+        # 1. Replacing all slashes with dashes
+        # 2. Replacing underscores with dashes
+        # 3. Prepending a dash to the whole path
+        transformed_path = sandbox_dir.replace('/', '-').replace('_', '-')
+        if not transformed_path.startswith('-'):
+            transformed_path = '-' + transformed_path
+            
+        claude_project_dir = os.path.expanduser(f"~/.claude/projects/{transformed_path}")
+        session_file = os.path.join(claude_project_dir, f"{session_id}.jsonl")
+        
+        if os.path.exists(session_file):
+            os.remove(session_file)
+            files_removed.append(session_file)
+            logger.info(f"Deleted Claude session file: {session_file}")
+            
+            # Try to remove the project directory if empty
+            try:
+                if os.path.exists(claude_project_dir) and not os.listdir(claude_project_dir):
+                    os.rmdir(claude_project_dir)
+                    logger.info(f"Removed empty Claude project directory: {claude_project_dir}")
+            except Exception as dir_err:
+                logger.debug(f"Could not remove project directory (may not be empty): {dir_err}")
+        
+        # Also check the main wrapper project directory
+        # This handles cases where Claude creates sessions in the current working directory
+        wrapper_project_dir = os.path.expanduser("~/.claude/projects/-Users-val-claude-code-openai-wrapper")
+        wrapper_session_file = os.path.join(wrapper_project_dir, f"{session_id}.jsonl")
+        
+        if os.path.exists(wrapper_session_file):
+            # Check if this is a chat mode session by reading first line
+            try:
+                with open(wrapper_session_file, 'r') as f:
+                    first_line = f.readline()
+                    if first_line:
+                        data = json.loads(first_line)
+                        # Only remove if it's a Hello session or has our chat mode markers
+                        content = data.get('message', {}).get('content', '')
+                        if (content == 'Hello' or 
+                            'digital black hole' in str(content) or
+                            'sandboxed environment' in str(content)):
+                            os.remove(wrapper_session_file)
+                            files_removed.append(wrapper_session_file)
+                            logger.info(f"Deleted wrapper project session: {wrapper_session_file}")
+            except Exception as e:
+                logger.debug(f"Could not check/remove wrapper session: {e}")
+        
+        if not files_removed:
+            logger.debug(f"No session files found to remove for session {session_id}")
+            
+        return True
+    except Exception as e:
+        logger.error(f"Failed to cleanup Claude session {session_id}: {e}")
+        return False
+
+
+async def stream_final_content_only(
+    request: ChatCompletionRequest,
+    request_id: str,
+    claude_headers: Optional[Dict[str, Any]] = None,
+    is_chat_mode: bool = False
+) -> AsyncGenerator[str, None]:
+    """Generate SSE formatted streaming response with only final content (no intermediate tool uses)."""
+    sandbox_dir = None
+    session_id = None  # Track Claude session ID for cleanup
+    final_content = ""
+    buffered_chunks = []
+    
+    try:
+        # Get session info
+        if is_chat_mode:
+            all_messages = request.messages
+            actual_session_id = None
+            logger.info("Chat mode active - sessions disabled")
+        else:
+            all_messages, actual_session_id = session_manager.process_messages(
+                request.messages, request.session_id
+            )
+        
+        # Convert messages to prompt
+        logger.debug(f"Converting {len(all_messages)} messages to prompt")
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+        logger.debug(f"Converted prompt length: {len(prompt)}, system prompt: {len(system_prompt) if system_prompt else 0} chars")
+        
+        
+        # Filter content for unsupported features (skip in chat mode to preserve XML)
+        if not is_chat_mode:
+            prompt = MessageAdapter.filter_content(prompt)
+            if system_prompt:
+                system_prompt = MessageAdapter.filter_content(system_prompt)
+        else:
+            logger.debug("Chat mode: Skipping content filtering to preserve XML tool definitions")
+        
+        # Get Claude Code SDK options from request
+        claude_options = request.to_claude_options()
+        
+        # Merge with Claude-specific headers if provided
+        if claude_headers:
+            claude_options.update(claude_headers)
+        
+        # Handle tools
+        if is_chat_mode:
+            logger.info("Chat mode: using restricted tool set")
+            claude_options['allowed_tools'] = ChatMode.get_allowed_tools()
+            claude_options['disallowed_tools'] = None
+            claude_options['max_turns'] = claude_options.get('max_turns', 10)
+        elif not request.enable_tools:
+            claude_options['disallowed_tools'] = ALL_CLAUDE_TOOLS
+            claude_options['max_turns'] = 1
+            logger.info("Tools disabled (default behavior for OpenAI compatibility)")
+        
+        # Buffer SDK responses - Direct streaming without async task wrapper
+        sdk_chunks_received = 0
+        consume_start_time = asyncio.get_event_loop().time()
+        
+        # Track assistant messages separately to find the LAST one
+        assistant_messages = []  # List of (index, content) tuples
+        current_assistant_content = ""
+        in_assistant_message = False
+        
+        # Direct SDK streaming - no async task wrapper
+        logger.debug("Starting SDK stream for buffering")
+        logger.debug(f"SDK call parameters - prompt length: {len(prompt)}, system_prompt: {len(system_prompt) if system_prompt else 0}")
+        logger.debug(f"SDK call parameters - model: {claude_options.get('model')}, max_turns: {claude_options.get('max_turns', 10)}")
+        logger.debug(f"SDK call parameters - allowed_tools: {claude_options.get('allowed_tools')}")
+        logger.debug(f"SDK call parameters - disallowed_tools: {claude_options.get('disallowed_tools')}")
+        logger.debug(f"SDK call parameters - messages count: {len(all_messages)}")
+        
+        # Log the exact prompt being sent
+        logger.info("=== SDK PROMPT START ===")
+        logger.info(f"Prompt (first 500 chars): {prompt[:500]}...")
+        if len(prompt) > 500:
+            logger.info(f"Prompt (last 500 chars): ...{prompt[-500:]}")
+        logger.info(f"System prompt: {system_prompt[:200] if system_prompt else 'None'}")
+        logger.info("=== SDK PROMPT END ===")
+        
+        # CRITICAL: Log if we expect XML format
+        expects_xml = False
+        if is_chat_mode and prompt:
+            prompt_lower = prompt.lower()
+            expects_xml = any([
+                "tool uses are formatted" in prompt_lower,
+                "<tool_name>" in prompt_lower,
+                "xml-style tags" in prompt_lower,
+                "<attempt_completion>" in prompt_lower
+            ])
+            if expects_xml:
+                logger.info("📋 Expecting XML tool format in response based on prompt patterns")
+        
+        # Use a queue to communicate between SDK stream and main loop
+        chunk_queue = asyncio.Queue()
+        stream_complete = asyncio.Event()
+        last_keepalive_time = asyncio.get_event_loop().time()
+        
+        # Task to consume the SDK stream and put chunks in queue
+        async def sdk_consumer():
+            try:
+                logger.debug("Starting SDK stream consumer loop")
+                async for chunk in claude_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    model=claude_options.get('model'),
+                    max_turns=claude_options.get('max_turns', 10),
+                    allowed_tools=claude_options.get('allowed_tools'),
+                    disallowed_tools=claude_options.get('disallowed_tools'),
+                    stream=True,
+                    messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages],
+                    is_chat_mode=is_chat_mode
+                ):
+                    await chunk_queue.put(chunk)
+                logger.debug("SDK stream consumer completed normally")
+            except asyncio.CancelledError:
+                logger.warning("SDK stream consumer was cancelled")
+                raise
+            except Exception as e:
+                logger.error(f"SDK stream consumer error: {type(e).__name__}: {e}")
+                logger.error(f"Exception traceback: ", exc_info=True)
+                raise
+            finally:
+                stream_complete.set()
+                await chunk_queue.put(None)  # Sentinel value
+        
+        # Start the SDK consumer task
+        consumer_task = asyncio.create_task(sdk_consumer())
+        
+        # Main loop that processes chunks and sends keepalives
+        try:
+            queue_task = asyncio.create_task(chunk_queue.get())
+            keepalive_task = asyncio.create_task(asyncio.sleep(SSE_KEEPALIVE_INTERVAL))
+            stream_ended = False
+            
+            while not stream_ended:
+                # Wait for either a chunk or keepalive timeout
+                done, pending = await asyncio.wait(
+                    [queue_task, keepalive_task],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                for task in done:
+                    if task == queue_task:
+                        # Got a chunk from the SDK
+                        chunk = task.result()
+                        if chunk is None:
+                            # Stream ended
+                            if keepalive_task and not keepalive_task.done():
+                                keepalive_task.cancel()
+                                try:
+                                    await keepalive_task
+                                except asyncio.CancelledError:
+                                    pass
+                            stream_ended = True
+                            break
+                        
+                        # Process the chunk
+                        sdk_chunks_received += 1
+                        current_time = asyncio.get_event_loop().time()
+                        
+                        # Log detailed chunk information
+                        chunk_type = chunk.get('type', 'unknown')
+                        chunk_subtype = chunk.get('subtype', 'unknown')
+                        logger.debug(f"SDK chunk #{sdk_chunks_received} received - type: {chunk_type}, subtype: {chunk_subtype}")
+                        
+                        # Log full chunk for debugging
+                        if chunk_type == 'system' or chunk_subtype == 'init':
+                            logger.debug(f"Full chunk data: {chunk}")
+                        elif chunk_type == 'assistant' or 'content' in chunk:
+                            # Log content preview
+                            content_preview = str(chunk).replace('\n', '\\n')[:200]
+                            logger.debug(f"Chunk content preview: {content_preview}...")
+                        
+                        buffered_chunks.append(chunk)
+                        
+                        # Extract sandbox directory and session ID from init message in chat mode
+                        if is_chat_mode and chunk_subtype == "init":
+                            data = chunk.get("data", {})
+                            if isinstance(data, dict):
+                                if "cwd" in data and not sandbox_dir:
+                                    sandbox_dir = data["cwd"]
+                                    logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
+                                if "session_id" in data and not session_id:
+                                    session_id = data["session_id"]
+                                    logger.debug(f"Tracked Claude session ID: {session_id}")
+                            # Also check top-level session_id
+                            if "session_id" in chunk and not session_id:
+                                session_id = chunk["session_id"]
+                                logger.debug(f"Tracked Claude session ID from chunk: {session_id}")
+                        
+                        # More precise detection of assistant messages
+                        # Check for content that could be assistant text
+                        extracted_text = extract_content_from_chunk(chunk)
+                        
+                        # Only process if we actually extracted text content
+                        if extracted_text is not None and extracted_text.strip():
+                            # Check if this is genuinely an assistant message (not tool results, etc.)
+                            is_assistant_chunk = (
+                                chunk_type == "assistant" or 
+                                (chunk_type != "tool_use" and chunk_type != "system" and chunk_type != "result" and
+                                 "content" in chunk and extracted_text)
+                            )
+                            
+                            if is_assistant_chunk:
+                                if not in_assistant_message:
+                                    # Start of a new assistant message
+                                    if current_assistant_content:
+                                        # Save the previous assistant message
+                                        assistant_messages.append(current_assistant_content)
+                                        logger.debug(f"Completed assistant message #{len(assistant_messages)}: {len(current_assistant_content)} chars")
+                                    current_assistant_content = extracted_text
+                                    in_assistant_message = True
+                                    logger.debug(f"Started new assistant message from chunk #{sdk_chunks_received}")
+                                else:
+                                    # Continue current assistant message
+                                    current_assistant_content += extracted_text
+                                logger.debug(f"Assistant content from chunk #{sdk_chunks_received}: {len(extracted_text)} chars, type={chunk_type}")
+                        
+                        # Check for message boundaries (tool use, system messages, etc.)
+                        elif chunk_type in ["tool_use", "system", "result"] or chunk_subtype in ["tool_use", "init", "success"]:
+                            if in_assistant_message and current_assistant_content:
+                                # End of current assistant message
+                                assistant_messages.append(current_assistant_content)
+                                logger.debug(f"Completed assistant message #{len(assistant_messages)} due to {chunk_type}/{chunk_subtype}: {len(current_assistant_content)} chars")
+                                current_assistant_content = ""
+                                in_assistant_message = False
+                        
+                        # Create new task to wait for next chunk
+                        queue_task = asyncio.create_task(chunk_queue.get())
+                    
+                    elif task == keepalive_task:
+                        # Keepalive timeout - send keepalive
+                        current_time = asyncio.get_event_loop().time()
+                        yield create_sse_keepalive()
+                        last_keepalive_time = current_time
+                        logger.debug(f"📡 Sent SSE keepalive during SDK buffering (after {sdk_chunks_received} chunks)")
+                        
+                        # Create new keepalive task
+                        keepalive_task = asyncio.create_task(asyncio.sleep(SSE_KEEPALIVE_INTERVAL))
+            
+            logger.info(f"SDK stream completed: {sdk_chunks_received} chunks processed")
+            
+        except asyncio.CancelledError:
+            logger.warning("SDK stream was cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"SDK stream error: {type(e).__name__}: {e}")
+            logger.error(f"Exception traceback: ", exc_info=True)
+            raise
+        
+        # Ensure consumer task is complete
+        logger.debug("Waiting for consumer task to complete...")
+        await consumer_task
+        logger.debug("Consumer task completed")
+        
+        # Don't forget the last assistant message if stream ended while in one
+        if in_assistant_message and current_assistant_content:
+            assistant_messages.append(current_assistant_content)
+            logger.debug(f"Final assistant message #{len(assistant_messages)}: {len(current_assistant_content)} chars")
+        
+        # Use only the LAST assistant message as the final content
+        if assistant_messages:
+            final_content = assistant_messages[-1]  # Get the last message
+            logger.info(f"Final content extracted: {len(final_content)} chars (from {len(assistant_messages)} assistant messages)")
+            
+            # Debug logging for all assistant messages if multiple found
+            if len(assistant_messages) > 1:
+                logger.debug("Multiple assistant messages found. Details:")
+                for i, msg in enumerate(assistant_messages):
+                    preview = msg[:200] + "..." if len(msg) > 200 else msg
+                    logger.debug(f"  Message #{i+1}: {len(msg)} chars - Preview: {preview}")
+                logger.debug(f"Selected final message preview: {final_content[:200]}...")
+        else:
+            final_content = ""
+            logger.warning("No assistant messages found in SDK stream")
+        
+        consume_end_time = asyncio.get_event_loop().time()
+        total_consume_time = consume_end_time - consume_start_time
+        logger.info(f"Stream buffering completed: {sdk_chunks_received} chunks in {total_consume_time:.2f}s")
+        logger.info(f"Assistant messages found: {len(assistant_messages)}")
+        logger.info(f"Final content length: {len(final_content)}")
+        
+        # Log buffered chunks summary
+        chunk_types = {}
+        for chunk in buffered_chunks:
+            chunk_type = f"{chunk.get('type', 'unknown')}/{chunk.get('subtype', 'unknown')}"
+            chunk_types[chunk_type] = chunk_types.get(chunk_type, 0) + 1
+        logger.info(f"Chunk type summary: {chunk_types}")
+        
+        
+        # Validate XML format if expected
+        if expects_xml and final_content:
+            # Check if response uses XML tool format
+            has_xml_format = MessageAdapter.validate_xml_tool_response(final_content)
+            
+            if not has_xml_format:
+                logger.error(f"❌ Expected XML tool format but got plain text response!")
+                logger.error(f"Response preview: {final_content[:200]}...")
+                # Note: We can't retry here without changing the architecture significantly
+                # But at least we log it for debugging
+            else:
+                logger.info(f"✅ Response correctly uses XML tool format")
+        
+        # Now yield the final response
+        if final_content:
+            # Send role chunk
+            initial_chunk = ChatCompletionStreamResponse(
+                id=request_id,
+                model=request.model,
+                choices=[StreamChoice(
+                    index=0,
+                    delta={"role": "assistant", "content": ""},
+                    finish_reason=None
+                )]
+            )
+            yield f"data: {initial_chunk.model_dump_json()}\n\n"
+            
+            # Filter content if not in chat mode
+            if is_chat_mode:
+                filtered_content = final_content
+            else:
+                filtered_content = MessageAdapter.filter_content(final_content)
+            
+            # Send content chunk
+            content_chunk = ChatCompletionStreamResponse(
+                id=request_id,
+                model=request.model,
+                choices=[StreamChoice(
+                    index=0,
+                    delta={"content": filtered_content},
+                    finish_reason=None
+                )]
+            )
+            yield f"data: {content_chunk.model_dump_json()}\n\n"
+        else:
+            # No content - send empty response
+            logger.warning(f"No content found after buffering {sdk_chunks_received} SDK chunks")
+            initial_chunk = ChatCompletionStreamResponse(
+                id=request_id,
+                model=request.model,
+                choices=[StreamChoice(
+                    index=0,
+                    delta={"role": "assistant", "content": ""},
+                    finish_reason=None
+                )]
+            )
+            yield f"data: {initial_chunk.model_dump_json()}\n\n"
+        
+        # Add to session if needed
+        if actual_session_id and final_content:
+            assistant_message = Message(role="assistant", content=final_content)
+            session_manager.add_assistant_response(actual_session_id, assistant_message)
+        
+        # Send final chunk
+        final_chunk = ChatCompletionStreamResponse(
+            id=request_id,
+            model=request.model,
+            choices=[StreamChoice(
+                index=0,
+                delta={},
+                finish_reason="stop"
+            )]
+        )
+        yield f"data: {final_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+        
+    except Exception as e:
+        logger.error(f"Error in stream_final_content_only: {e}")
+        # Yield error
+        error_chunk = {
+            "error": {
+                "message": str(e),
+                "type": "streaming_error"
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+    finally:
+        # Ensure consumer task is complete
+        if 'consumer_task' in locals():
+            if not consumer_task.done():
+                consumer_task.cancel()
+                try:
+                    await consumer_task
+                except asyncio.CancelledError:
+                    pass
+        
+        # Cleanup sandbox directory and session if in chat mode
+        if is_chat_mode and sandbox_dir:
+            # First cleanup Claude session file
+            # Try to get session_id from claude_cli if we didn't get it from messages
+            if not session_id and hasattr(claude_cli, 'get_last_session_id'):
+                session_id = claude_cli.get_last_session_id()
+                if session_id:
+                    logger.debug(f"Got session ID from claude_cli: {session_id}")
+            
+            if session_id and CHAT_MODE_CLEANUP_SESSIONS:
+                # Track or cleanup based on delay setting
+                if CHAT_MODE_CLEANUP_DELAY_MINUTES == 0:
+                    # Immediate cleanup
+                    try:
+                        cleanup_claude_session(sandbox_dir, session_id)
+                        logger.debug(f"Immediately cleaned up sandbox session {session_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to cleanup Claude session: {e}")
+                else:
+                    # Track for delayed cleanup
+                    tracker = get_tracker()
+                    if tracker.track_sandbox_session(session_id, sandbox_dir):
+                        logger.debug(f"Tracked sandbox session {session_id} for cleanup in {CHAT_MODE_CLEANUP_DELAY_MINUTES} minutes")
+                    else:
+                        logger.error(f"Failed to track sandbox session {session_id}")
+            elif session_id and not CHAT_MODE_CLEANUP_SESSIONS:
+                logger.debug(f"Session cleanup disabled - session {session_id} retained")
+            
+            # Then cleanup sandbox directory
+            try:
+                ChatMode.cleanup_sandbox(sandbox_dir)
+                logger.debug(f"Cleaned up sandbox directory: {sandbox_dir}")
+            except Exception as e:
+                logger.error(f"Failed to cleanup sandbox: {e}")
+
+
+async def stream_with_progress_injection(
+    original_stream: AsyncGenerator[str, None],
+    request_id: str,
+    model: str
+) -> AsyncGenerator[str, None]:
+    """Inject progress indicators during stream pauses without modifying the stream logic."""
+    
+    # Use a queue to communicate between SDK stream and progress injection
+    chunk_queue = asyncio.Queue()
+    stream_complete = asyncio.Event()
+    
+    # Task to consume the original stream and put chunks in queue
+    async def stream_consumer():
+        try:
+            async for chunk in original_stream:
+                await chunk_queue.put(chunk)
+        finally:
+            stream_complete.set()
+            await chunk_queue.put(None)  # Sentinel value
+    
+    # Create a merged stream that combines queued chunks and progress indicators
+    async def merged_stream():
+        # Progress messages - universal rotating circles
+        progress_messages = [
+            "◐", "◓", "◑", "◒",  # Rotating circles
+            "◐", "◓", "◑", "◒",  # Repeat pattern
+            "◐", "◓", "◑", "◒",  # Continue
+            "◐", "◓", "◑", "◒"   # Total 16 entries
+        ]
+        
+        progress_sent = False
+        any_content_sent = False  # Track if ANY content has been sent
+        need_newline_before_progress = False  # Track if we need newline before next progress
+        showing_hourglass = True  # Track if we're showing the initial hourglass
+        last_activity_time = asyncio.get_event_loop().time()
+        current_message_index = 0  # Will start at 0 after hourglass phase
+        current_dots = 0  # Track number of dots (0-3)
+        last_dot_time = 0  # Track when we last added a dot
+        last_message_time = 0  # Track when we last changed message
+        last_keepalive_time = 0  # Track when we last sent a keepalive
+        
+        # Timing configuration
+        BASE_DOT_INTERVAL = 3.0  # Base interval for dots
+        BASE_MESSAGE_INTERVAL = 15.0  # Base interval for message changes
+        INITIAL_DELAY = 6.0  # Wait 6s before first progress
+        MAX_DOTS = 3  # Maximum dots per message
+        BACKOFF_MULTIPLIER = 1.2  # Exponential backoff multiplier
+        BACKOFF_START_AFTER = 3  # Start backoff after this many updates
+        MAX_DOT_INTERVAL = 20.0  # Maximum dot interval (cap)
+        MAX_MESSAGE_INTERVAL = 60.0  # Maximum message interval (cap)
+        
+        # Dynamic intervals
+        current_dot_interval = BASE_DOT_INTERVAL
+        current_message_interval = BASE_MESSAGE_INTERVAL
+        update_count = 0  # Track total updates for backoff
+        
+        # Create tasks for queue and progress
+        queue_task = asyncio.create_task(chunk_queue.get())
+        progress_task = asyncio.create_task(asyncio.sleep(INITIAL_DELAY))
+        
+        while True:
+            # Wait for either a chunk or timeout
+            done, pending = await asyncio.wait(
+                [queue_task, progress_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # Handle completed tasks
+            for task in done:
+                if task == queue_task:
+                    # Got a chunk from the original stream
+                    chunk = task.result()
+                    if chunk is None:
+                        # Stream ended - clean up progress task
+                        if progress_task and not progress_task.done():
+                            progress_task.cancel()
+                            try:
+                                await progress_task
+                            except asyncio.CancelledError:
+                                pass
+                        return
+                    
+                    # Check if this is actual text content or just tool use
+                    is_text_content = False
+                    if "data: " in chunk:
+                        try:
+                            # Parse the SSE data
+                            data_line = chunk.split("data: ", 1)[1].strip()
+                            if data_line and data_line != "[DONE]":
+                                import json
+                                data = json.loads(data_line)
+                                # Check if it has actual text content
+                                if "choices" in data and len(data["choices"]) > 0:
+                                    delta = data["choices"][0].get("delta", {})
+                                    if "content" in delta and delta["content"]:
+                                        is_text_content = True
+                        except:
+                            pass
+                    
+                    # Only reset progress state for actual text content
+                    if is_text_content:
+                        logger.debug(f"Progress injection: Received text content, resetting progress state")
+                        
+                        # If we showed progress and now getting real content, add spacing
+                        if progress_sent:
+                            # Send a double newline chunk before the actual content
+                            spacing_chunk = create_progress_chunk(request_id, model, "\n\n")
+                            yield spacing_chunk
+                            logger.debug("Progress injection: Added spacing before content")
+                        
+                        last_activity_time = asyncio.get_event_loop().time()
+                        progress_sent = False
+                        showing_hourglass = True  # Reset to hourglass for next pause
+                        current_message_index = 0  # Will start at 0 after hourglass
+                        current_dots = 0
+                        last_dot_time = 0
+                        last_message_time = 0
+                        last_keepalive_time = asyncio.get_event_loop().time()  # Reset keepalive timer
+                        any_content_sent = True  # Mark that we've seen content
+                        need_newline_before_progress = True  # Need newline before next progress
+                        # Reset intervals when we get actual content
+                        current_dot_interval = BASE_DOT_INTERVAL
+                        current_message_interval = BASE_MESSAGE_INTERVAL
+                        update_count = 0
+                    else:
+                        logger.debug(f"Progress injection: Received non-text chunk (tool use or metadata)")
+                    
+                    # Cancel existing progress task to prevent it from firing
+                    if progress_task and not progress_task.done():
+                        progress_task.cancel()
+                        try:
+                            await progress_task
+                        except asyncio.CancelledError:
+                            pass
+                    
+                    # Yield the chunk
+                    yield chunk
+                    
+                    # Create new task for next chunk
+                    queue_task = asyncio.create_task(chunk_queue.get())
+                    # Restart progress monitoring with dynamic interval
+                    elapsed_time = asyncio.get_event_loop().time() - last_activity_time
+                    if elapsed_time < 30:
+                        check_interval = 0.5
+                    elif elapsed_time < 120:
+                        check_interval = 1.0
+                    else:
+                        check_interval = 2.0
+                    progress_task = asyncio.create_task(asyncio.sleep(check_interval))
+                    
+                elif task == progress_task:
+                    # Progress timeout fired - check what we need to update
+                    current_time = asyncio.get_event_loop().time()
+                    time_since_start = current_time - last_activity_time
+                    
+                    # Only proceed if we've waited the initial delay
+                    if time_since_start >= INITIAL_DELAY:
+                        time_since_last_dot = current_time - last_dot_time if last_dot_time > 0 else float('inf')
+                        time_since_last_message = current_time - last_message_time if last_message_time > 0 else float('inf')
+                        
+                        # Determine what to update
+                        should_update = False
+                        update_message = False
+                        
+                        # Special handling for hourglass phase
+                        if showing_hourglass and current_dots >= MAX_DOTS:
+                            # Check if enough time has passed for a message change
+                            if time_since_start >= BASE_MESSAGE_INTERVAL:
+                                # Transition from hourglass to first circle
+                                showing_hourglass = False
+                                current_message_index = 0
+                                current_dots = 0
+                                last_message_time = current_time
+                                last_dot_time = current_time
+                                should_update = True
+                                update_message = True
+                                logger.debug("Progress injection: Transitioning from hourglass to circles")
+                        # Check if we need to change the message (only when not showing hourglass and have all dots)
+                        elif not showing_hourglass and current_dots >= MAX_DOTS:
+                            # Calculate time since last message change
+                            time_since_message_change = current_time - last_message_time if last_message_time > 0 else float('inf')
+                            if time_since_message_change >= current_message_interval and current_message_index < len(progress_messages) - 1:
+                                current_message_index += 1
+                                current_dots = 0  # Reset dots when changing message
+                                last_message_time = current_time
+                                last_dot_time = current_time
+                                should_update = True
+                                update_message = True
+                                
+                                # Apply exponential backoff to message interval
+                                if current_message_index >= BACKOFF_START_AFTER:
+                                    current_message_interval = min(current_message_interval * BACKOFF_MULTIPLIER, MAX_MESSAGE_INTERVAL)
+                                
+                                logger.debug(f"Progress injection: Changing to message {current_message_index}, next interval: {current_message_interval:.1f}s")
+                        # Check if we need to add a dot
+                        if time_since_last_dot >= current_dot_interval and current_dots < MAX_DOTS and not update_message:
+                            current_dots += 1
+                            last_dot_time = current_time
+                            should_update = True
+                            
+                            # Apply exponential backoff to dot interval
+                            update_count += 1
+                            if update_count >= BACKOFF_START_AFTER:
+                                current_dot_interval = min(current_dot_interval * BACKOFF_MULTIPLIER, MAX_DOT_INTERVAL)
+                            
+                            logger.debug(f"Progress injection: Adding dot {current_dots}, next interval: {current_dot_interval:.1f}s")
+                        # After exhausting all messages, continue with repeating pattern
+                        elif not showing_hourglass and current_message_index >= len(progress_messages) - 1 and current_dots >= MAX_DOTS:
+                            # Check if enough time for cycling back
+                            time_since_message_change = current_time - last_message_time if last_message_time > 0 else float('inf')
+                            if time_since_message_change >= current_message_interval:
+                                # Cycle back to start of messages
+                                current_message_index = 0
+                                current_dots = 0
+                                last_message_time = current_time
+                                last_dot_time = current_time
+                                should_update = True
+                                update_message = True
+                                logger.debug("Progress injection: Cycling back to first message")
+                        # Initial message
+                        elif not progress_sent:
+                            last_message_time = current_time
+                            last_dot_time = current_time
+                            should_update = True
+                            logger.debug("Progress injection: Sending initial message")
+                        
+                        if should_update:
+                            # Determine what to send
+                            if not progress_sent and not any_content_sent:
+                                # First message at start of stream - show hourglass
+                                formatted_message = "⏳"
+                            elif not progress_sent:
+                                # First message but there's already content - need newline with hourglass
+                                formatted_message = "\n⏳"
+                            elif update_message:
+                                # Message change - send new circle message without space
+                                message_text = progress_messages[current_message_index]
+                                formatted_message = message_text
+                            else:
+                                # Just adding a dot - send only the dot
+                                formatted_message = "·"
+                            
+                            # Check if we need to add a newline before progress
+                            if need_newline_before_progress:
+                                formatted_message = "\n" + formatted_message
+                                need_newline_before_progress = False
+                            
+                            progress_chunk = create_progress_chunk(request_id, model, formatted_message)
+                            yield progress_chunk
+                            progress_sent = True
+                            
+                            # Increment update count for backoff tracking
+                            if not should_update or update_message:
+                                update_count += 1
+                        else:
+                            # No visible progress update needed - check if we need keepalive
+                            time_since_keepalive = current_time - last_keepalive_time if last_keepalive_time > 0 else float('inf')
+                            if time_since_keepalive >= SSE_KEEPALIVE_INTERVAL:
+                                # Send invisible keepalive comment
+                                yield create_sse_keepalive()
+                                last_keepalive_time = current_time
+                                logger.debug("Progress injection: Sent SSE keepalive comment")
+                    
+                    # Schedule next check with dynamic frequency
+                    elapsed_time = current_time - last_activity_time
+                    if elapsed_time < 30:
+                        check_interval = 0.5  # Fast checks initially
+                    elif elapsed_time < 120:
+                        check_interval = 1.0  # Slower after 30s
+                    else:
+                        check_interval = 2.0  # Even slower after 2 minutes
+                    
+                    progress_task = asyncio.create_task(asyncio.sleep(check_interval))
+            
+            # Cancel any pending tasks if needed
+            for task in pending:
+                if task == progress_task and queue_task in done:
+                    # Cancel progress if we got a chunk
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    # Resume checking with dynamic interval
+                    elapsed_time = asyncio.get_event_loop().time() - last_activity_time
+                    if elapsed_time < 30:
+                        check_interval = 0.5
+                    elif elapsed_time < 120:
+                        check_interval = 1.0
+                    else:
+                        check_interval = 2.0
+                    progress_task = asyncio.create_task(asyncio.sleep(check_interval))
+    
+    # Start the stream consumer task
+    consumer_task = asyncio.create_task(stream_consumer())
+    
+    try:
+        # Use the merged stream
+        async for chunk in merged_stream():
+            yield chunk
+    finally:
+        # Cancel consumer task if still running
+        if not consumer_task.done():
+            consumer_task.cancel()
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Ensure stream is complete
+        stream_complete.set()
+        
+        logger.debug("Progress injection: Monitoring stopped")
+
+
 async def generate_streaming_response(
     request: ChatCompletionRequest,
     request_id: str,
-    claude_headers: Optional[Dict[str, Any]] = None
+    claude_headers: Optional[Dict[str, Any]] = None,
+    is_chat_mode: bool = False
 ) -> AsyncGenerator[str, None]:
     """Generate SSE formatted streaming response."""
+    sandbox_dir = None  # Track sandbox for cleanup
+    session_id = None  # Track Claude session ID for cleanup
     try:
-        # Process messages with session management
-        all_messages, actual_session_id = session_manager.process_messages(
-            request.messages, request.session_id
-        )
+        # In chat mode, skip session management
+        if is_chat_mode:
+            all_messages = request.messages  # Keep as Message objects
+            actual_session_id = None
+            logger.info("Chat mode active - sessions disabled")
+        else:
+            # Process messages with session management
+            all_messages, actual_session_id = session_manager.process_messages(
+                request.messages, request.session_id
+            )
         
         # Convert messages to prompt
+        logger.debug(f"Converting {len(all_messages)} messages to prompt")
+        for i, msg in enumerate(all_messages):
+            msg_preview = str(msg)[:200] + "..." if len(str(msg)) > 200 else str(msg)
+            logger.debug(f"Message {i}: {msg_preview}")
         prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+        logger.debug(f"Converted prompt length: {len(prompt)}, system prompt: {len(system_prompt) if system_prompt else 0} chars")
         
-        # Filter content for unsupported features
-        prompt = MessageAdapter.filter_content(prompt)
-        if system_prompt:
-            system_prompt = MessageAdapter.filter_content(system_prompt)
+        # Filter content for unsupported features (skip in chat mode to preserve XML)
+        if not is_chat_mode:
+            prompt = MessageAdapter.filter_content(prompt)
+            if system_prompt:
+                system_prompt = MessageAdapter.filter_content(system_prompt)
+        else:
+            logger.debug("Chat mode: Skipping content filtering to preserve XML tool definitions")
         
         # Get Claude Code SDK options from request
         claude_options = request.to_claude_options()
@@ -343,46 +1396,107 @@ async def generate_streaming_response(
             ParameterValidator.validate_model(claude_options['model'])
         
         # Handle tools - disabled by default for OpenAI compatibility
-        if not request.enable_tools:
+        if is_chat_mode:
+            # Chat mode overrides all tool settings
+            logger.info("Chat mode: using restricted tool set")
+            claude_options['allowed_tools'] = ChatMode.get_allowed_tools()
+            claude_options['disallowed_tools'] = None
+            claude_options['max_turns'] = claude_options.get('max_turns', 10)
+        elif not request.enable_tools:
             # Set disallowed_tools to all available tools to disable them
-            disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
-                                'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
-                                'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
-            claude_options['disallowed_tools'] = disallowed_tools
+            claude_options['disallowed_tools'] = ALL_CLAUDE_TOOLS
             claude_options['max_turns'] = 1  # Single turn for Q&A
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
             logger.info("Tools enabled by user request")
         
-        # Run Claude Code
+        # Run Claude Code with timeout protection
         chunks_buffer = []
         role_sent = False  # Track if we've sent the initial role chunk
         content_sent = False  # Track if we've sent any content
+        assistant_content_seen = False  # Track if we've seen AssistantMessage content
         
-        async for chunk in claude_cli.run_completion(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            model=claude_options.get('model'),
-            max_turns=claude_options.get('max_turns', 10),
-            allowed_tools=claude_options.get('allowed_tools'),
-            disallowed_tools=claude_options.get('disallowed_tools'),
-            stream=True
-        ):
+        # Create a wrapper for the SDK stream
+        
+        async def stream_with_timeout():
+            """Wrap SDK stream with timeout detection"""
+            try:
+                async for chunk in claude_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    model=claude_options.get('model'),
+                    max_turns=claude_options.get('max_turns', 10),
+                    allowed_tools=claude_options.get('allowed_tools'),
+                    disallowed_tools=claude_options.get('disallowed_tools'),
+                    stream=True,
+                    messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages],  # Convert to dicts for format detection
+                    is_chat_mode=is_chat_mode
+                ):
+                    yield chunk
+            except asyncio.CancelledError:
+                logger.warning("SDK stream was cancelled")
+                raise
+            except Exception as e:
+                logger.error(f"SDK stream error: {type(e).__name__}: {e}")
+                # Yield error as SDK format
+                yield {
+                    "type": "result",
+                    "subtype": "error_during_execution",
+                    "is_error": True,
+                    "error_message": f"Stream error: {str(e)}"
+                }
+        
+        stream_iter = stream_with_timeout()
+        
+        logger.debug("Starting SDK stream iteration")
+        stream_start_time = asyncio.get_event_loop().time()
+        chunk_count = 0
+        last_chunk_time = stream_start_time
+        
+        async for chunk in stream_iter:
+            chunk_count += 1
+            current_time = asyncio.get_event_loop().time()
+            time_since_last = current_time - last_chunk_time
+            time_since_start = current_time - stream_start_time
+            last_chunk_time = current_time
+            
+            # Log chunk info with timing
+            chunk_type = chunk.get('type', 'unknown')
+            chunk_subtype = chunk.get('subtype', '')
+            logger.debug(f"SDK chunk #{chunk_count} at {time_since_start:.2f}s (delta: {time_since_last:.2f}s) - type: {chunk_type}, subtype: {chunk_subtype}")
+            
             chunks_buffer.append(chunk)
             
-            # Check if we have an assistant message
-            # Handle both old format (type/message structure) and new format (direct content)
-            content = None
-            if chunk.get("type") == "assistant" and "message" in chunk:
-                # Old format: {"type": "assistant", "message": {"content": [...]}}
-                message = chunk["message"]
-                if isinstance(message, dict) and "content" in message:
-                    content = message["content"]
-            elif "content" in chunk and isinstance(chunk["content"], list):
-                # New format: {"content": [TextBlock(...)]}  (converted AssistantMessage)
-                content = chunk["content"]
+            # Extract sandbox directory and session ID from init message in chat mode
+            if is_chat_mode and chunk.get("subtype") == "init":
+                data = chunk.get("data", {})
+                if isinstance(data, dict):
+                    if "cwd" in data and not sandbox_dir:
+                        sandbox_dir = data["cwd"]
+                        logger.debug(f"Tracked sandbox directory: {sandbox_dir}")
+                    if "session_id" in data and not session_id:
+                        session_id = data["session_id"]
+                        logger.debug(f"Tracked Claude session ID: {session_id}")
+                # Also check top-level session_id
+                if "session_id" in chunk and not session_id:
+                    session_id = chunk["session_id"]
+                    logger.debug(f"Tracked Claude session ID from chunk: {session_id}")
             
-            if content is not None:
+            # Extract content using unified method
+            extracted_text = extract_content_from_chunk(chunk)
+            
+            # Track if we've seen AssistantMessage content
+            if extracted_text is not None and "content" in chunk and isinstance(chunk["content"], list):
+                # This is likely an AssistantMessage chunk
+                assistant_content_seen = True
+                logger.debug("Detected AssistantMessage content")
+            
+            # Skip ResultMessage content if we've already seen AssistantMessage content
+            if extracted_text is not None and chunk.get("subtype") == "success" and assistant_content_seen:
+                logger.debug("Skipping ResultMessage content to avoid duplication (already have AssistantMessage)")
+                continue
+            
+            if extracted_text is not None:
                 # Send initial role chunk if we haven't already
                 if not role_sent:
                     initial_chunk = ChatCompletionStreamResponse(
@@ -397,54 +1511,30 @@ async def generate_streaming_response(
                     yield f"data: {initial_chunk.model_dump_json()}\n\n"
                     role_sent = True
                 
-                # Handle content blocks
-                if isinstance(content, list):
-                    for block in content:
-                        # Handle TextBlock objects from Claude Code SDK
-                        if hasattr(block, 'text'):
-                            raw_text = block.text
-                        # Handle dictionary format for backward compatibility
-                        elif isinstance(block, dict) and block.get("type") == "text":
-                            raw_text = block.get("text", "")
-                        else:
-                            continue
-                            
-                        # Filter out tool usage and thinking blocks
-                        filtered_text = MessageAdapter.filter_content(raw_text)
-                            
-                        if filtered_text and not filtered_text.isspace():
-                            # Create streaming chunk
-                            stream_chunk = ChatCompletionStreamResponse(
-                                id=request_id,
-                                model=request.model,
-                                choices=[StreamChoice(
-                                    index=0,
-                                    delta={"content": filtered_text},
-                                    finish_reason=None
-                                )]
-                            )
-                            
-                            yield f"data: {stream_chunk.model_dump_json()}\n\n"
-                            content_sent = True
+                # Filter content if not in chat mode
+                if is_chat_mode:
+                    filtered_text = extracted_text
+                else:
+                    filtered_text = MessageAdapter.filter_content(extracted_text)
                 
-                elif isinstance(content, str):
-                    # Filter out tool usage and thinking blocks
-                    filtered_content = MessageAdapter.filter_content(content)
+                if filtered_text and not filtered_text.isspace():
+                    # Create streaming chunk
+                    stream_chunk = ChatCompletionStreamResponse(
+                        id=request_id,
+                        model=request.model,
+                        choices=[StreamChoice(
+                            index=0,
+                            delta={"content": filtered_text},
+                            finish_reason=None
+                        )]
+                    )
                     
-                    if filtered_content and not filtered_content.isspace():
-                        # Create streaming chunk
-                        stream_chunk = ChatCompletionStreamResponse(
-                            id=request_id,
-                            model=request.model,
-                            choices=[StreamChoice(
-                                index=0,
-                                delta={"content": filtered_content},
-                                finish_reason=None
-                            )]
-                        )
-                        
-                        yield f"data: {stream_chunk.model_dump_json()}\n\n"
-                        content_sent = True
+                    yield f"data: {stream_chunk.model_dump_json()}\n\n"
+                    content_sent = True
+        
+        stream_end_time = asyncio.get_event_loop().time()
+        total_stream_time = stream_end_time - stream_start_time
+        logger.debug(f"SDK stream completed after {chunk_count} chunks in {total_stream_time:.2f}s")
         
         # Handle case where no role was sent (send at least role chunk)
         if not role_sent:
@@ -461,18 +1551,9 @@ async def generate_streaming_response(
             yield f"data: {initial_chunk.model_dump_json()}\n\n"
             role_sent = True
         
-        # If we sent role but no content, send a minimal response
+        # If we sent role but no content, that's a genuine empty response
         if role_sent and not content_sent:
-            fallback_chunk = ChatCompletionStreamResponse(
-                id=request_id,
-                model=request.model,
-                choices=[StreamChoice(
-                    index=0,
-                    delta={"content": "I'm unable to provide a response at the moment."},
-                    finish_reason=None
-                )]
-            )
-            yield f"data: {fallback_chunk.model_dump_json()}\n\n"
+            logger.debug("Empty response - role sent but no content extracted")
         
         # Extract assistant response from all chunks for session storage
         if actual_session_id and chunks_buffer:
@@ -503,6 +1584,41 @@ async def generate_streaming_response(
             }
         }
         yield f"data: {json.dumps(error_chunk)}\n\n"
+    finally:
+        # Cleanup sandbox directory and session if in chat mode
+        if is_chat_mode and sandbox_dir:
+            # First cleanup Claude session file
+            # Try to get session_id from claude_cli if we didn't get it from messages
+            if not session_id and hasattr(claude_cli, 'get_last_session_id'):
+                session_id = claude_cli.get_last_session_id()
+                if session_id:
+                    logger.debug(f"Got session ID from claude_cli: {session_id}")
+            
+            if session_id and CHAT_MODE_CLEANUP_SESSIONS:
+                # Track or cleanup based on delay setting
+                if CHAT_MODE_CLEANUP_DELAY_MINUTES == 0:
+                    # Immediate cleanup
+                    try:
+                        cleanup_claude_session(sandbox_dir, session_id)
+                        logger.debug(f"Immediately cleaned up sandbox session {session_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to cleanup Claude session: {e}")
+                else:
+                    # Track for delayed cleanup
+                    tracker = get_tracker()
+                    if tracker.track_sandbox_session(session_id, sandbox_dir):
+                        logger.debug(f"Tracked sandbox session {session_id} for cleanup in {CHAT_MODE_CLEANUP_DELAY_MINUTES} minutes")
+                    else:
+                        logger.error(f"Failed to track sandbox session {session_id}")
+            elif session_id and not CHAT_MODE_CLEANUP_SESSIONS:
+                logger.debug(f"Session cleanup disabled - session {session_id} retained")
+            
+            # Then cleanup sandbox directory
+            try:
+                ChatMode.cleanup_sandbox(sandbox_dir)
+                logger.debug(f"Cleaned up sandbox directory: {sandbox_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup sandbox {sandbox_dir}: {e}")
 
 
 @app.post("/v1/chat/completions")
@@ -534,6 +1650,19 @@ async def chat_completions(
     try:
         request_id = f"chatcmpl-{os.urandom(8).hex()}"
         
+        # Parse model to determine chat mode and progress markers
+        base_model, is_chat_mode, show_progress_markers = ModelUtils.parse_model_and_mode(request_body.model)
+        
+        # Update request to use base model
+        request_body.model = base_model
+        
+        # Log the mode
+        if is_chat_mode:
+            if show_progress_markers:
+                logger.info(f"Chat mode with progress markers activated via model suffix for {base_model}")
+            else:
+                logger.info(f"Chat mode activated via model suffix for {base_model}")
+        
         # Extract Claude-specific parameters from headers
         claude_headers = ParameterValidator.extract_claude_headers(dict(request.headers))
         
@@ -544,8 +1673,24 @@ async def chat_completions(
         
         if request_body.stream:
             # Return streaming response
+            if is_chat_mode and show_progress_markers:
+                # Chat mode with progress markers enabled
+                logger.info("Chat mode: Wrapping stream with progress indicators")
+                stream_generator = stream_with_progress_injection(
+                    generate_streaming_response(request_body, request_id, claude_headers, is_chat_mode),
+                    request_id,
+                    request_body.model
+                )
+            elif not show_progress_markers:
+                # Progress markers disabled - show only final content
+                logger.info("Progress markers disabled: Streaming final content only")
+                stream_generator = stream_final_content_only(request_body, request_id, claude_headers, is_chat_mode)
+            else:
+                # Normal mode - all chunks without progress injection
+                stream_generator = generate_streaming_response(request_body, request_id, claude_headers, is_chat_mode)
+            
             return StreamingResponse(
-                generate_streaming_response(request_body, request_id, claude_headers),
+                stream_generator,
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -554,20 +1699,29 @@ async def chat_completions(
             )
         else:
             # Non-streaming response
-            # Process messages with session management
-            all_messages, actual_session_id = session_manager.process_messages(
-                request_body.messages, request_body.session_id
-            )
-            
-            logger.info(f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}")
+            # In chat mode, skip session management
+            if is_chat_mode:
+                all_messages = request_body.messages  # Keep as Message objects
+                actual_session_id = None
+                logger.info("Chat mode active - sessions disabled")
+            else:
+                # Process messages with session management
+                all_messages, actual_session_id = session_manager.process_messages(
+                    request_body.messages, request_body.session_id
+                )
+                
+                logger.info(f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}")
             
             # Convert messages to prompt
             prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
             
-            # Filter content
-            prompt = MessageAdapter.filter_content(prompt)
-            if system_prompt:
-                system_prompt = MessageAdapter.filter_content(system_prompt)
+            # Filter content (skip in chat mode to preserve XML)
+            if not is_chat_mode:
+                prompt = MessageAdapter.filter_content(prompt)
+                if system_prompt:
+                    system_prompt = MessageAdapter.filter_content(system_prompt)
+            else:
+                logger.debug("Chat mode: Skipping content filtering to preserve XML tool definitions")
             
             # Get Claude Code SDK options from request
             claude_options = request_body.to_claude_options()
@@ -581,12 +1735,15 @@ async def chat_completions(
                 ParameterValidator.validate_model(claude_options['model'])
             
             # Handle tools - disabled by default for OpenAI compatibility
-            if not request_body.enable_tools:
+            if is_chat_mode:
+                # Chat mode overrides all tool settings
+                logger.info("Chat mode: using restricted tool set")
+                claude_options['allowed_tools'] = ChatMode.get_allowed_tools()
+                claude_options['disallowed_tools'] = None
+                claude_options['max_turns'] = claude_options.get('max_turns', 10)
+            elif not request_body.enable_tools:
                 # Set disallowed_tools to all available tools to disable them
-                disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
-                                    'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
-                                    'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
-                claude_options['disallowed_tools'] = disallowed_tools
+                claude_options['disallowed_tools'] = ALL_CLAUDE_TOOLS
                 claude_options['max_turns'] = 1  # Single turn for Q&A
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
@@ -601,7 +1758,9 @@ async def chat_completions(
                 max_turns=claude_options.get('max_turns', 10),
                 allowed_tools=claude_options.get('allowed_tools'),
                 disallowed_tools=claude_options.get('disallowed_tools'),
-                stream=False
+                stream=False,
+                messages=[msg.model_dump() if hasattr(msg, 'model_dump') else msg for msg in all_messages],  # Convert to dicts for format detection
+                is_chat_mode=is_chat_mode
             ):
                 chunks.append(chunk)
             
@@ -611,8 +1770,13 @@ async def chat_completions(
             if not raw_assistant_content:
                 raise HTTPException(status_code=500, detail="No response from Claude Code")
             
-            # Filter out tool usage and thinking blocks
-            assistant_content = MessageAdapter.filter_content(raw_assistant_content)
+            # Filter out tool usage and thinking blocks (skip in chat mode)
+            if is_chat_mode:
+                # In chat mode, preserve the exact response format
+                assistant_content = raw_assistant_content
+                logger.debug(f"Chat mode: Preserving raw response format, length: {len(assistant_content)}")
+            else:
+                assistant_content = MessageAdapter.filter_content(raw_assistant_content)
             
             # Add assistant response to session if using session mode
             if actual_session_id:
@@ -657,15 +1821,33 @@ async def list_models(
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
     
+    # Base models from ParameterValidator
+    base_models = list(ParameterValidator.SUPPORTED_MODELS)
+    
+    models_data = []
+    for base_model in sorted(base_models):
+        # Add base model (normal mode)
+        models_data.append({
+            "id": base_model,
+            "object": "model",
+            "owned_by": "anthropic"
+        })
+        # Add chat variant (without progress markers)
+        models_data.append({
+            "id": ModelUtils.create_chat_variant(base_model),
+            "object": "model",
+            "owned_by": "anthropic"
+        })
+        # Add chat-progress variant (with progress markers)
+        models_data.append({
+            "id": ModelUtils.create_chat_progress_variant(base_model),
+            "object": "model",
+            "owned_by": "anthropic"
+        })
+    
     return {
         "object": "list",
-        "data": [
-            {"id": "claude-sonnet-4-20250514", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-opus-4-20250514", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-3-7-sonnet-20250219", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-3-5-sonnet-20241022", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-3-5-haiku-20241022", "object": "model", "owned_by": "anthropic"},
-        ]
+        "data": models_data
     }
 
 
@@ -775,12 +1957,24 @@ async def get_auth_status(request: Request):
     auth_info = get_claude_code_auth_info()
     active_api_key = auth_manager.get_api_key()
     
+    # Get sandbox cleanup info
+    sandbox_cleanup_info = None
+    if CHAT_MODE_CLEANUP_SESSIONS:
+        tracker = get_tracker()
+        sandbox_cleanup_info = {
+            "enabled": True,
+            "delay_minutes": CHAT_MODE_CLEANUP_DELAY_MINUTES,
+            "tracker_stats": tracker.get_tracker_stats()
+        }
+    
     return {
         "claude_code_auth": auth_info,
         "server_info": {
             "api_key_required": bool(active_api_key),
             "api_key_source": "environment" if os.getenv("API_KEY") else ("runtime" if runtime_api_key else "none"),
-            "version": "1.0.0"
+            "version": "1.0.0",
+            "chat_mode": get_chat_mode_info(False),  # Server-level info
+            "sandbox_cleanup": sandbox_cleanup_info
         }
     }
 
@@ -790,6 +1984,7 @@ async def get_session_stats(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Get session manager statistics."""
+    # Sessions are only disabled when using chat mode models
     stats = session_manager.get_stats()
     return {
         "session_stats": stats,
@@ -803,6 +1998,7 @@ async def list_sessions(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """List all active sessions."""
+    # Sessions work normally - they're only disabled for chat mode models
     sessions = session_manager.list_sessions()
     return SessionListResponse(sessions=sessions, total=len(sessions))
 
@@ -813,6 +2009,7 @@ async def get_session(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Get information about a specific session."""
+    # Sessions work normally - they're only disabled for chat mode models
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -826,6 +2023,7 @@ async def delete_session(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Delete a specific session."""
+    # Sessions work normally - they're only disabled for chat mode models
     deleted = session_manager.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")

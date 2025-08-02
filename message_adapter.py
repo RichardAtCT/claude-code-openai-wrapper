@@ -7,6 +7,45 @@ class MessageAdapter:
     """Converts between OpenAI message format and Claude Code prompts."""
     
     @staticmethod
+    def has_structured_format(content: str) -> bool:
+        """
+        Detect if content has structured format (XML, JSON, etc).
+        Used to determine if content should be preserved as-is.
+        """
+        if not content or len(content) < 10:
+            return False
+            
+        # Check for XML-like patterns (opening and closing tags)
+        import re
+        xml_pattern = r'<([a-zA-Z_][\w\-\.]*)(\s[^>]*)?>.*?</\1>'
+        if re.search(xml_pattern, content, re.DOTALL):
+            return True
+            
+        # Check for JSON-like patterns
+        content_stripped = content.strip()
+        if (content_stripped.startswith('{') and content_stripped.endswith('}')) or \
+           (content_stripped.startswith('[') and content_stripped.endswith(']')):
+            try:
+                import json
+                json.loads(content_stripped)
+                return True
+            except:
+                pass
+                
+        # Check for structured format indicators
+        structured_indicators = [
+            '```',  # Code blocks
+            '<?xml',  # XML declaration
+            '<!DOCTYPE',  # HTML/XML doctype
+        ]
+        
+        for indicator in structured_indicators:
+            if indicator in content:
+                return True
+                
+        return False
+    
+    @staticmethod
     def messages_to_prompt(messages: List[Message]) -> tuple[str, Optional[str]]:
         """
         Convert OpenAI messages to Claude Code prompt format.
@@ -115,3 +154,13 @@ class MessageAdapter:
         OpenAI's rule of thumb: ~4 characters per token for English text.
         """
         return len(text) // 4
+    
+    @staticmethod
+    def validate_xml_tool_response(content: str) -> bool:
+        """Check if content contains valid XML tool tags."""
+        content_lower = content.lower()
+        return any([
+            "<attempt_completion>" in content_lower,
+            "<ask_followup_question>" in content_lower,
+            "<new_task>" in content_lower
+        ])

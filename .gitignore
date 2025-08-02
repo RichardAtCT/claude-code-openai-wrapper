@@ -44,10 +44,17 @@ htmlcov/
 
 # Claude Code
 .claude/
+claude_code_sessions/
+.claude-code/
+*.claude-session
+*.claude-backup
+
+# Claude documentation
+doc/
+CLAUDE.md
 
 # Development documentation
 IMPLEMENTATION_PLAN.md
-CLAUDE.md
 PARAMETER_MAPPING.md
 IMPROVEMENT_PLAN.md
 
