@@ -10,7 +10,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - ✅ Full OpenAI SDK compatibility
 - ✅ **Multi-provider authentication** (API key, Bedrock, Vertex AI, CLI auth)
 - ✅ **System prompt support** via SDK options
-- ✅ Model selection support with validation
+- ✅ Dynamic model discovery with automatic updates
 - ✅ **Fast by default** - Tools disabled for OpenAI compatibility (5-10x faster)
 - ✅ Optional tool usage (Read, Write, Bash, etc.) when explicitly enabled
 - ✅ **Real-time cost and token tracking** from SDK
@@ -26,7 +26,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - OpenAI-compatible `/v1/chat/completions` endpoint
 - Support for both streaming and non-streaming responses
 - Compatible with OpenAI Python SDK and all OpenAI client libraries
-- Automatic model validation and selection
+- Automatic model discovery and validation
 
 ### 🛠 **Claude Code SDK Integration**
 - **Official Claude Code Python SDK** integration (v0.0.14)
@@ -667,13 +667,25 @@ for chunk in stream:
 
 ## Supported Models
 
+The wrapper dynamically discovers available models from the Claude CLI at startup. Models are automatically extracted from the CLI binary and cached for 24 hours.
+
+Currently available models (auto-discovered):
 - `claude-sonnet-4-20250514` (Recommended)
 - `claude-opus-4-20250514`
+- `claude-opus-4-1-20250805`
 - `claude-3-7-sonnet-20250219`
 - `claude-3-5-sonnet-20241022`
 - `claude-3-5-haiku-20241022`
+- `claude-3-sonnet-20240229`
 
-The model parameter is passed to Claude Code via the `--model` flag.
+The model parameter is passed to Claude Code via the `--model` flag. Each model also has two chat mode variants:
+- `{model}-chat` - Chat mode without progress markers
+- `{model}-chat-progress` - Chat mode with streaming progress indicators
+
+View all available models and their variants:
+```bash
+curl http://localhost:8000/v1/models
+```
 
 ## Session Continuity 🆕
 

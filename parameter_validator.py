@@ -6,6 +6,7 @@ import logging
 from typing import Dict, Any, List, Optional
 from models import ChatCompletionRequest
 from model_utils import ModelUtils
+from model_discovery import get_supported_models
 
 logger = logging.getLogger(__name__)
 
@@ -13,14 +14,10 @@ logger = logging.getLogger(__name__)
 class ParameterValidator:
     """Validates and maps OpenAI Chat Completions parameters to Claude Code SDK options."""
     
-    # Supported Claude Code SDK models
-    SUPPORTED_MODELS = {
-        "claude-sonnet-4-20250514",
-        "claude-opus-4-20250514", 
-        "claude-3-7-sonnet-20250219",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022"
-    }
+    @classmethod
+    def get_supported_models(cls):
+        """Get supported models dynamically from Claude CLI or fallback list."""
+        return get_supported_models()
     
     # Valid permission modes for Claude Code SDK
     VALID_PERMISSION_MODES = {"default", "acceptEdits", "bypassPermissions"}
@@ -38,8 +35,9 @@ class ParameterValidator:
         # Extract base model for validation
         base_model, _, _ = ModelUtils.parse_model_and_mode(model)
         
-        if base_model not in cls.SUPPORTED_MODELS:
-            logger.warning(f"Model '{base_model}' may not be supported by Claude Code SDK. Supported models: {cls.SUPPORTED_MODELS}")
+        supported_models = cls.get_supported_models()
+        if base_model not in supported_models:
+            logger.warning(f"Model '{base_model}' may not be supported by Claude Code SDK. Supported models: {supported_models}")
             return False
         return True
     

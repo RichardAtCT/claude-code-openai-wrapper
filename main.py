@@ -38,6 +38,7 @@ from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_fo
 from chat_mode import ChatMode, get_chat_mode_info
 from model_utils import ModelUtils
 from session_tracker import get_tracker, scan_claude_projects_for_sandbox_sessions
+from model_discovery import get_supported_models, clear_model_cache
 
 # Load environment variables
 load_dotenv()
@@ -196,6 +197,14 @@ async def sandbox_session_cleanup_task():
 async def lifespan(app: FastAPI):
     """Verify Claude Code authentication and CLI on startup."""
     logger.info("Verifying Claude Code authentication and CLI...")
+    
+    # Discover available models
+    try:
+        discovered_models = get_supported_models()
+        logger.info(f"✅ Discovered {len(discovered_models)} Claude models: {sorted(discovered_models)}")
+    except Exception as e:
+        logger.warning(f"⚠️  Model discovery failed: {e}")
+        logger.warning("Will use fallback model list")
     
     # Validate authentication first
     auth_valid, auth_info = validate_claude_code_auth()
@@ -1821,8 +1830,8 @@ async def list_models(
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
     
-    # Base models from ParameterValidator
-    base_models = list(ParameterValidator.SUPPORTED_MODELS)
+    # Get models dynamically
+    base_models = list(ParameterValidator.get_supported_models())
     
     models_data = []
     for base_model in sorted(base_models):
