@@ -276,7 +276,7 @@ def scan_claude_projects_for_sandbox_sessions(older_than_minutes: int) -> List[T
                         session_id = session_file.stem  # Remove .jsonl extension
                         age_minutes = age_seconds / 60
                         sandbox_sessions.append((session_id, str(project_dir), age_minutes))
-                        logger.debug(f"Found old sandbox session: {session_id} (age: {age_minutes:.1f} minutes)")
+                        logger.info(f"Found old sandbox session: {session_id} in {project_dir} (age: {age_minutes:.1f} minutes)")
                 except Exception as e:
                     logger.debug(f"Could not check session file {session_file}: {e}")
         

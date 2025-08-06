@@ -261,14 +261,23 @@ async def lifespan(app: FastAPI):
             old_sessions = scan_claude_projects_for_sandbox_sessions(CHAT_MODE_CLEANUP_DELAY_MINUTES)
             for session_id, project_dir, age_minutes in old_sessions:
                 try:
-                    # Extract sandbox dir from project dir
-                    # Convert back from transformed path
-                    sandbox_dir_parts = project_dir.split('/')[-1].replace('-', '/')
-                    if sandbox_dir_parts.startswith('/'):
-                        sandbox_dir_parts = sandbox_dir_parts[1:]
-                    # This is approximate - we use the project dir for cleanup
-                    if cleanup_claude_session(project_dir, session_id):
-                        logger.info(f"Cleaned up old sandbox session {session_id} (age: {age_minutes:.1f} minutes)")
+                    # The scan returns the full project directory path
+                    # We need to extract the session file directly from it
+                    session_file = os.path.join(project_dir, f"{session_id}.jsonl")
+                    
+                    if os.path.exists(session_file):
+                        os.remove(session_file)
+                        logger.info(f"Deleted old sandbox session file: {session_file} (age: {age_minutes:.1f} minutes)")
+                        
+                        # Try to remove the project directory if empty
+                        try:
+                            if os.path.exists(project_dir) and not os.listdir(project_dir):
+                                os.rmdir(project_dir)
+                                logger.info(f"Removed empty sandbox project directory: {project_dir}")
+                        except Exception as dir_err:
+                            logger.debug(f"Could not remove project directory (may not be empty): {dir_err}")
+                    else:
+                        logger.warning(f"Old sandbox session file not found: {session_file}")
                 except Exception as e:
                     logger.error(f"Failed to cleanup old session {session_id}: {e}")
         
@@ -611,6 +620,7 @@ def cleanup_claude_session(sandbox_dir: str, session_id: str) -> bool:
         
         if not files_removed:
             logger.debug(f"No session files found to remove for session {session_id}")
+            return False
             
         return True
     except Exception as e:
