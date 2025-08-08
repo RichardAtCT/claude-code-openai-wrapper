@@ -1,6 +1,9 @@
 import asyncio
 import json
 import os
+import tempfile
+import atexit
+import shutil
 from typing import AsyncGenerator, Dict, Any, Optional, List
 from pathlib import Path
 import logging
@@ -13,7 +16,27 @@ logger = logging.getLogger(__name__)
 class ClaudeCodeCLI:
     def __init__(self, timeout: int = 600000, cwd: Optional[str] = None):
         self.timeout = timeout / 1000  # Convert ms to seconds
-        self.cwd = Path(cwd) if cwd else Path.cwd()
+        self.temp_dir = None
+        
+        # If cwd is provided (from CLAUDE_CWD env var), use it
+        # Otherwise create an isolated temp directory
+        if cwd:
+            self.cwd = Path(cwd)
+            # Check if the directory exists
+            if not self.cwd.exists():
+                logger.error(f"ERROR: Specified working directory does not exist: {self.cwd}")
+                logger.error(f"Please create the directory first or unset CLAUDE_CWD to use a temporary directory")
+                raise ValueError(f"Working directory does not exist: {self.cwd}")
+            else:
+                logger.info(f"Using CLAUDE_CWD: {self.cwd}")
+        else:
+            # Create isolated temp directory (cross-platform)
+            self.temp_dir = tempfile.mkdtemp(prefix="claude_code_workspace_")
+            self.cwd = Path(self.temp_dir)
+            logger.info(f"Using temporary isolated workspace: {self.cwd}")
+            
+            # Register cleanup function to remove temp dir on exit
+            atexit.register(self._cleanup_temp_dir)
         
         # Import auth manager
         from auth import auth_manager, validate_claude_code_auth
@@ -234,3 +257,12 @@ class ClaudeCodeCLI:
                 })
                 
         return metadata
+    
+    def _cleanup_temp_dir(self):
+        """Clean up temporary directory on exit."""
+        if self.temp_dir and os.path.exists(self.temp_dir):
+            try:
+                shutil.rmtree(self.temp_dir)
+                logger.info(f"Cleaned up temporary workspace: {self.temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp directory {self.temp_dir}: {e}")

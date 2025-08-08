@@ -143,7 +143,39 @@ MAX_TIMEOUT=600000
 
 # CORS origins
 CORS_ORIGINS=["*"]
+
+# Working directory for Claude Code (optional)
+# If not set, uses an isolated temporary directory for security
+# CLAUDE_CWD=/path/to/your/workspace
 ```
+
+### 📁 **Working Directory Configuration**
+
+By default, Claude Code runs in an **isolated temporary directory** to prevent it from accessing the wrapper's source code. This enhances security by ensuring Claude Code only has access to the workspace you intend.
+
+**Configuration Options:**
+
+1. **Default (Recommended)**: Automatically creates a temporary isolated workspace
+   ```bash
+   # No configuration needed - secure by default
+   poetry run python main.py
+   ```
+
+2. **Custom Directory**: Set a specific workspace directory
+   ```bash
+   export CLAUDE_CWD=/path/to/your/project
+   poetry run python main.py
+   ```
+
+3. **Via .env file**: Add to your `.env` file
+   ```env
+   CLAUDE_CWD=/home/user/my-workspace
+   ```
+
+**Important Notes:**
+- The temporary directory is automatically cleaned up when the server stops
+- This prevents Claude Code from accidentally modifying the wrapper's own code
+- Cross-platform compatible (Windows, macOS, Linux)
 
 ### 🔐 **API Security Configuration**
 
@@ -246,7 +278,7 @@ RATE_LIMIT_HEALTH_PER_MINUTE=30
 
 This guide provides a comprehensive overview of building, running, and configuring a Docker container for the Claude Code OpenAI Wrapper. Docker enables isolated, portable, and reproducible deployments of the wrapper, which acts as an OpenAI-compatible API server routing requests to Anthropic's Claude models via the official Claude Code Python SDK (v0.0.14+). This setup supports authentication methods like Claude subscriptions (e.g., Max plan via OAuth for fixed-cost quotas), direct API keys, AWS Bedrock, or Google Vertex AI.
 
-By containerizing the application, you can run it locally for development, deploy it to remote servers or cloud platforms, and customize behavior through environment variables and volumes. This guide assumes you have already cloned the repository and have the `Dockerfile` in the root directory. For general repository setup (e.g., Claude Code CLI authentication), refer to the sections above.
+By containerizing the application, you can run it locally for development, deploy it to remote servers or cloud platforms, and customise behaviour through environment variables and volumes. This guide assumes you have already cloned the repository and have the `Dockerfile` in the root directory. For general repository setup (e.g., Claude Code CLI authentication), refer to the sections above.
 
 ## Prerequisites
 Before building or running the container, ensure the following:
@@ -255,7 +287,7 @@ Before building or running the container, ensure the following:
 - **Hardware and Software**:
   - OS: macOS (10.15+), Linux (e.g., Ubuntu 20.04+), or Windows (10+ with WSL2 for optimal volume mounting).
   - Resources: At least 4GB RAM and 2 CPU cores (Claude requests can be compute-intensive; monitor with `docker stats`).
-  - Disk: ~500MB for the image, plus space for volumes.
+  - Disc: ~500MB for the image, plus space for volumes.
   - Network: Stable internet for builds (dependency downloads) and runtime (API calls to Anthropic).
 - **Optional**:
   - Docker Compose: For multi-service or easier configuration management. Install via Docker Desktop or your package manager (e.g., `sudo apt install docker-compose`).
@@ -283,7 +315,7 @@ The `Dockerfile` in the root defines a lightweight Python 3.12-based image with 
 4. Advanced Build Options:
    - No Cache (for fresh builds): `docker build --no-cache -t claude-wrapper:latest .`.
    - Platform-Specific (e.g., ARM for Raspberry Pi): `docker build --platform linux/arm64 -t claude-wrapper:arm .`.
-   - Multi-Stage for Smaller Size: If optimizing, modify the Dockerfile to use multi-stage builds (e.g., separate build and runtime stages).
+   - Multi-Stage for Smaller Size: If optimising, modify the Dockerfile to use multi-stage builds (e.g., separate build and runtime stages).
 
 If using Docker Compose (see below), build with `docker-compose build`.
 
@@ -301,6 +333,20 @@ docker run -d -p 8000:8000 \
 - `-d`: Detached mode (runs in background).
 - `-p 8000:8000`: Maps host port 8000 to the container's 8000 (change left side for host conflicts, e.g., `-p 9000:8000`).
 - `-v ~/.claude:/root/.claude`: Mounts your host's authentication directory for persistent subscription tokens (essential for Claude Max access).
+- **Working Directory**: By default, Claude Code uses an isolated temp directory inside the container.
+
+### Running with Custom Workspace
+To give Claude Code access to a specific directory:
+```bash
+docker run -d -p 8000:8000 \
+  -v ~/.claude:/root/.claude \
+  -v /path/to/your/project:/workspace \
+  -e CLAUDE_CWD=/workspace \
+  --name claude-wrapper-container \
+  claude-wrapper:latest
+```
+- `-v /path/to/your/project:/workspace`: Mounts your project directory into the container.
+- `-e CLAUDE_CWD=/workspace`: Sets Claude's working directory to the mounted workspace.
 - `--name claude-wrapper-container`: Names the container for easy management.
 
 ### Development Run with Hot Reload
@@ -345,20 +391,21 @@ services:
 - Cleanup: `docker system prune` to remove unused images/volumes.
 
 ## Custom Configuration Options
-Customize the container's behavior through environment variables, volumes, and runtime flags. Most changes don't require rebuilding—just restart the container.
+Customise the container's behaviour through environment variables, volumes, and runtime flags. Most changes don't require rebuilding—just restart the container.
 
 ### Environment Variables
-Env vars override defaults and can be set at runtime with `-e` flags or in `docker-compose.yml` under `environment`. They control auth, server settings, and SDK behavior.
+Env vars override defaults and can be set at runtime with `-e` flags or in `docker-compose.yml` under `environment`. They control auth, server settings, and SDK behaviour.
 
 - **Core Server Settings**:
   - `PORT=9000`: Changes the internal listening port (default: 8000; update port mapping accordingly).
   - `MAX_TIMEOUT=600`: Sets the request timeout in seconds (default: 300; increase for complex Claude queries).
+  - `CLAUDE_CWD=/path/to/workspace`: Sets Claude Code's working directory (default: isolated temp directory for security).
 
 - **Authentication and Providers**:
   - `ANTHROPIC_API_KEY=sk-your-key`: Enables direct API key auth (overrides subscription; generate at console.anthropic.com).
   - `CLAUDE_CODE_USE_VERTEX=true`: Switches to Google Vertex AI (requires additional vars like `GOOGLE_APPLICATION_CREDENTIALS=/path/to/creds.json`—mount the file as a volume).
   - `CLAUDE_CODE_USE_BEDROCK=true`: Enables AWS Bedrock (set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, etc.).
-  - `CLAUDE_USE_SUBSCRIPTION=true`: Forces subscription mode (default behavior; set to ensure no API fallback).
+  - `CLAUDE_USE_SUBSCRIPTION=true`: Forces subscription mode (default behaviour; set to ensure no API fallback).
 
 - **Security and API Protection**:
   - `API_KEYS=key1,key2`: Comma-separated list of API keys required for endpoint access (clients must send `Authorization: Bearer <key>`).
@@ -375,7 +422,7 @@ docker run ... -e PORT=9000 -e ANTHROPIC_API_KEY=sk-your-key ...
 
 For persistence across runs, use a `.env` file in the root (e.g., `PORT=8000`) and mount it: `-v $(pwd)/.env:/app/.env`. Load vars in code if required.
 
-### Volumes for Data Persistence and Customization
+### Volumes for Data Persistence and Customisation
 Volumes mount host directories/files into the container, enabling persistence and config overrides.
 
 - **Authentication Volume (Required for Subscriptions)**: `-v ~/.claude:/root/.claude` – Shares tokens and `settings.json` (edit on host for defaults like `"max_tokens": 8192`; restart container to apply).
@@ -401,7 +448,7 @@ For remote access (e.g., from other machines or production deployment), extend t
 ### Exposing Locally for Remote Access
 - Bind to All Interfaces: Already done with `--host 0.0.0.0`.
 - Firewall: Open port 8000 on your host (e.g., `ufw allow 8000` on Ubuntu).
-- Tunneling: Use ngrok for temporary exposure: Install ngrok, run `ngrok http 8000`, and use the public URL.
+- Tunnelling: Use ngrok for temporary exposure: Install ngrok, run `ngrok http 8000`, and use the public URL.
 - Security: Always add `API_KEYS` and use HTTPS (via reverse proxy).
 
 ### Deploying to a Remote Server or VPS
@@ -512,7 +559,7 @@ response = client.chat.completions.create(
 )
 
 print(response.choices[0].message.content)
-# Output: Fast response without tool usage (default behavior)
+# Output: Fast response without tool usage (default behaviour)
 
 # Enable tools when you need them (e.g., to read files)
 response = client.chat.completions.create(
@@ -600,7 +647,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-3-5-sonnet-20241022",
-    "messages": [{"role": "user", "content": "My favorite color is blue."}],
+    "messages": [{"role": "user", "content": "My favourite color is blue."}],
     "session_id": "my-session"
   }'
 
@@ -609,7 +656,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-3-5-sonnet-20241022", 
-    "messages": [{"role": "user", "content": "What's my favorite color?"}],
+    "messages": [{"role": "user", "content": "What's my favourite color?"}],
     "session_id": "my-session"
   }'
 ```
@@ -748,9 +795,9 @@ All tests should show:
 - **Real cost tracking** (e.g., $0.001-0.005 per test call)
 - **Accurate token counts** from SDK metadata
 
-## License
+## Licence
 
-MIT License
+MIT Licence
 
 ## Contributing
 

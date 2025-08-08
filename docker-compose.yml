@@ -6,5 +6,11 @@ services:
       - "8000:8000"
     volumes:
       - ~/.claude:/root/.claude
+      # Optional: Mount a specific workspace directory
+      # Uncomment and modify the line below to use a custom workspace
+      # - ./workspace:/workspace
     environment:
       - PORT=8000
+      # Optional: Set Claude's working directory (defaults to isolated temp dir)
+      # Uncomment and modify the line below to set a custom working directory
+      # - CLAUDE_CWD=/workspace
