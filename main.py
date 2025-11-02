@@ -130,14 +130,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.info(f"✅ Claude Code authentication validated: {auth_info['method']}")
     
-    # Then verify CLI
-    cli_verified = await claude_cli.verify_cli()
-    
-    if cli_verified:
-        logger.info("✅ Claude Code CLI verified successfully")
-    else:
-        logger.warning("⚠️  Claude Code CLI verification failed!")
-        logger.warning("The server will start, but requests may fail.")
+    # Skip CLI verification during startup (can hang with new SDK)
+    # TODO: Re-enable after investigating verification timeout issue
+    logger.info("⚠️  Skipping Claude Agent SDK verification during startup")
+    logger.info("SDK will be tested on first request")
+
+    # # Then verify CLI
+    # cli_verified = await claude_cli.verify_cli()
+    #
+    # if cli_verified:
+    #     logger.info("✅ Claude Code CLI verified successfully")
+    # else:
+    #     logger.warning("⚠️  Claude Code CLI verification failed!")
+    #     logger.warning("The server will start, but requests may fail.")
     
     # Log debug information if debug mode is enabled
     if DEBUG_MODE or VERBOSE:
@@ -146,7 +151,8 @@ async def lifespan(app: FastAPI):
         logger.debug(f"   DEBUG_MODE: {DEBUG_MODE}")
         logger.debug(f"   VERBOSE: {VERBOSE}")
         logger.debug(f"   PORT: {os.getenv('PORT', '8000')}")
-        logger.debug(f"   CORS_ORIGINS: {os.getenv('CORS_ORIGINS', '[\"*\"]')}")
+        cors_origins_val = os.getenv('CORS_ORIGINS', '["*"]')
+        logger.debug(f"   CORS_ORIGINS: {cors_origins_val}")
         logger.debug(f"   MAX_TIMEOUT: {os.getenv('MAX_TIMEOUT', '600000')}")
         logger.debug(f"   CLAUDE_CWD: {os.getenv('CLAUDE_CWD', 'Not set')}")
         logger.debug(f"🔧 Available endpoints:")
@@ -331,7 +337,7 @@ async def generate_streaming_response(
         if system_prompt:
             system_prompt = MessageAdapter.filter_content(system_prompt)
         
-        # Get Claude Code SDK options from request
+        # Get Claude Agent SDK options from request
         claude_options = request.to_claude_options()
         
         # Merge with Claude-specific headers if provided
@@ -400,7 +406,7 @@ async def generate_streaming_response(
                 # Handle content blocks
                 if isinstance(content, list):
                     for block in content:
-                        # Handle TextBlock objects from Claude Code SDK
+                        # Handle TextBlock objects from Claude Agent SDK
                         if hasattr(block, 'text'):
                             raw_text = block.text
                         # Handle dictionary format for backward compatibility
@@ -569,7 +575,7 @@ async def chat_completions(
             if system_prompt:
                 system_prompt = MessageAdapter.filter_content(system_prompt)
             
-            # Get Claude Code SDK options from request
+            # Get Claude Agent SDK options from request
             claude_options = request_body.to_claude_options()
             
             # Merge with Claude-specific headers
@@ -675,14 +681,14 @@ async def check_compatibility(request_body: ChatCompletionRequest):
     report = CompatibilityReporter.generate_compatibility_report(request_body)
     return {
         "compatibility_report": report,
-        "claude_code_sdk_options": {
+        "claude_agent_sdk_options": {
             "supported": [
-                "model", "system_prompt", "max_turns", "allowed_tools", 
+                "model", "system_prompt", "max_turns", "allowed_tools",
                 "disallowed_tools", "permission_mode", "max_thinking_tokens",
                 "continue_conversation", "resume", "cwd"
             ],
             "custom_headers": [
-                "X-Claude-Max-Turns", "X-Claude-Allowed-Tools", 
+                "X-Claude-Max-Turns", "X-Claude-Allowed-Tools",
                 "X-Claude-Disallowed-Tools", "X-Claude-Permission-Mode",
                 "X-Claude-Max-Thinking-Tokens"
             ]

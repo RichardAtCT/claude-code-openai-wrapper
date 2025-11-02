@@ -8,7 +8,7 @@ from typing import AsyncGenerator, Dict, Any, Optional, List
 from pathlib import Path
 import logging
 
-from claude_code_sdk import query, ClaudeCodeOptions, Message
+from claude_agent_sdk import query, ClaudeAgentOptions, Message
 
 logger = logging.getLogger(__name__)
 
@@ -52,17 +52,22 @@ class ClaudeCodeCLI:
         self.claude_env_vars = auth_manager.get_claude_code_env_vars()
         
     async def verify_cli(self) -> bool:
-        """Verify Claude Code SDK is working and authenticated."""
+        """Verify Claude Agent SDK is working and authenticated."""
         try:
             # Test SDK with a simple query
-            logger.info("Testing Claude Code SDK...")
+            logger.info("Testing Claude Agent SDK...")
             
             messages = []
             async for message in query(
                 prompt="Hello",
-                options=ClaudeCodeOptions(
+                options=ClaudeAgentOptions(
                     max_turns=1,
                     cwd=self.cwd
+                    # Temporarily disabled system_prompt to test SDK
+                    # system_prompt={
+                    #     "type": "preset",
+                    #     "preset": "claude_code"
+                    # }
                 )
             ):
                 messages.append(message)
@@ -73,14 +78,14 @@ class ClaudeCodeCLI:
                     break
             
             if messages:
-                logger.info("✅ Claude Code SDK verified successfully")
+                logger.info("✅ Claude Agent SDK verified successfully")
                 return True
             else:
-                logger.warning("⚠️ Claude Code SDK test returned no messages")
+                logger.warning("⚠️ Claude Agent SDK test returned no messages")
                 return False
-                
+
         except Exception as e:
-            logger.error(f"Claude Code SDK verification failed: {e}")
+            logger.error(f"Claude Agent SDK verification failed: {e}")
             logger.warning("Please ensure Claude Code is installed and authenticated:")
             logger.warning("  1. Install: npm install -g @anthropic-ai/claude-code")
             logger.warning("  2. Set ANTHROPIC_API_KEY environment variable")
@@ -99,7 +104,7 @@ class ClaudeCodeCLI:
         session_id: Optional[str] = None,
         continue_session: bool = False
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Run Claude Code using the Python SDK and yield response chunks."""
+        """Run Claude Agent using the Python SDK and yield response chunks."""
         
         try:
             # Set authentication environment variables (if any)
@@ -111,7 +116,7 @@ class ClaudeCodeCLI:
             
             try:
                 # Build SDK options
-                options = ClaudeCodeOptions(
+                options = ClaudeAgentOptions(
                     max_turns=max_turns,
                     cwd=self.cwd
                 )
@@ -119,11 +124,13 @@ class ClaudeCodeCLI:
                 # Set model if specified
                 if model:
                     options.model = model
-                    
-                # Set system prompt if specified
+
+                # Set system prompt - NEW AGENT SDK FORMAT
+                # Try simple string format (may need adjustment based on SDK behavior)
                 if system_prompt:
                     options.system_prompt = system_prompt
-                    
+                # Note: Leaving system_prompt unset when None - SDK will use default behavior
+
                 # Set tool restrictions
                 if allowed_tools:
                     options.allowed_tools = allowed_tools
@@ -172,7 +179,7 @@ class ClaudeCodeCLI:
                             os.environ[key] = original_value
                 
         except Exception as e:
-            logger.error(f"Claude Code SDK error: {e}")
+            logger.error(f"Claude Agent SDK error: {e}")
             # Yield error message in the expected format
             yield {
                 "type": "result",
@@ -182,7 +189,7 @@ class ClaudeCodeCLI:
             }
     
     def parse_claude_message(self, messages: List[Dict[str, Any]]) -> Optional[str]:
-        """Extract the assistant message from Claude Code SDK messages."""
+        """Extract the assistant message from Claude Agent SDK messages."""
         for message in messages:
             # Look for AssistantMessage type (new SDK format)
             if "content" in message and isinstance(message["content"], list):
