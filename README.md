@@ -1,12 +1,29 @@
 # Claude Code OpenAI API Wrapper
 
-An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Code with any OpenAI client library. **Now powered by the official Claude Code Python SDK** with enhanced authentication and features.
+An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Code with any OpenAI client library. **Now powered by the official Claude Agent SDK v0.1.6** with enhanced authentication and features.
+
+## Version
+
+**Current Version:** 2.0.0 🆕
+- **Major Update:** Migrated from deprecated `claude-code-sdk` to `claude-agent-sdk` v0.1.6
+- **Breaking Changes:** Internal SDK changes only - no API consumer impact
+- **Requirements:** Claude Code CLI 2.0.0+ now required (was any version)
+
+**Upgrading from v1.x?**
+1. Update Claude Code CLI: `npm install -g @anthropic-ai/claude-code`
+2. Pull latest code: `git pull origin main`
+3. Update dependencies: `poetry install`
+4. Restart server - that's it!
+
+**Migration Resources:**
+- [MIGRATION_STATUS.md](./MIGRATION_STATUS.md) - Detailed v2.0.0 migration status
+- [UPGRADE_PLAN.md](./UPGRADE_PLAN.md) - Comprehensive migration strategy and technical details
 
 ## Status
 
 🎉 **Production Ready** - All core features working and tested:
-- ✅ Chat completions endpoint with **official Claude Code Python SDK**
-- ✅ Streaming and non-streaming responses  
+- ✅ Chat completions endpoint with **official Claude Agent SDK v0.1.6**
+- ✅ Streaming and non-streaming responses
 - ✅ Full OpenAI SDK compatibility
 - ✅ **Multi-provider authentication** (API key, Bedrock, Vertex AI, CLI auth)
 - ✅ **System prompt support** via SDK options
@@ -14,8 +31,8 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - ✅ **Fast by default** - Tools disabled for OpenAI compatibility (5-10x faster)
 - ✅ Optional tool usage (Read, Write, Bash, etc.) when explicitly enabled
 - ✅ **Real-time cost and token tracking** from SDK
-- ✅ **Session continuity** with conversation history across requests 🆕
-- ✅ **Session management endpoints** for full session control 🆕
+- ✅ **Session continuity** with conversation history across requests
+- ✅ **Session management endpoints** for full session control
 - ✅ Health, auth status, and models endpoints
 - ✅ **Development mode** with auto-reload
 
@@ -27,12 +44,13 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - Compatible with OpenAI Python SDK and all OpenAI client libraries
 - Automatic model validation and selection
 
-### 🛠 **Claude Code SDK Integration**
-- **Official Claude Code Python SDK** integration (v0.0.14)
+### 🛠 **Claude Agent SDK Integration**
+- **Official Claude Agent SDK** integration (v0.1.6) 🆕
 - **Real-time cost tracking** - actual costs from SDK metadata
 - **Accurate token counting** - input/output tokens from SDK
 - **Session management** - proper session IDs and continuity
 - **Enhanced error handling** with detailed authentication diagnostics
+- **Modern SDK features** - Latest capabilities and improvements
 
 ### 🔐 **Multi-Provider Authentication**
 - **Automatic detection** of authentication method
@@ -77,10 +95,13 @@ poetry run python test_endpoints.py
 
 ## Prerequisites
 
-1. **Claude Code CLI**: Install Claude Code CLI
+1. **Claude Code CLI**: Install Claude Code CLI 2.0.0+
    ```bash
-   # Install Claude Code (follow Anthropic's official guide)
+   # Install Claude Code (v2.0.0 or higher required)
    npm install -g @anthropic-ai/claude-code
+
+   # Verify installation
+   claude --version
    ```
 
 2. **Authentication**: Choose one method:
@@ -94,9 +115,15 @@ poetry run python test_endpoints.py
      ```
    - **Option C**: Use AWS Bedrock or Google Vertex AI (see Configuration section)
 
-3. **Python 3.10+**: Required for the server
+3. **Node.js**: Required for Claude Code CLI 2.0.0+
+   ```bash
+   # Verify Node.js is installed
+   node --version
+   ```
 
-4. **Poetry**: For dependency management
+4. **Python 3.10+**: Required for the server (supports Python 3.10, 3.11, 3.12, 3.13)
+
+5. **Poetry**: For dependency management
    ```bash
    # Install Poetry (if not already installed)
    curl -sSL https://install.python-poetry.org | python3 -
@@ -720,13 +747,20 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 - [ ] **Enhanced streaming** - better chunk handling
 - [ ] **MCP integration** - Model Context Protocol server support
 
-### ✅ **Recent Improvements**
+### ✅ **Recent Improvements (v2.0.0)**
+- **✅ Claude Agent SDK Migration**: Upgraded from deprecated `claude-code-sdk` to `claude-agent-sdk` v0.1.6 🆕
+- **✅ Modern SDK Features**: Access to latest SDK capabilities and improvements 🆕
 - **✅ SDK Integration**: Official Python SDK replaces subprocess calls
 - **✅ Real Metadata**: Accurate costs and token counts from SDK
-- **✅ Multi-auth**: Support for CLI, API key, Bedrock, and Vertex AI authentication  
+- **✅ Multi-auth**: Support for CLI, API key, Bedrock, and Vertex AI authentication
 - **✅ Session IDs**: Proper session tracking and management
 - **✅ System Prompts**: Full support via SDK options
 - **✅ Session Continuity**: Conversation history across requests with session management
+
+**Migration Notes:**
+- See [MIGRATION_STATUS.md](./MIGRATION_STATUS.md) for v2.0.0 upgrade details
+- See [UPGRADE_PLAN.md](./UPGRADE_PLAN.md) for comprehensive migration strategy
+- No breaking changes for API consumers - OpenAI API compatibility maintained
 
 ## Troubleshooting
 
