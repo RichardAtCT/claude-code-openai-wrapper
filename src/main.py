@@ -24,12 +24,23 @@ from src.models import (
     Usage,
     StreamChoice,
     SessionListResponse,
+    ToolListResponse,
+    ToolMetadataResponse,
+    ToolConfigurationResponse,
+    ToolConfigurationRequest,
+    MCPServerConfigRequest,
+    MCPServerInfoResponse,
+    MCPServersListResponse,
+    MCPConnectionRequest,
+    MCPServerConfig,
 )
 from src.claude_cli import ClaudeCodeCLI
 from src.message_adapter import MessageAdapter
 from src.auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
 from src.parameter_validator import ParameterValidator, CompatibilityReporter
 from src.session_manager import session_manager
+from src.tool_manager import tool_manager
+from src.mcp_client import mcp_client
 from src.rate_limiter import (
     limiter,
     rate_limit_exceeded_handler,
@@ -987,6 +998,133 @@ async def get_tool_stats(
     """Get statistics about tool configuration and usage."""
     await verify_api_key(request, credentials)
     return tool_manager.get_stats()
+
+
+# MCP (Model Context Protocol) Management Endpoints
+
+
+@app.get("/v1/mcp/servers", response_model=MCPServersListResponse)
+@rate_limit_endpoint(limit=100)
+async def list_mcp_servers(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    """List all registered MCP servers."""
+    verify_api_key(credentials)
+
+    if not mcp_client.is_available():
+        raise HTTPException(
+            status_code=503, detail="MCP SDK not available. Install with: pip install mcp"
+        )
+
+    servers = mcp_client.list_servers()
+    connections = mcp_client.list_connected_servers()
+
+    server_responses = []
+    for server in servers:
+        connection = mcp_client.get_connection(server.name)
+        server_responses.append(
+            MCPServerInfoResponse(
+                name=server.name,
+                command=server.command,
+                args=server.args,
+                description=server.description,
+                enabled=server.enabled,
+                connected=server.name in connections,
+                tools_count=len(connection.available_tools) if connection else 0,
+                resources_count=len(connection.available_resources) if connection else 0,
+                prompts_count=len(connection.available_prompts) if connection else 0,
+            )
+        )
+
+    return MCPServersListResponse(servers=server_responses, total=len(server_responses))
+
+
+@app.post("/v1/mcp/servers")
+@rate_limit_endpoint(limit=30)
+async def register_mcp_server(
+    request: MCPServerConfigRequest,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Register a new MCP server."""
+    verify_api_key(credentials)
+
+    if not mcp_client.is_available():
+        raise HTTPException(
+            status_code=503, detail="MCP SDK not available. Install with: pip install mcp"
+        )
+
+    config = MCPServerConfig(
+        name=request.name,
+        command=request.command,
+        args=request.args,
+        env=request.env,
+        description=request.description,
+        enabled=request.enabled,
+    )
+
+    mcp_client.register_server(config)
+
+    return {"message": f"MCP server '{request.name}' registered successfully"}
+
+
+@app.post("/v1/mcp/connect")
+@rate_limit_endpoint(limit=30)
+async def connect_mcp_server(
+    request: MCPConnectionRequest,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Connect to a registered MCP server."""
+    verify_api_key(credentials)
+
+    if not mcp_client.is_available():
+        raise HTTPException(
+            status_code=503, detail="MCP SDK not available. Install with: pip install mcp"
+        )
+
+    success = await mcp_client.connect_server(request.server_name)
+
+    if not success:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to connect to MCP server '{request.server_name}'"
+        )
+
+    connection = mcp_client.get_connection(request.server_name)
+    return {
+        "message": f"Connected to MCP server '{request.server_name}'",
+        "tools": len(connection.available_tools) if connection else 0,
+        "resources": len(connection.available_resources) if connection else 0,
+        "prompts": len(connection.available_prompts) if connection else 0,
+    }
+
+
+@app.post("/v1/mcp/disconnect")
+@rate_limit_endpoint(limit=30)
+async def disconnect_mcp_server(
+    request: MCPConnectionRequest,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Disconnect from an MCP server."""
+    verify_api_key(credentials)
+
+    if not mcp_client.is_available():
+        raise HTTPException(
+            status_code=503, detail="MCP SDK not available. Install with: pip install mcp"
+        )
+
+    success = await mcp_client.disconnect_server(request.server_name)
+
+    if not success:
+        raise HTTPException(
+            status_code=404, detail=f"Not connected to MCP server '{request.server_name}'"
+        )
+
+    return {"message": f"Disconnected from MCP server '{request.server_name}'"}
+
+
+@app.get("/v1/mcp/stats")
+@rate_limit_endpoint(limit=100)
+async def get_mcp_stats(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    """Get statistics about MCP connections."""
+    verify_api_key(credentials)
+    return mcp_client.get_stats()
 
 
 @app.exception_handler(HTTPException)

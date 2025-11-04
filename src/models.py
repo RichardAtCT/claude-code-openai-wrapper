@@ -300,3 +300,49 @@ class ToolValidationResponse(BaseModel):
 
     valid: Dict[str, bool]
     invalid_tools: List[str]
+
+
+class MCPServerConfigRequest(BaseModel):
+    """Request model for registering an MCP server."""
+
+    name: str
+    command: str
+    args: List[str] = Field(default_factory=list)
+    env: Optional[Dict[str, str]] = None
+    description: str = ""
+    enabled: bool = True
+
+
+class MCPServerInfoResponse(BaseModel):
+    """Response model for MCP server information."""
+
+    name: str
+    command: str
+    args: List[str]
+    description: str
+    enabled: bool
+    connected: bool
+    tools_count: int = 0
+    resources_count: int = 0
+    prompts_count: int = 0
+
+
+class MCPServersListResponse(BaseModel):
+    """Response model for listing MCP servers."""
+
+    servers: List[MCPServerInfoResponse]
+    total: int
+
+
+class MCPConnectionRequest(BaseModel):
+    """Request model for connecting to an MCP server."""
+
+    server_name: str
+
+
+class MCPToolCallRequest(BaseModel):
+    """Request model for calling an MCP tool."""
+
+    server_name: str
+    tool_name: str
+    arguments: Dict[str, Any] = Field(default_factory=dict)
