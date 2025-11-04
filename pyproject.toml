@@ -5,7 +5,7 @@ description = "OpenAI API-compatible wrapper for Claude Code"
 authors = ["Richard Atkinson <richardatk01@gmail.com>"]
 readme = "README.md"
 license = "MIT"
-packages = [{include = "*.py"}]
+packages = [{include = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -35,4 +35,4 @@ line-length = 100
 target-version = ['py310']
 
 [tool.poetry.scripts]
-claude-wrapper = "main:run_server"
+claude-wrapper = "src.main:run_server"

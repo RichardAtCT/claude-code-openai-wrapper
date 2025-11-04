@@ -15,12 +15,12 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from dotenv import load_dotenv
 
-from models import (
-    ChatCompletionRequest, 
-    ChatCompletionResponse, 
+from src.models import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
     ChatCompletionStreamResponse,
-    Choice, 
-    Message, 
+    Choice,
+    Message,
     Usage,
     StreamChoice,
     ErrorResponse,
@@ -28,13 +28,13 @@ from models import (
     SessionInfo,
     SessionListResponse
 )
-from claude_cli import ClaudeCodeCLI
-from message_adapter import MessageAdapter
-from auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
-from parameter_validator import ParameterValidator, CompatibilityReporter
-from session_manager import session_manager
-from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
-from constants import CLAUDE_MODELS, DEFAULT_MODEL, FAST_MODEL, CLAUDE_TOOLS
+from src.claude_cli import ClaudeCodeCLI
+from src.message_adapter import MessageAdapter
+from src.auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
+from src.parameter_validator import ParameterValidator, CompatibilityReporter
+from src.session_manager import session_manager
+from src.rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
+from src.constants import CLAUDE_MODELS, DEFAULT_MODEL, FAST_MODEL, CLAUDE_TOOLS
 
 # Load environment variables
 load_dotenv()
@@ -778,7 +778,7 @@ async def debug_request_validation(request: Request):
 @rate_limit_endpoint("auth")
 async def get_auth_status(request: Request):
     """Get Claude Code authentication status."""
-    from auth import auth_manager
+    from src.auth import auth_manager
     
     auth_info = get_claude_code_auth_info()
     active_api_key = auth_manager.get_api_key()
