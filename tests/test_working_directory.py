@@ -13,7 +13,7 @@ import shutil
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from claude_cli import ClaudeCodeCLI
+from src.claude_cli import ClaudeCodeCLI
 
 def test_default_temp_directory():
     """Test that default working directory is a temp directory."""
