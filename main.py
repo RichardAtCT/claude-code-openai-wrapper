@@ -34,6 +34,7 @@ from auth import verify_api_key, security, validate_claude_code_auth, get_claude
 from parameter_validator import ParameterValidator, CompatibilityReporter
 from session_manager import session_manager
 from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
+from constants import CLAUDE_MODELS, DEFAULT_MODEL, FAST_MODEL
 
 # Load environment variables
 load_dotenv()
@@ -129,20 +130,29 @@ async def lifespan(app: FastAPI):
         logger.warning("  3. For Vertex AI: Set CLAUDE_CODE_USE_VERTEX=1 + GCP credentials")
     else:
         logger.info(f"✅ Claude Code authentication validated: {auth_info['method']}")
-    
-    # Skip CLI verification during startup (can hang with new SDK)
-    # TODO: Re-enable after investigating verification timeout issue
-    logger.info("⚠️  Skipping Claude Agent SDK verification during startup")
-    logger.info("SDK will be tested on first request")
 
-    # # Then verify CLI
-    # cli_verified = await claude_cli.verify_cli()
-    #
-    # if cli_verified:
-    #     logger.info("✅ Claude Code CLI verified successfully")
-    # else:
-    #     logger.warning("⚠️  Claude Code CLI verification failed!")
-    #     logger.warning("The server will start, but requests may fail.")
+    # Verify Claude Agent SDK with timeout for graceful degradation
+    try:
+        logger.info("Testing Claude Agent SDK connection...")
+        # Use asyncio.wait_for to enforce timeout (30 seconds)
+        cli_verified = await asyncio.wait_for(
+            claude_cli.verify_cli(),
+            timeout=30.0
+        )
+
+        if cli_verified:
+            logger.info("✅ Claude Agent SDK verified successfully")
+        else:
+            logger.warning("⚠️  Claude Agent SDK verification returned False")
+            logger.warning("The server will start, but requests may fail.")
+    except asyncio.TimeoutError:
+        logger.warning("⚠️  Claude Agent SDK verification timed out (30s)")
+        logger.warning("This may indicate network issues or SDK configuration problems.")
+        logger.warning("The server will start, but first request may be slow.")
+    except Exception as e:
+        logger.error(f"⚠️  Claude Agent SDK verification failed: {e}")
+        logger.warning("The server will start, but requests may fail.")
+        logger.warning("Check that Claude Code CLI is properly installed and authenticated.")
     
     # Log debug information if debug mode is enabled
     if DEBUG_MODE or VERBOSE:
@@ -662,27 +672,13 @@ async def list_models(
     """List available models."""
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
-    
+
+    # Use constants for single source of truth
     return {
         "object": "list",
         "data": [
-            # Claude 4.5 Family (Latest - Fall 2025)
-            {"id": "claude-sonnet-4-5-20250929", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-haiku-4-5-20251001", "object": "model", "owned_by": "anthropic"},
-
-            # Claude 4.1 (Upgraded Opus 4)
-            {"id": "claude-opus-4-1-20250805", "object": "model", "owned_by": "anthropic"},
-
-            # Claude 4 Family (Original - May 2025)
-            {"id": "claude-opus-4-20250514", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-sonnet-4-20250514", "object": "model", "owned_by": "anthropic"},
-
-            # Claude 3.7 (February 2025)
-            {"id": "claude-3-7-sonnet-20250219", "object": "model", "owned_by": "anthropic"},
-
-            # Claude 3.5 (October 2024)
-            {"id": "claude-3-5-sonnet-20241022", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-3-5-haiku-20241022", "object": "model", "owned_by": "anthropic"},
+            {"id": model_id, "object": "model", "owned_by": "anthropic"}
+            for model_id in CLAUDE_MODELS
         ]
     }
 
