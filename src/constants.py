@@ -7,21 +7,21 @@ Single source of truth for tool names, models, and other configuration values.
 # Claude Agent SDK Tool Names
 # These are the built-in tools available in the Claude Agent SDK
 CLAUDE_TOOLS = [
-    "Task",           # Launch agents for complex tasks
-    "Bash",           # Execute bash commands
-    "Glob",           # File pattern matching
-    "Grep",           # Search file contents
-    "Read",           # Read files
-    "Edit",           # Edit files
-    "Write",          # Write files
-    "NotebookEdit",   # Edit Jupyter notebooks
-    "WebFetch",       # Fetch web content
-    "TodoWrite",      # Manage todo lists
-    "WebSearch",      # Search the web
-    "BashOutput",     # Get bash output
-    "KillShell",      # Kill bash shells
-    "Skill",          # Execute skills
-    "SlashCommand",   # Execute slash commands
+    "Task",  # Launch agents for complex tasks
+    "Bash",  # Execute bash commands
+    "Glob",  # File pattern matching
+    "Grep",  # Search file contents
+    "Read",  # Read files
+    "Edit",  # Edit files
+    "Write",  # Write files
+    "NotebookEdit",  # Edit Jupyter notebooks
+    "WebFetch",  # Fetch web content
+    "TodoWrite",  # Manage todo lists
+    "WebSearch",  # Search the web
+    "BashOutput",  # Get bash output
+    "KillShell",  # Kill bash shells
+    "Skill",  # Execute skills
+    "SlashCommand",  # Execute slash commands
 ]
 
 # Default tools to allow when tools are enabled
@@ -37,9 +37,9 @@ DEFAULT_ALLOWED_TOOLS = [
 
 # Tools to disallow by default (potentially dangerous or slow)
 DEFAULT_DISALLOWED_TOOLS = [
-    "Task",          # Can spawn sub-agents
-    "WebFetch",      # External network access
-    "WebSearch",     # External network access
+    "Task",  # Can spawn sub-agents
+    "WebFetch",  # External network access
+    "WebSearch",  # External network access
 ]
 
 # Claude Models
@@ -47,16 +47,13 @@ DEFAULT_DISALLOWED_TOOLS = [
 # NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x
 CLAUDE_MODELS = [
     # Claude 4.5 Family (Latest - Fall 2025) - RECOMMENDED
-    "claude-sonnet-4-5-20250929",   # Recommended - best coding model
-    "claude-haiku-4-5-20251001",    # Fast & cheap
-
+    "claude-sonnet-4-5-20250929",  # Recommended - best coding model
+    "claude-haiku-4-5-20251001",  # Fast & cheap
     # Claude 4.1
-    "claude-opus-4-1-20250805",     # Upgraded Opus 4
-
+    "claude-opus-4-1-20250805",  # Upgraded Opus 4
     # Claude 4.0 Family (Original - May 2025)
     "claude-opus-4-20250514",
     "claude-sonnet-4-20250514",
-
     # Claude 3.x Family - NOT SUPPORTED by Claude Agent SDK
     # These models work with Anthropic API but NOT with Claude Code
     # Uncomment only if using direct Anthropic API (not Claude Agent SDK)
