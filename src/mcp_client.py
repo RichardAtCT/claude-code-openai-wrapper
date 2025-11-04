@@ -5,17 +5,16 @@ Provides functionality to discover, connect to, and interact with MCP servers
 that expose tools, resources, and prompts.
 """
 
-import asyncio
 import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import Lock
-import json
 
 try:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
+
     MCP_AVAILABLE = True
 except ImportError:
     MCP_AVAILABLE = False
@@ -29,6 +28,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MCPServerConfig:
     """Configuration for an MCP server."""
+
     name: str
     command: str
     args: List[str] = field(default_factory=list)
@@ -40,6 +40,7 @@ class MCPServerConfig:
 @dataclass
 class MCPServerConnection:
     """Represents an active connection to an MCP server."""
+
     config: MCPServerConfig
     session: Any  # ClientSession
     read_stream: Any
@@ -68,6 +69,8 @@ class MCPClient:
     def register_server(self, config: MCPServerConfig) -> None:
         """Register an MCP server configuration."""
         with self.lock:
+            if config.name in self.servers:
+                logger.warning(f"Overwriting existing MCP server configuration: {config.name}")
             self.servers[config.name] = config
             logger.info(f"Registered MCP server: {config.name}")
 
@@ -137,12 +140,12 @@ class MCPClient:
             try:
                 # List tools
                 tools_response = await session.list_tools()
-                if tools_response and hasattr(tools_response, 'tools'):
+                if tools_response and hasattr(tools_response, "tools"):
                     available_tools = [
                         {
                             "name": tool.name,
-                            "description": getattr(tool, 'description', ''),
-                            "input_schema": getattr(tool, 'inputSchema', {}),
+                            "description": getattr(tool, "description", ""),
+                            "input_schema": getattr(tool, "inputSchema", {}),
                         }
                         for tool in tools_response.tools
                     ]
@@ -152,13 +155,13 @@ class MCPClient:
             try:
                 # List resources
                 resources_response = await session.list_resources()
-                if resources_response and hasattr(resources_response, 'resources'):
+                if resources_response and hasattr(resources_response, "resources"):
                     available_resources = [
                         {
                             "uri": resource.uri,
-                            "name": getattr(resource, 'name', ''),
-                            "description": getattr(resource, 'description', ''),
-                            "mimeType": getattr(resource, 'mimeType', None),
+                            "name": getattr(resource, "name", ""),
+                            "description": getattr(resource, "description", ""),
+                            "mimeType": getattr(resource, "mimeType", None),
                         }
                         for resource in resources_response.resources
                     ]
@@ -168,12 +171,12 @@ class MCPClient:
             try:
                 # List prompts
                 prompts_response = await session.list_prompts()
-                if prompts_response and hasattr(prompts_response, 'prompts'):
+                if prompts_response and hasattr(prompts_response, "prompts"):
                     available_prompts = [
                         {
                             "name": prompt.name,
-                            "description": getattr(prompt, 'description', ''),
-                            "arguments": getattr(prompt, 'arguments', []),
+                            "description": getattr(prompt, "description", ""),
+                            "arguments": getattr(prompt, "arguments", []),
                         }
                         for prompt in prompts_response.prompts
                     ]
@@ -203,8 +206,23 @@ class MCPClient:
 
             return True
 
+        except ConnectionError as e:
+            logger.error(f"Connection failed for MCP server '{name}': {e}")
+            return False
+        except ValueError as e:
+            logger.error(f"Invalid configuration for MCP server '{name}': {e}")
+            return False
+        except TimeoutError as e:
+            logger.error(f"Connection timeout for MCP server '{name}': {e}")
+            return False
+        except FileNotFoundError as e:
+            logger.error(f"Command not found for MCP server '{name}': {e}")
+            return False
+        except PermissionError as e:
+            logger.error(f"Permission denied for MCP server '{name}': {e}")
+            return False
         except Exception as e:
-            logger.error(f"Failed to connect to MCP server '{name}': {e}")
+            logger.exception(f"Unexpected error connecting to MCP server '{name}': {e}")
             return False
 
     async def disconnect_server(self, name: str) -> bool:
@@ -223,7 +241,7 @@ class MCPClient:
             logger.info(f"Disconnected from MCP server: {name}")
             return True
         except Exception as e:
-            logger.error(f"Error disconnecting from MCP server '{name}': {e}")
+            logger.exception(f"Unexpected error disconnecting from MCP server '{name}': {e}")
             return False
 
     def list_connected_servers(self) -> List[str]:
@@ -281,7 +299,9 @@ class MCPClient:
             logger.error(f"Error reading resource '{uri}' from server '{server_name}': {e}")
             raise
 
-    async def get_prompt(self, server_name: str, prompt_name: str, arguments: Dict[str, Any] = None) -> Any:
+    async def get_prompt(
+        self, server_name: str, prompt_name: str, arguments: Dict[str, Any] = None
+    ) -> Any:
         """
         Get a prompt from an MCP server.
 
@@ -312,22 +332,17 @@ class MCPClient:
         """
         with self.lock:
             return {
-                name: connection.available_tools
-                for name, connection in self.connections.items()
+                name: connection.available_tools for name, connection in self.connections.items()
             }
 
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about MCP connections."""
         with self.lock:
-            total_tools = sum(
-                len(conn.available_tools) for conn in self.connections.values()
-            )
+            total_tools = sum(len(conn.available_tools) for conn in self.connections.values())
             total_resources = sum(
                 len(conn.available_resources) for conn in self.connections.values()
             )
-            total_prompts = sum(
-                len(conn.available_prompts) for conn in self.connections.values()
-            )
+            total_prompts = sum(len(conn.available_prompts) for conn in self.connections.values())
 
             return {
                 "mcp_available": MCP_AVAILABLE,

@@ -1005,9 +1005,11 @@ async def get_tool_stats(
 
 @app.get("/v1/mcp/servers", response_model=MCPServersListResponse)
 @rate_limit_endpoint(limit=100)
-async def list_mcp_servers(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+async def list_mcp_servers(
+    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     """List all registered MCP servers."""
-    verify_api_key(credentials)
+    await verify_api_key(request, credentials)
 
     if not mcp_client.is_available():
         raise HTTPException(
@@ -1040,11 +1042,12 @@ async def list_mcp_servers(credentials: Optional[HTTPAuthorizationCredentials] =
 @app.post("/v1/mcp/servers")
 @rate_limit_endpoint(limit=30)
 async def register_mcp_server(
-    request: MCPServerConfigRequest,
+    body: MCPServerConfigRequest,
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
     """Register a new MCP server."""
-    verify_api_key(credentials)
+    await verify_api_key(request, credentials)
 
     if not mcp_client.is_available():
         raise HTTPException(
@@ -1052,43 +1055,44 @@ async def register_mcp_server(
         )
 
     config = MCPServerConfig(
-        name=request.name,
-        command=request.command,
-        args=request.args,
-        env=request.env,
-        description=request.description,
-        enabled=request.enabled,
+        name=body.name,
+        command=body.command,
+        args=body.args,
+        env=body.env,
+        description=body.description,
+        enabled=body.enabled,
     )
 
     mcp_client.register_server(config)
 
-    return {"message": f"MCP server '{request.name}' registered successfully"}
+    return {"message": f"MCP server '{body.name}' registered successfully"}
 
 
 @app.post("/v1/mcp/connect")
 @rate_limit_endpoint(limit=30)
 async def connect_mcp_server(
-    request: MCPConnectionRequest,
+    body: MCPConnectionRequest,
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
     """Connect to a registered MCP server."""
-    verify_api_key(credentials)
+    await verify_api_key(request, credentials)
 
     if not mcp_client.is_available():
         raise HTTPException(
             status_code=503, detail="MCP SDK not available. Install with: pip install mcp"
         )
 
-    success = await mcp_client.connect_server(request.server_name)
+    success = await mcp_client.connect_server(body.server_name)
 
     if not success:
         raise HTTPException(
-            status_code=500, detail=f"Failed to connect to MCP server '{request.server_name}'"
+            status_code=500, detail=f"Failed to connect to MCP server '{body.server_name}'"
         )
 
-    connection = mcp_client.get_connection(request.server_name)
+    connection = mcp_client.get_connection(body.server_name)
     return {
-        "message": f"Connected to MCP server '{request.server_name}'",
+        "message": f"Connected to MCP server '{body.server_name}'",
         "tools": len(connection.available_tools) if connection else 0,
         "resources": len(connection.available_resources) if connection else 0,
         "prompts": len(connection.available_prompts) if connection else 0,
@@ -1098,32 +1102,35 @@ async def connect_mcp_server(
 @app.post("/v1/mcp/disconnect")
 @rate_limit_endpoint(limit=30)
 async def disconnect_mcp_server(
-    request: MCPConnectionRequest,
+    body: MCPConnectionRequest,
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
     """Disconnect from an MCP server."""
-    verify_api_key(credentials)
+    await verify_api_key(request, credentials)
 
     if not mcp_client.is_available():
         raise HTTPException(
             status_code=503, detail="MCP SDK not available. Install with: pip install mcp"
         )
 
-    success = await mcp_client.disconnect_server(request.server_name)
+    success = await mcp_client.disconnect_server(body.server_name)
 
     if not success:
         raise HTTPException(
-            status_code=404, detail=f"Not connected to MCP server '{request.server_name}'"
+            status_code=404, detail=f"Not connected to MCP server '{body.server_name}'"
         )
 
-    return {"message": f"Disconnected from MCP server '{request.server_name}'"}
+    return {"message": f"Disconnected from MCP server '{body.server_name}'"}
 
 
 @app.get("/v1/mcp/stats")
 @rate_limit_endpoint(limit=100)
-async def get_mcp_stats(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+async def get_mcp_stats(
+    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
     """Get statistics about MCP connections."""
-    verify_api_key(credentials)
+    await verify_api_key(request, credentials)
     return mcp_client.get_stats()
 
 

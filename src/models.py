@@ -312,6 +312,31 @@ class MCPServerConfigRequest(BaseModel):
     description: str = ""
     enabled: bool = True
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate MCP server name."""
+        if not v or not v.strip():
+            raise ValueError("Server name cannot be empty")
+        if len(v) > 100:
+            raise ValueError("Server name too long (max 100 characters)")
+        # Allow alphanumeric, hyphens, underscores, and dots
+        if not all(c.isalnum() or c in "-_." for c in v):
+            raise ValueError(
+                "Server name must contain only alphanumeric characters, hyphens, underscores, and dots"
+            )
+        return v.strip()
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, v: str) -> str:
+        """Validate MCP server command."""
+        if not v or not v.strip():
+            raise ValueError("Command cannot be empty")
+        if len(v) > 500:
+            raise ValueError("Command path too long (max 500 characters)")
+        return v.strip()
+
 
 class MCPServerInfoResponse(BaseModel):
     """Response model for MCP server information."""
@@ -339,6 +364,16 @@ class MCPConnectionRequest(BaseModel):
 
     server_name: str
 
+    @field_validator("server_name")
+    @classmethod
+    def validate_server_name(cls, v: str) -> str:
+        """Validate MCP server name."""
+        if not v or not v.strip():
+            raise ValueError("Server name cannot be empty")
+        if len(v) > 100:
+            raise ValueError("Server name too long (max 100 characters)")
+        return v.strip()
+
 
 class MCPToolCallRequest(BaseModel):
     """Request model for calling an MCP tool."""
@@ -346,3 +381,23 @@ class MCPToolCallRequest(BaseModel):
     server_name: str
     tool_name: str
     arguments: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("server_name")
+    @classmethod
+    def validate_server_name(cls, v: str) -> str:
+        """Validate MCP server name."""
+        if not v or not v.strip():
+            raise ValueError("Server name cannot be empty")
+        if len(v) > 100:
+            raise ValueError("Server name too long (max 100 characters)")
+        return v.strip()
+
+    @field_validator("tool_name")
+    @classmethod
+    def validate_tool_name(cls, v: str) -> str:
+        """Validate MCP tool name."""
+        if not v or not v.strip():
+            raise ValueError("Tool name cannot be empty")
+        if len(v) > 200:
+            raise ValueError("Tool name too long (max 200 characters)")
+        return v.strip()
