@@ -343,6 +343,15 @@ async def generate_streaming_response(
         # Convert messages to prompt
         prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
 
+        # Add sampling instructions from temperature/top_p if present
+        sampling_instructions = request.get_sampling_instructions()
+        if sampling_instructions:
+            if system_prompt:
+                system_prompt = f"{system_prompt}\n\n{sampling_instructions}"
+            else:
+                system_prompt = sampling_instructions
+            logger.debug(f"Added sampling instructions: {sampling_instructions}")
+
         # Filter content for unsupported features
         prompt = MessageAdapter.filter_content(prompt)
         if system_prompt:
@@ -573,6 +582,15 @@ async def chat_completions(
 
             # Convert messages to prompt
             prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+
+            # Add sampling instructions from temperature/top_p if present
+            sampling_instructions = request_body.get_sampling_instructions()
+            if sampling_instructions:
+                if system_prompt:
+                    system_prompt = f"{system_prompt}\n\n{sampling_instructions}"
+                else:
+                    system_prompt = sampling_instructions
+                logger.debug(f"Added sampling instructions: {sampling_instructions}")
 
             # Filter content
             prompt = MessageAdapter.filter_content(prompt)

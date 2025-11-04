@@ -37,6 +37,14 @@ class Message(BaseModel):
         return self
 
 
+class StreamOptions(BaseModel):
+    """Options for streaming responses."""
+
+    include_usage: bool = Field(
+        default=False, description="Include usage information in the final streaming chunk"
+    )
+
+
 class ChatCompletionRequest(BaseModel):
     model: str
     messages: List[Message]
@@ -46,6 +54,9 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     stop: Optional[Union[str, List[str]]] = None
     max_tokens: Optional[int] = None
+    max_completion_tokens: Optional[int] = Field(
+        default=None, description="Maximum tokens to generate in the completion (OpenAI standard)"
+    )
     presence_penalty: Optional[float] = Field(default=0, ge=-2, le=2)
     frequency_penalty: Optional[float] = Field(default=0, ge=-2, le=2)
     logit_bias: Optional[Dict[str, float]] = None
@@ -57,6 +68,9 @@ class ChatCompletionRequest(BaseModel):
         default=False,
         description="Enable Claude Code tools (Read, Write, Bash, etc.) - disabled by default for OpenAI compatibility",
     )
+    stream_options: Optional[StreamOptions] = Field(
+        default=None, description="Options for streaming responses"
+    )
 
     @field_validator("n")
     @classmethod
@@ -67,56 +81,107 @@ class ChatCompletionRequest(BaseModel):
             )
         return v
 
-    def log_unsupported_parameters(self):
-        """Log warnings for parameters that are not supported by Claude Code SDK."""
+    def log_parameter_info(self):
+        """Log information about parameter handling."""
+        info_messages = []
         warnings = []
 
         if self.temperature != 1.0:
-            warnings.append(
-                f"temperature={self.temperature} is not supported by Claude Code SDK and will be ignored"
+            info_messages.append(
+                f"temperature={self.temperature} will be applied via system prompt (best-effort)"
             )
 
         if self.top_p != 1.0:
-            warnings.append(
-                f"top_p={self.top_p} is not supported by Claude Code SDK and will be ignored"
+            info_messages.append(
+                f"top_p={self.top_p} will be applied via system prompt (best-effort)"
             )
 
-        if self.max_tokens is not None:
-            warnings.append(
-                f"max_tokens={self.max_tokens} is not supported by Claude Code SDK and will be ignored. Consider using max_turns to limit conversation length"
+        if self.max_tokens is not None or self.max_completion_tokens is not None:
+            max_val = self.max_completion_tokens or self.max_tokens
+            info_messages.append(
+                f"max_tokens={max_val} will be mapped to max_thinking_tokens (best-effort)"
             )
 
         if self.presence_penalty != 0:
             warnings.append(
-                f"presence_penalty={self.presence_penalty} is not supported by Claude Code SDK and will be ignored"
+                f"presence_penalty={self.presence_penalty} is not supported and will be ignored"
             )
 
         if self.frequency_penalty != 0:
             warnings.append(
-                f"frequency_penalty={self.frequency_penalty} is not supported by Claude Code SDK and will be ignored"
+                f"frequency_penalty={self.frequency_penalty} is not supported and will be ignored"
             )
 
         if self.logit_bias:
-            warnings.append("logit_bias is not supported by Claude Code SDK and will be ignored")
+            warnings.append("logit_bias is not supported and will be ignored")
 
         if self.stop:
-            warnings.append(
-                "stop sequences are not supported by Claude Code SDK and will be ignored"
-            )
+            warnings.append("stop sequences are not supported and will be ignored")
+
+        for msg in info_messages:
+            logger.info(f"OpenAI API compatibility: {msg}")
 
         for warning in warnings:
             logger.warning(f"OpenAI API compatibility: {warning}")
 
+    def get_sampling_instructions(self) -> Optional[str]:
+        """
+        Generate sampling instructions based on temperature and top_p.
+
+        Returns system prompt text to approximate the requested sampling behavior.
+        """
+        instructions = []
+
+        if self.temperature is not None and self.temperature != 1.0:
+            if self.temperature < 0.3:
+                instructions.append(
+                    "Be highly focused and deterministic in your responses. Choose the most likely and predictable options."
+                )
+            elif self.temperature < 0.7:
+                instructions.append(
+                    "Be somewhat focused and consistent in your responses, preferring reliable and expected solutions."
+                )
+            elif self.temperature > 1.5:
+                instructions.append(
+                    "Be highly creative and exploratory in your responses. Consider unusual and diverse approaches."
+                )
+            elif self.temperature > 1.0:
+                instructions.append(
+                    "Be creative and varied in your responses, exploring different approaches and possibilities."
+                )
+
+        if self.top_p is not None and self.top_p < 1.0:
+            if self.top_p < 0.5:
+                instructions.append(
+                    "Focus on the most probable and mainstream solutions, avoiding less likely alternatives."
+                )
+            elif self.top_p < 0.9:
+                instructions.append(
+                    "Prefer well-established and common approaches over unusual ones."
+                )
+
+        return " ".join(instructions) if instructions else None
+
     def to_claude_options(self) -> Dict[str, Any]:
         """Convert OpenAI request parameters to Claude Code SDK options."""
-        # Log warnings for unsupported parameters
-        self.log_unsupported_parameters()
+        # Log parameter handling information
+        self.log_parameter_info()
 
         options = {}
 
         # Direct mappings
         if self.model:
             options["model"] = self.model
+
+        # Map max_tokens to max_thinking_tokens (best effort)
+        max_token_value = self.max_completion_tokens or self.max_tokens
+        if max_token_value is not None:
+            # Claude SDK doesn't have exact token limiting, but we can try max_thinking_tokens
+            # This is approximate and may not work as expected
+            options["max_thinking_tokens"] = max_token_value
+            logger.info(
+                f"Mapped max_tokens={max_token_value} to max_thinking_tokens (approximate behavior)"
+            )
 
         # Use user field for session identification if provided
         if self.user:
