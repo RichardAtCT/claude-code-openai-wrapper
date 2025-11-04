@@ -503,18 +503,35 @@ async def generate_streaming_response(
             )
             yield f"data: {fallback_chunk.model_dump_json()}\n\n"
 
-        # Extract assistant response from all chunks for session storage
-        if actual_session_id and chunks_buffer:
+        # Extract assistant response from all chunks
+        assistant_content = None
+        if chunks_buffer:
             assistant_content = claude_cli.parse_claude_message(chunks_buffer)
-            if assistant_content:
+
+            # Store in session if applicable
+            if actual_session_id and assistant_content:
                 assistant_message = Message(role="assistant", content=assistant_content)
                 session_manager.add_assistant_response(actual_session_id, assistant_message)
 
-        # Send final chunk with finish reason
+        # Prepare usage data if requested
+        usage_data = None
+        if request.stream_options and request.stream_options.include_usage:
+            # Estimate token usage based on prompt and completion
+            completion_text = assistant_content or ""
+            token_usage = claude_cli.estimate_token_usage(prompt, completion_text, request.model)
+            usage_data = Usage(
+                prompt_tokens=token_usage["prompt_tokens"],
+                completion_tokens=token_usage["completion_tokens"],
+                total_tokens=token_usage["total_tokens"],
+            )
+            logger.debug(f"Estimated usage: {usage_data}")
+
+        # Send final chunk with finish reason and optionally usage data
         final_chunk = ChatCompletionStreamResponse(
             id=request_id,
             model=request.model,
             choices=[StreamChoice(index=0, delta={}, finish_reason="stop")],
+            usage=usage_data,
         )
         yield f"data: {final_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"

@@ -225,6 +225,10 @@ class ChatCompletionStreamResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(datetime.now().timestamp()))
     model: str
     choices: List[StreamChoice]
+    usage: Optional[Usage] = Field(
+        default=None,
+        description="Usage information (only in final chunk when stream_options.include_usage=true)",
+    )
     system_fingerprint: Optional[str] = None
 
 

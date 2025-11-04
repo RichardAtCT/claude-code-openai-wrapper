@@ -264,6 +264,25 @@ class ClaudeCodeCLI:
 
         return metadata
 
+    def estimate_token_usage(
+        self, prompt: str, completion: str, model: Optional[str] = None
+    ) -> Dict[str, int]:
+        """
+        Estimate token usage based on character count.
+
+        Uses rough approximation: ~4 characters per token for English text.
+        This is approximate and may not match actual tokenization.
+        """
+        # Rough approximation: 1 token ≈ 4 characters
+        prompt_tokens = max(1, len(prompt) // 4)
+        completion_tokens = max(1, len(completion) // 4)
+
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+
     def _cleanup_temp_dir(self):
         """Clean up temporary directory on exit."""
         if self.temp_dir and os.path.exists(self.temp_dir):
