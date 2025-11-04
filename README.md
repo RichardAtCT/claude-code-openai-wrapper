@@ -1,12 +1,29 @@
 # Claude Code OpenAI API Wrapper
 
-An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Code with any OpenAI client library. **Now powered by the official Claude Code Python SDK** with enhanced authentication and features.
+An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Code with any OpenAI client library. **Now powered by the official Claude Agent SDK v0.1.6** with enhanced authentication and features.
+
+## Version
+
+**Current Version:** 2.0.0 🆕
+- **Major Update:** Migrated from deprecated `claude-code-sdk` to `claude-agent-sdk` v0.1.6
+- **Breaking Changes:** Internal SDK changes only - no API consumer impact
+- **Requirements:** Claude Code CLI 2.0.0+ now required (was any version)
+
+**Upgrading from v1.x?**
+1. Update Claude Code CLI: `npm install -g @anthropic-ai/claude-code`
+2. Pull latest code: `git pull origin main`
+3. Update dependencies: `poetry install`
+4. Restart server - that's it!
+
+**Migration Resources:**
+- [MIGRATION_STATUS.md](./MIGRATION_STATUS.md) - Detailed v2.0.0 migration status
+- [UPGRADE_PLAN.md](./UPGRADE_PLAN.md) - Comprehensive migration strategy and technical details
 
 ## Status
 
 🎉 **Production Ready** - All core features working and tested:
-- ✅ Chat completions endpoint with **official Claude Code Python SDK**
-- ✅ Streaming and non-streaming responses  
+- ✅ Chat completions endpoint with **official Claude Agent SDK v0.1.6**
+- ✅ Streaming and non-streaming responses
 - ✅ Full OpenAI SDK compatibility
 - ✅ **Multi-provider authentication** (API key, Bedrock, Vertex AI, CLI auth)
 - ✅ **System prompt support** via SDK options
@@ -14,8 +31,8 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - ✅ **Fast by default** - Tools disabled for OpenAI compatibility (5-10x faster)
 - ✅ Optional tool usage (Read, Write, Bash, etc.) when explicitly enabled
 - ✅ **Real-time cost and token tracking** from SDK
-- ✅ **Session continuity** with conversation history across requests 🆕
-- ✅ **Session management endpoints** for full session control 🆕
+- ✅ **Session continuity** with conversation history across requests
+- ✅ **Session management endpoints** for full session control
 - ✅ Health, auth status, and models endpoints
 - ✅ **Development mode** with auto-reload
 
@@ -27,12 +44,13 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - Compatible with OpenAI Python SDK and all OpenAI client libraries
 - Automatic model validation and selection
 
-### 🛠 **Claude Code SDK Integration**
-- **Official Claude Code Python SDK** integration (v0.0.14)
+### 🛠 **Claude Agent SDK Integration**
+- **Official Claude Agent SDK** integration (v0.1.6) 🆕
 - **Real-time cost tracking** - actual costs from SDK metadata
 - **Accurate token counting** - input/output tokens from SDK
 - **Session management** - proper session IDs and continuity
 - **Enhanced error handling** with detailed authentication diagnostics
+- **Modern SDK features** - Latest capabilities and improvements
 
 ### 🔐 **Multi-Provider Authentication**
 - **Automatic detection** of authentication method
@@ -77,10 +95,13 @@ poetry run python test_endpoints.py
 
 ## Prerequisites
 
-1. **Claude Code CLI**: Install Claude Code CLI
+1. **Claude Code CLI**: Install Claude Code CLI 2.0.0+
    ```bash
-   # Install Claude Code (follow Anthropic's official guide)
+   # Install Claude Code (v2.0.0 or higher required)
    npm install -g @anthropic-ai/claude-code
+
+   # Verify installation
+   claude --version
    ```
 
 2. **Authentication**: Choose one method:
@@ -94,9 +115,15 @@ poetry run python test_endpoints.py
      ```
    - **Option C**: Use AWS Bedrock or Google Vertex AI (see Configuration section)
 
-3. **Python 3.10+**: Required for the server
+3. **Node.js**: Required for Claude Code CLI 2.0.0+
+   ```bash
+   # Verify Node.js is installed
+   node --version
+   ```
 
-4. **Poetry**: For dependency management
+4. **Python 3.10+**: Required for the server (supports Python 3.10, 3.11, 3.12, 3.13)
+
+5. **Poetry**: For dependency management
    ```bash
    # Install Poetry (if not already installed)
    curl -sSL https://install.python-poetry.org | python3 -
@@ -253,7 +280,7 @@ RATE_LIMIT_HEALTH_PER_MINUTE=30
 1. Verify Claude Code is installed and working:
    ```bash
    claude --version
-   claude --print --model claude-3-5-haiku-20241022 "Hello"  # Test with fastest model
+   claude --print --model claude-haiku-4-5-20251001 "Hello"  # Test with fastest model
    ```
 
 2. Start the server:
@@ -516,7 +543,7 @@ Report issues on GitHub with logs/image tag/OS details.
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [
       {"role": "user", "content": "What is 2 + 2?"}
     ]
@@ -527,7 +554,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-generated-api-key" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [
       {"role": "user", "content": "Write a Python hello world script"}
     ],
@@ -551,7 +578,7 @@ client = OpenAI(
 
 # Basic chat completion
 response = client.chat.completions.create(
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-5-20250929",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What files are in the current directory?"}
@@ -563,7 +590,7 @@ print(response.choices[0].message.content)
 
 # Enable tools when you need them (e.g., to read files)
 response = client.chat.completions.create(
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-5-20250929",
     messages=[
         {"role": "user", "content": "What files are in the current directory?"}
     ],
@@ -578,7 +605,7 @@ print(f"Tokens: {response.usage.total_tokens} ({response.usage.prompt_tokens} + 
 
 # Streaming
 stream = client.chat.completions.create(
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-5-20250929",
     messages=[
         {"role": "user", "content": "Explain quantum computing"}
     ],
@@ -592,13 +619,23 @@ for chunk in stream:
 
 ## Supported Models
 
-- `claude-sonnet-4-20250514` (Recommended)
-- `claude-opus-4-20250514`
-- `claude-3-7-sonnet-20250219`
-- `claude-3-5-sonnet-20241022`
-- `claude-3-5-haiku-20241022`
+All Claude models through November 2025 are supported:
 
-The model parameter is passed to Claude Code via the `--model` flag.
+### Claude 4.5 Family (Latest - Fall 2025)
+- **`claude-sonnet-4-5-20250929`** ⭐ Recommended - Best coding model, superior reasoning and math
+- **`claude-haiku-4-5-20251001`** ⚡ Fast & Cheap - Similar performance to Sonnet 4 at 1/3 cost
+
+### Claude 4.1 & 4.0 Family
+- **`claude-opus-4-1-20250805`** - Upgraded Opus 4 with improved agentic tasks and reasoning
+- `claude-opus-4-20250514` - Original Opus 4 with extended thinking mode
+- `claude-sonnet-4-20250514` - Original Sonnet 4 with hybrid reasoning
+
+### Claude 3.x Family
+- `claude-3-7-sonnet-20250219` - Hybrid model with rapid/thoughtful response modes
+- `claude-3-5-sonnet-20241022` - Previous generation Sonnet
+- `claude-3-5-haiku-20241022` - Previous generation fast model
+
+**Note:** The model parameter is passed to Claude Code via the SDK's model selection.
 
 ## Session Continuity 🆕
 
@@ -621,7 +658,7 @@ client = openai.OpenAI(
 
 # Start a conversation with session continuity
 response1 = client.chat.completions.create(
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-5-20250929",
     messages=[
         {"role": "user", "content": "Hello! My name is Alice and I'm learning Python."}
     ],
@@ -630,7 +667,7 @@ response1 = client.chat.completions.create(
 
 # Continue the conversation - Claude remembers the context
 response2 = client.chat.completions.create(
-    model="claude-3-5-sonnet-20241022", 
+    model="claude-sonnet-4-5-20250929",
     messages=[
         {"role": "user", "content": "What's my name and what am I learning?"}
     ],
@@ -646,7 +683,7 @@ response2 = client.chat.completions.create(
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [{"role": "user", "content": "My favourite color is blue."}],
     "session_id": "my-session"
   }'
@@ -655,7 +692,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022", 
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [{"role": "user", "content": "What's my favourite color?"}],
     "session_id": "my-session"
   }'
@@ -720,13 +757,20 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 - [ ] **Enhanced streaming** - better chunk handling
 - [ ] **MCP integration** - Model Context Protocol server support
 
-### ✅ **Recent Improvements**
+### ✅ **Recent Improvements (v2.0.0)**
+- **✅ Claude Agent SDK Migration**: Upgraded from deprecated `claude-code-sdk` to `claude-agent-sdk` v0.1.6 🆕
+- **✅ Modern SDK Features**: Access to latest SDK capabilities and improvements 🆕
 - **✅ SDK Integration**: Official Python SDK replaces subprocess calls
 - **✅ Real Metadata**: Accurate costs and token counts from SDK
-- **✅ Multi-auth**: Support for CLI, API key, Bedrock, and Vertex AI authentication  
+- **✅ Multi-auth**: Support for CLI, API key, Bedrock, and Vertex AI authentication
 - **✅ Session IDs**: Proper session tracking and management
 - **✅ System Prompts**: Full support via SDK options
 - **✅ Session Continuity**: Conversation history across requests with session management
+
+**Migration Notes:**
+- See [MIGRATION_STATUS.md](./MIGRATION_STATUS.md) for v2.0.0 upgrade details
+- See [UPGRADE_PLAN.md](./UPGRADE_PLAN.md) for comprehensive migration strategy
+- No breaking changes for API consumers - OpenAI API compatibility maintained
 
 ## Troubleshooting
 
@@ -740,7 +784,7 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 2. **Authentication errors**:
    ```bash
    # Test authentication with fastest model
-   claude --print --model claude-3-5-haiku-20241022 "Hello"
+   claude --print --model claude-haiku-4-5-20251001 "Hello"
    # If this fails, re-authenticate if needed
    ```
 

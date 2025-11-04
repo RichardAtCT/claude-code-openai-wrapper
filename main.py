@@ -34,6 +34,7 @@ from auth import verify_api_key, security, validate_claude_code_auth, get_claude
 from parameter_validator import ParameterValidator, CompatibilityReporter
 from session_manager import session_manager
 from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
+from constants import CLAUDE_MODELS, DEFAULT_MODEL, FAST_MODEL, CLAUDE_TOOLS
 
 # Load environment variables
 load_dotenv()
@@ -129,15 +130,29 @@ async def lifespan(app: FastAPI):
         logger.warning("  3. For Vertex AI: Set CLAUDE_CODE_USE_VERTEX=1 + GCP credentials")
     else:
         logger.info(f"✅ Claude Code authentication validated: {auth_info['method']}")
-    
-    # Then verify CLI
-    cli_verified = await claude_cli.verify_cli()
-    
-    if cli_verified:
-        logger.info("✅ Claude Code CLI verified successfully")
-    else:
-        logger.warning("⚠️  Claude Code CLI verification failed!")
+
+    # Verify Claude Agent SDK with timeout for graceful degradation
+    try:
+        logger.info("Testing Claude Agent SDK connection...")
+        # Use asyncio.wait_for to enforce timeout (30 seconds)
+        cli_verified = await asyncio.wait_for(
+            claude_cli.verify_cli(),
+            timeout=30.0
+        )
+
+        if cli_verified:
+            logger.info("✅ Claude Agent SDK verified successfully")
+        else:
+            logger.warning("⚠️  Claude Agent SDK verification returned False")
+            logger.warning("The server will start, but requests may fail.")
+    except asyncio.TimeoutError:
+        logger.warning("⚠️  Claude Agent SDK verification timed out (30s)")
+        logger.warning("This may indicate network issues or SDK configuration problems.")
+        logger.warning("The server will start, but first request may be slow.")
+    except Exception as e:
+        logger.error(f"⚠️  Claude Agent SDK verification failed: {e}")
         logger.warning("The server will start, but requests may fail.")
+        logger.warning("Check that Claude Code CLI is properly installed and authenticated.")
     
     # Log debug information if debug mode is enabled
     if DEBUG_MODE or VERBOSE:
@@ -146,7 +161,8 @@ async def lifespan(app: FastAPI):
         logger.debug(f"   DEBUG_MODE: {DEBUG_MODE}")
         logger.debug(f"   VERBOSE: {VERBOSE}")
         logger.debug(f"   PORT: {os.getenv('PORT', '8000')}")
-        logger.debug(f"   CORS_ORIGINS: {os.getenv('CORS_ORIGINS', '[\"*\"]')}")
+        cors_origins_val = os.getenv('CORS_ORIGINS', '["*"]')
+        logger.debug(f"   CORS_ORIGINS: {cors_origins_val}")
         logger.debug(f"   MAX_TIMEOUT: {os.getenv('MAX_TIMEOUT', '600000')}")
         logger.debug(f"   CLAUDE_CWD: {os.getenv('CLAUDE_CWD', 'Not set')}")
         logger.debug(f"🔧 Available endpoints:")
@@ -331,7 +347,7 @@ async def generate_streaming_response(
         if system_prompt:
             system_prompt = MessageAdapter.filter_content(system_prompt)
         
-        # Get Claude Code SDK options from request
+        # Get Claude Agent SDK options from request
         claude_options = request.to_claude_options()
         
         # Merge with Claude-specific headers if provided
@@ -344,11 +360,8 @@ async def generate_streaming_response(
         
         # Handle tools - disabled by default for OpenAI compatibility
         if not request.enable_tools:
-            # Set disallowed_tools to all available tools to disable them
-            disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
-                                'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
-                                'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
-            claude_options['disallowed_tools'] = disallowed_tools
+            # Disable all tools by using CLAUDE_TOOLS constant
+            claude_options['disallowed_tools'] = CLAUDE_TOOLS
             claude_options['max_turns'] = 1  # Single turn for Q&A
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
@@ -400,7 +413,7 @@ async def generate_streaming_response(
                 # Handle content blocks
                 if isinstance(content, list):
                     for block in content:
-                        # Handle TextBlock objects from Claude Code SDK
+                        # Handle TextBlock objects from Claude Agent SDK
                         if hasattr(block, 'text'):
                             raw_text = block.text
                         # Handle dictionary format for backward compatibility
@@ -569,7 +582,7 @@ async def chat_completions(
             if system_prompt:
                 system_prompt = MessageAdapter.filter_content(system_prompt)
             
-            # Get Claude Code SDK options from request
+            # Get Claude Agent SDK options from request
             claude_options = request_body.to_claude_options()
             
             # Merge with Claude-specific headers
@@ -582,11 +595,8 @@ async def chat_completions(
             
             # Handle tools - disabled by default for OpenAI compatibility
             if not request_body.enable_tools:
-                # Set disallowed_tools to all available tools to disable them
-                disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
-                                    'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
-                                    'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
-                claude_options['disallowed_tools'] = disallowed_tools
+                # Disable all tools by using CLAUDE_TOOLS constant
+                claude_options['disallowed_tools'] = CLAUDE_TOOLS
                 claude_options['max_turns'] = 1  # Single turn for Q&A
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
@@ -656,15 +666,13 @@ async def list_models(
     """List available models."""
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
-    
+
+    # Use constants for single source of truth
     return {
         "object": "list",
         "data": [
-            {"id": "claude-sonnet-4-20250514", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-opus-4-20250514", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-3-7-sonnet-20250219", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-3-5-sonnet-20241022", "object": "model", "owned_by": "anthropic"},
-            {"id": "claude-3-5-haiku-20241022", "object": "model", "owned_by": "anthropic"},
+            {"id": model_id, "object": "model", "owned_by": "anthropic"}
+            for model_id in CLAUDE_MODELS
         ]
     }
 
@@ -675,14 +683,14 @@ async def check_compatibility(request_body: ChatCompletionRequest):
     report = CompatibilityReporter.generate_compatibility_report(request_body)
     return {
         "compatibility_report": report,
-        "claude_code_sdk_options": {
+        "claude_agent_sdk_options": {
             "supported": [
-                "model", "system_prompt", "max_turns", "allowed_tools", 
+                "model", "system_prompt", "max_turns", "allowed_tools",
                 "disallowed_tools", "permission_mode", "max_thinking_tokens",
                 "continue_conversation", "resume", "cwd"
             ],
             "custom_headers": [
-                "X-Claude-Max-Turns", "X-Claude-Allowed-Tools", 
+                "X-Claude-Max-Turns", "X-Claude-Allowed-Tools",
                 "X-Claude-Disallowed-Tools", "X-Claude-Permission-Mode",
                 "X-Claude-Max-Thinking-Tokens"
             ]
