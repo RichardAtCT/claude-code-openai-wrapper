@@ -34,7 +34,7 @@ from auth import verify_api_key, security, validate_claude_code_auth, get_claude
 from parameter_validator import ParameterValidator, CompatibilityReporter
 from session_manager import session_manager
 from rate_limiter import limiter, rate_limit_exceeded_handler, get_rate_limit_for_endpoint, rate_limit_endpoint
-from constants import CLAUDE_MODELS, DEFAULT_MODEL, FAST_MODEL
+from constants import CLAUDE_MODELS, DEFAULT_MODEL, FAST_MODEL, CLAUDE_TOOLS
 
 # Load environment variables
 load_dotenv()
@@ -360,11 +360,8 @@ async def generate_streaming_response(
         
         # Handle tools - disabled by default for OpenAI compatibility
         if not request.enable_tools:
-            # Set disallowed_tools to all available tools to disable them
-            disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
-                                'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
-                                'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
-            claude_options['disallowed_tools'] = disallowed_tools
+            # Disable all tools by using CLAUDE_TOOLS constant
+            claude_options['disallowed_tools'] = CLAUDE_TOOLS
             claude_options['max_turns'] = 1  # Single turn for Q&A
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
@@ -598,11 +595,8 @@ async def chat_completions(
             
             # Handle tools - disabled by default for OpenAI compatibility
             if not request_body.enable_tools:
-                # Set disallowed_tools to all available tools to disable them
-                disallowed_tools = ['Task', 'Bash', 'Glob', 'Grep', 'LS', 'exit_plan_mode', 
-                                    'Read', 'Edit', 'MultiEdit', 'Write', 'NotebookRead', 
-                                    'NotebookEdit', 'WebFetch', 'TodoRead', 'TodoWrite', 'WebSearch']
-                claude_options['disallowed_tools'] = disallowed_tools
+                # Disable all tools by using CLAUDE_TOOLS constant
+                claude_options['disallowed_tools'] = CLAUDE_TOOLS
                 claude_options['max_turns'] = 1  # Single turn for Q&A
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:

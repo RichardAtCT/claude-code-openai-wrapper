@@ -127,18 +127,16 @@ class TestMessageHandling:
         assert result == "Hello world"
 
     def test_filter_content_with_images(self):
-        """Test content filtering with images."""
+        """Test content filtering with image references in output."""
         from message_adapter import MessageAdapter
 
-        # Test with image content (should be converted to placeholder)
-        content = [
-            {"type": "text", "text": "Look at this image:"},
-            {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
-        ]
+        # Test with image reference in Claude's output (string format)
+        content = "Here is the result: [Image: example.jpg] as you can see."
 
         result = MessageAdapter.filter_content(content)
         assert isinstance(result, str)
-        assert "[Image:" in result or "image" in result.lower()
+        # Image reference should be converted to placeholder
+        assert "[Image: Content not supported" in result
 
 
 class TestAPIModels:
