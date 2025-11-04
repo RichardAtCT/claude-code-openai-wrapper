@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 class ContentPart(BaseModel):
     """Content part for multimodal messages (OpenAI format)."""
+
     type: Literal["text"]
     text: str
 
@@ -17,8 +18,8 @@ class Message(BaseModel):
     role: Literal["system", "user", "assistant"]
     content: Union[str, List[ContentPart]]
     name: Optional[str] = None
-    
-    @model_validator(mode='after')
+
+    @model_validator(mode="after")
     def normalize_content(self):
         """Convert array content to string for Claude Code compatibility."""
         if isinstance(self.content, list):
@@ -29,10 +30,10 @@ class Message(BaseModel):
                     text_parts.append(part.text)
                 elif isinstance(part, dict) and part.get("type") == "text":
                     text_parts.append(part.get("text", ""))
-            
+
             # Join all text parts with newlines
             self.content = "\n".join(text_parts) if text_parts else ""
-            
+
         return self
 
 
@@ -49,60 +50,79 @@ class ChatCompletionRequest(BaseModel):
     frequency_penalty: Optional[float] = Field(default=0, ge=-2, le=2)
     logit_bias: Optional[Dict[str, float]] = None
     user: Optional[str] = None
-    session_id: Optional[str] = Field(default=None, description="Optional session ID for conversation continuity")
-    enable_tools: Optional[bool] = Field(default=False, description="Enable Claude Code tools (Read, Write, Bash, etc.) - disabled by default for OpenAI compatibility")
-    
-    @field_validator('n')
+    session_id: Optional[str] = Field(
+        default=None, description="Optional session ID for conversation continuity"
+    )
+    enable_tools: Optional[bool] = Field(
+        default=False,
+        description="Enable Claude Code tools (Read, Write, Bash, etc.) - disabled by default for OpenAI compatibility",
+    )
+
+    @field_validator("n")
     @classmethod
     def validate_n(cls, v):
         if v > 1:
-            raise ValueError("Claude Code SDK does not support multiple choices (n > 1). Only single response generation is supported.")
+            raise ValueError(
+                "Claude Code SDK does not support multiple choices (n > 1). Only single response generation is supported."
+            )
         return v
-    
+
     def log_unsupported_parameters(self):
         """Log warnings for parameters that are not supported by Claude Code SDK."""
         warnings = []
-        
+
         if self.temperature != 1.0:
-            warnings.append(f"temperature={self.temperature} is not supported by Claude Code SDK and will be ignored")
-        
+            warnings.append(
+                f"temperature={self.temperature} is not supported by Claude Code SDK and will be ignored"
+            )
+
         if self.top_p != 1.0:
-            warnings.append(f"top_p={self.top_p} is not supported by Claude Code SDK and will be ignored")
-            
+            warnings.append(
+                f"top_p={self.top_p} is not supported by Claude Code SDK and will be ignored"
+            )
+
         if self.max_tokens is not None:
-            warnings.append(f"max_tokens={self.max_tokens} is not supported by Claude Code SDK and will be ignored. Consider using max_turns to limit conversation length")
-        
+            warnings.append(
+                f"max_tokens={self.max_tokens} is not supported by Claude Code SDK and will be ignored. Consider using max_turns to limit conversation length"
+            )
+
         if self.presence_penalty != 0:
-            warnings.append(f"presence_penalty={self.presence_penalty} is not supported by Claude Code SDK and will be ignored")
-            
+            warnings.append(
+                f"presence_penalty={self.presence_penalty} is not supported by Claude Code SDK and will be ignored"
+            )
+
         if self.frequency_penalty != 0:
-            warnings.append(f"frequency_penalty={self.frequency_penalty} is not supported by Claude Code SDK and will be ignored")
-            
+            warnings.append(
+                f"frequency_penalty={self.frequency_penalty} is not supported by Claude Code SDK and will be ignored"
+            )
+
         if self.logit_bias:
-            warnings.append(f"logit_bias is not supported by Claude Code SDK and will be ignored")
-            
+            warnings.append("logit_bias is not supported by Claude Code SDK and will be ignored")
+
         if self.stop:
-            warnings.append(f"stop sequences are not supported by Claude Code SDK and will be ignored")
-        
+            warnings.append(
+                "stop sequences are not supported by Claude Code SDK and will be ignored"
+            )
+
         for warning in warnings:
             logger.warning(f"OpenAI API compatibility: {warning}")
-    
+
     def to_claude_options(self) -> Dict[str, Any]:
         """Convert OpenAI request parameters to Claude Code SDK options."""
         # Log warnings for unsupported parameters
         self.log_unsupported_parameters()
-        
+
         options = {}
-        
+
         # Direct mappings
         if self.model:
-            options['model'] = self.model
-            
+            options["model"] = self.model
+
         # Use user field for session identification if provided
         if self.user:
             # Could be used for analytics/logging or session tracking
             logger.info(f"Request from user: {self.user}")
-        
+
         return options
 
 
@@ -165,3 +185,49 @@ class SessionInfo(BaseModel):
 class SessionListResponse(BaseModel):
     sessions: List[SessionInfo]
     total: int
+
+
+class ToolMetadataResponse(BaseModel):
+    """Response model for tool metadata."""
+
+    name: str
+    description: str
+    category: str
+    parameters: Dict[str, str]
+    examples: List[str]
+    is_safe: bool
+    requires_network: bool
+
+
+class ToolListResponse(BaseModel):
+    """Response model for listing all tools."""
+
+    tools: List[ToolMetadataResponse]
+    total: int
+
+
+class ToolConfigurationResponse(BaseModel):
+    """Response model for tool configuration."""
+
+    allowed_tools: Optional[List[str]] = None
+    disallowed_tools: Optional[List[str]] = None
+    effective_tools: List[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ToolConfigurationRequest(BaseModel):
+    """Request model for updating tool configuration."""
+
+    allowed_tools: Optional[List[str]] = None
+    disallowed_tools: Optional[List[str]] = None
+    session_id: Optional[str] = Field(
+        default=None, description="Optional session ID for per-session configuration"
+    )
+
+
+class ToolValidationResponse(BaseModel):
+    """Response model for tool validation."""
+
+    valid: Dict[str, bool]
+    invalid_tools: List[str]
