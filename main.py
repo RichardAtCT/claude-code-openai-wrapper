@@ -666,9 +666,21 @@ async def list_models(
     return {
         "object": "list",
         "data": [
-            {"id": "claude-sonnet-4-20250514", "object": "model", "owned_by": "anthropic"},
+            # Claude 4.5 Family (Latest - Fall 2025)
+            {"id": "claude-sonnet-4-5-20250929", "object": "model", "owned_by": "anthropic"},
+            {"id": "claude-haiku-4-5-20251001", "object": "model", "owned_by": "anthropic"},
+
+            # Claude 4.1 (Upgraded Opus 4)
+            {"id": "claude-opus-4-1-20250805", "object": "model", "owned_by": "anthropic"},
+
+            # Claude 4 Family (Original - May 2025)
             {"id": "claude-opus-4-20250514", "object": "model", "owned_by": "anthropic"},
+            {"id": "claude-sonnet-4-20250514", "object": "model", "owned_by": "anthropic"},
+
+            # Claude 3.7 (February 2025)
             {"id": "claude-3-7-sonnet-20250219", "object": "model", "owned_by": "anthropic"},
+
+            # Claude 3.5 (October 2024)
             {"id": "claude-3-5-sonnet-20241022", "object": "model", "owned_by": "anthropic"},
             {"id": "claude-3-5-haiku-20241022", "object": "model", "owned_by": "anthropic"},
         ]

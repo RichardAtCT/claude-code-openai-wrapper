@@ -280,7 +280,7 @@ RATE_LIMIT_HEALTH_PER_MINUTE=30
 1. Verify Claude Code is installed and working:
    ```bash
    claude --version
-   claude --print --model claude-3-5-haiku-20241022 "Hello"  # Test with fastest model
+   claude --print --model claude-haiku-4-5-20251001 "Hello"  # Test with fastest model
    ```
 
 2. Start the server:
@@ -543,7 +543,7 @@ Report issues on GitHub with logs/image tag/OS details.
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [
       {"role": "user", "content": "What is 2 + 2?"}
     ]
@@ -554,7 +554,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-generated-api-key" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [
       {"role": "user", "content": "Write a Python hello world script"}
     ],
@@ -578,7 +578,7 @@ client = OpenAI(
 
 # Basic chat completion
 response = client.chat.completions.create(
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-5-20250929",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What files are in the current directory?"}
@@ -590,7 +590,7 @@ print(response.choices[0].message.content)
 
 # Enable tools when you need them (e.g., to read files)
 response = client.chat.completions.create(
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-5-20250929",
     messages=[
         {"role": "user", "content": "What files are in the current directory?"}
     ],
@@ -605,7 +605,7 @@ print(f"Tokens: {response.usage.total_tokens} ({response.usage.prompt_tokens} + 
 
 # Streaming
 stream = client.chat.completions.create(
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-5-20250929",
     messages=[
         {"role": "user", "content": "Explain quantum computing"}
     ],
@@ -619,13 +619,23 @@ for chunk in stream:
 
 ## Supported Models
 
-- `claude-sonnet-4-20250514` (Recommended)
-- `claude-opus-4-20250514`
-- `claude-3-7-sonnet-20250219`
-- `claude-3-5-sonnet-20241022`
-- `claude-3-5-haiku-20241022`
+All Claude models through November 2025 are supported:
 
-The model parameter is passed to Claude Code via the `--model` flag.
+### Claude 4.5 Family (Latest - Fall 2025)
+- **`claude-sonnet-4-5-20250929`** ⭐ Recommended - Best coding model, superior reasoning and math
+- **`claude-haiku-4-5-20251001`** ⚡ Fast & Cheap - Similar performance to Sonnet 4 at 1/3 cost
+
+### Claude 4.1 & 4.0 Family
+- **`claude-opus-4-1-20250805`** - Upgraded Opus 4 with improved agentic tasks and reasoning
+- `claude-opus-4-20250514` - Original Opus 4 with extended thinking mode
+- `claude-sonnet-4-20250514` - Original Sonnet 4 with hybrid reasoning
+
+### Claude 3.x Family
+- `claude-3-7-sonnet-20250219` - Hybrid model with rapid/thoughtful response modes
+- `claude-3-5-sonnet-20241022` - Previous generation Sonnet
+- `claude-3-5-haiku-20241022` - Previous generation fast model
+
+**Note:** The model parameter is passed to Claude Code via the SDK's model selection.
 
 ## Session Continuity 🆕
 
@@ -648,7 +658,7 @@ client = openai.OpenAI(
 
 # Start a conversation with session continuity
 response1 = client.chat.completions.create(
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-5-20250929",
     messages=[
         {"role": "user", "content": "Hello! My name is Alice and I'm learning Python."}
     ],
@@ -657,7 +667,7 @@ response1 = client.chat.completions.create(
 
 # Continue the conversation - Claude remembers the context
 response2 = client.chat.completions.create(
-    model="claude-3-5-sonnet-20241022", 
+    model="claude-sonnet-4-5-20250929",
     messages=[
         {"role": "user", "content": "What's my name and what am I learning?"}
     ],
@@ -673,7 +683,7 @@ response2 = client.chat.completions.create(
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022",
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [{"role": "user", "content": "My favourite color is blue."}],
     "session_id": "my-session"
   }'
@@ -682,7 +692,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-3-5-sonnet-20241022", 
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [{"role": "user", "content": "What's my favourite color?"}],
     "session_id": "my-session"
   }'
@@ -774,7 +784,7 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 2. **Authentication errors**:
    ```bash
    # Test authentication with fastest model
-   claude --print --model claude-3-5-haiku-20241022 "Hello"
+   claude --print --model claude-haiku-4-5-20251001 "Hello"
    # If this fails, re-authenticate if needed
    ```
 
