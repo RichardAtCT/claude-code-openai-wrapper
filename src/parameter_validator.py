@@ -5,21 +5,16 @@ Parameter validation and mapping utilities for OpenAI to Claude Code SDK convers
 import logging
 from typing import Dict, Any, List, Optional
 from src.models import ChatCompletionRequest
+from src.constants import CLAUDE_MODELS
 
 logger = logging.getLogger(__name__)
 
 
 class ParameterValidator:
     """Validates and maps OpenAI Chat Completions parameters to Claude Code SDK options."""
-    
-    # Supported Claude Code SDK models
-    SUPPORTED_MODELS = {
-        "claude-sonnet-4-20250514",
-        "claude-opus-4-20250514", 
-        "claude-3-7-sonnet-20250219",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022"
-    }
+
+    # Use models from constants (single source of truth)
+    SUPPORTED_MODELS = set(CLAUDE_MODELS)
     
     # Valid permission modes for Claude Code SDK
     VALID_PERMISSION_MODES = {"default", "acceptEdits", "bypassPermissions"}

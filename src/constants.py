@@ -43,9 +43,10 @@ DEFAULT_DISALLOWED_TOOLS = [
 ]
 
 # Claude Models
-# All currently supported Claude models (as of November 2025)
+# Models supported by Claude Agent SDK (as of November 2025)
+# NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x
 CLAUDE_MODELS = [
-    # Claude 4.5 Family (Latest - Fall 2025)
+    # Claude 4.5 Family (Latest - Fall 2025) - RECOMMENDED
     "claude-sonnet-4-5-20250929",   # Recommended - best coding model
     "claude-haiku-4-5-20251001",    # Fast & cheap
 
@@ -56,10 +57,12 @@ CLAUDE_MODELS = [
     "claude-opus-4-20250514",
     "claude-sonnet-4-20250514",
 
-    # Claude 3.x Family
-    "claude-3-7-sonnet-20250219",
-    "claude-3-5-sonnet-20241022",
-    "claude-3-5-haiku-20241022",
+    # Claude 3.x Family - NOT SUPPORTED by Claude Agent SDK
+    # These models work with Anthropic API but NOT with Claude Code
+    # Uncomment only if using direct Anthropic API (not Claude Agent SDK)
+    # "claude-3-7-sonnet-20250219",
+    # "claude-3-5-sonnet-20241022",
+    # "claude-3-5-haiku-20241022",
 ]
 
 # Default model (recommended for most use cases)
