@@ -21,7 +21,7 @@ class ClaudeCodeAuthManager:
         """Get the active API key (environment or runtime-generated)."""
         # Try to import runtime_api_key from main module
         try:
-            import main
+            from src import main
             if hasattr(main, 'runtime_api_key') and main.runtime_api_key:
                 return main.runtime_api_key
         except ImportError:

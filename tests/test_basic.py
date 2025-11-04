@@ -83,16 +83,23 @@ def test_openai_sdk():
             api_key=api_key
         )
         
-        # Simple test
+        # Simple test - use a model supported by Claude Agent SDK
         response = client.chat.completions.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",  # Use newer model supported by SDK
             messages=[
                 {"role": "user", "content": "Say 'Hello, World!' and nothing else."}
             ],
             max_tokens=50
         )
-        
+
         content = response.choices[0].message.content
+
+        # Check if response contains error
+        if "error" in content.lower() or "api error" in content.lower():
+            print(f"✗ OpenAI SDK test failed - got error response")
+            print(f"  Response: {content}")
+            return False
+
         print(f"✓ OpenAI SDK test passed")
         print(f"  Response: {content}")
         return True
@@ -117,7 +124,7 @@ def test_streaming():
         )
         
         stream = client.chat.completions.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",  # Use newer model supported by SDK
             messages=[
                 {"role": "user", "content": "Count from 1 to 3."}
             ],

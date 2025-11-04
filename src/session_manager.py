@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 import uuid
 
-from models import Message, SessionInfo
+from src.models import Message, SessionInfo
 
 logger = logging.getLogger(__name__)
 
