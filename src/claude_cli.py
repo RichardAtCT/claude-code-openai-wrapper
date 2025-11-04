@@ -39,7 +39,7 @@ class ClaudeCodeCLI:
             atexit.register(self._cleanup_temp_dir)
         
         # Import auth manager
-        from auth import auth_manager, validate_claude_code_auth
+        from src.auth import auth_manager, validate_claude_code_auth
         
         # Validate authentication
         is_valid, auth_info = validate_claude_code_auth()
