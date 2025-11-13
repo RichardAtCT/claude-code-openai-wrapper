@@ -32,7 +32,6 @@ from src.models import (
     MCPServerInfoResponse,
     MCPServersListResponse,
     MCPConnectionRequest,
-    MCPServerConfig,
 )
 from src.claude_cli import ClaudeCodeCLI
 from src.message_adapter import MessageAdapter
@@ -40,7 +39,7 @@ from src.auth import verify_api_key, security, validate_claude_code_auth, get_cl
 from src.parameter_validator import ParameterValidator, CompatibilityReporter
 from src.session_manager import session_manager
 from src.tool_manager import tool_manager
-from src.mcp_client import mcp_client
+from src.mcp_client import mcp_client, MCPServerConfig
 from src.rate_limiter import (
     limiter,
     rate_limit_exceeded_handler,
@@ -897,7 +896,7 @@ async def delete_session(
 
 
 @app.get("/v1/tools", response_model=ToolListResponse)
-@rate_limit_endpoint(limit=100)
+@rate_limit_endpoint("general")
 async def list_tools(
     request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
@@ -922,7 +921,7 @@ async def list_tools(
 
 
 @app.get("/v1/tools/config", response_model=ToolConfigurationResponse)
-@rate_limit_endpoint(limit=100)
+@rate_limit_endpoint("general")
 async def get_tool_config(
     request: Request,
     session_id: Optional[str] = None,
@@ -944,7 +943,7 @@ async def get_tool_config(
 
 
 @app.post("/v1/tools/config", response_model=ToolConfigurationResponse)
-@rate_limit_endpoint(limit=30)
+@rate_limit_endpoint("general")
 async def update_tool_config(
     config_request: ToolConfigurationRequest,
     request: Request,
@@ -991,7 +990,7 @@ async def update_tool_config(
 
 
 @app.get("/v1/tools/stats")
-@rate_limit_endpoint(limit=100)
+@rate_limit_endpoint("general")
 async def get_tool_stats(
     request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
@@ -1004,7 +1003,7 @@ async def get_tool_stats(
 
 
 @app.get("/v1/mcp/servers", response_model=MCPServersListResponse)
-@rate_limit_endpoint(limit=100)
+@rate_limit_endpoint("general")
 async def list_mcp_servers(
     request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
@@ -1040,7 +1039,7 @@ async def list_mcp_servers(
 
 
 @app.post("/v1/mcp/servers")
-@rate_limit_endpoint(limit=30)
+@rate_limit_endpoint("general")
 async def register_mcp_server(
     body: MCPServerConfigRequest,
     request: Request,
@@ -1069,7 +1068,7 @@ async def register_mcp_server(
 
 
 @app.post("/v1/mcp/connect")
-@rate_limit_endpoint(limit=30)
+@rate_limit_endpoint("general")
 async def connect_mcp_server(
     body: MCPConnectionRequest,
     request: Request,
@@ -1100,7 +1099,7 @@ async def connect_mcp_server(
 
 
 @app.post("/v1/mcp/disconnect")
-@rate_limit_endpoint(limit=30)
+@rate_limit_endpoint("general")
 async def disconnect_mcp_server(
     body: MCPConnectionRequest,
     request: Request,
@@ -1125,7 +1124,7 @@ async def disconnect_mcp_server(
 
 
 @app.get("/v1/mcp/stats")
-@rate_limit_endpoint(limit=100)
+@rate_limit_endpoint("general")
 async def get_mcp_stats(
     request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
