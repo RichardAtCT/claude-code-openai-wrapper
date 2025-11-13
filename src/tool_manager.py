@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 from datetime import datetime
 
-from constants import CLAUDE_TOOLS, DEFAULT_ALLOWED_TOOLS, DEFAULT_DISALLOWED_TOOLS
+from src.constants import CLAUDE_TOOLS, DEFAULT_ALLOWED_TOOLS, DEFAULT_DISALLOWED_TOOLS
 
 logger = logging.getLogger(__name__)
 
