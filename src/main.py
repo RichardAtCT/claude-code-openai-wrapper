@@ -32,7 +32,6 @@ from src.models import (
     MCPServerInfoResponse,
     MCPServersListResponse,
     MCPConnectionRequest,
-    MCPServerConfig,
 )
 from src.claude_cli import ClaudeCodeCLI
 from src.message_adapter import MessageAdapter
@@ -40,7 +39,7 @@ from src.auth import verify_api_key, security, validate_claude_code_auth, get_cl
 from src.parameter_validator import ParameterValidator, CompatibilityReporter
 from src.session_manager import session_manager
 from src.tool_manager import tool_manager
-from src.mcp_client import mcp_client
+from src.mcp_client import mcp_client, MCPServerConfig
 from src.rate_limiter import (
     limiter,
     rate_limit_exceeded_handler,
