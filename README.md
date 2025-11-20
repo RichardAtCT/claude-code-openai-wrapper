@@ -384,7 +384,7 @@ docker run -d -p 8000:8000 \
   -v $(pwd):/app \
   --name claude-wrapper-container \
   claude-wrapper:latest \
-  poetry run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+  poetry run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 - `-v $(pwd):/app`: Mounts the current directory (repo root) into the container for live code edits.
 - Command Override: Uses Uvicorn with `--reload` for development.
@@ -404,7 +404,7 @@ services:
     environment:
       - PORT=8000
       - MAX_TIMEOUT=600
-    command: ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]  # Dev example
+    command: ["poetry", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]  # Dev example
     restart: unless-stopped
 ```
 - Run: `docker-compose up -d` (builds if needed, runs detached).
