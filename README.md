@@ -85,7 +85,7 @@ cd claude-code-openai-wrapper
 poetry install
 
 # 4. Start the server
-poetry run uvicorn main:app --reload --port 8000
+poetry run uvicorn src.main:app --reload --port 8000
 
 # 5. Test it works
 poetry run python test_endpoints.py
@@ -287,7 +287,7 @@ RATE_LIMIT_HEALTH_PER_MINUTE=30
 
    **Development mode (recommended - auto-reloads on changes):**
    ```bash
-   poetry run uvicorn main:app --reload --port 8000
+   poetry run uvicorn src.main:app --reload --port 8000
    ```
 
    **Production mode:**
