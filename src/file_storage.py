@@ -8,8 +8,7 @@ import json
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
-import shutil
+from datetime import datetime
 
 from src.models import FileObject, BatchRequestLine, BatchResponseLine
 from src.constants import (
@@ -40,12 +39,7 @@ class FileStorage:
 
         logger.info(f"FileStorage initialized at {self.storage_dir}")
 
-    def save_file(
-        self,
-        content: bytes,
-        filename: str,
-        purpose: str = "batch"
-    ) -> FileObject:
+    def save_file(self, content: bytes, filename: str, purpose: str = "batch") -> FileObject:
         """Save uploaded file and return metadata.
 
         Args:
@@ -69,10 +63,7 @@ class FileStorage:
 
         # Create file object
         file_obj = FileObject(
-            bytes=file_size,
-            filename=filename,
-            purpose=purpose,
-            status="uploaded"
+            bytes=file_size, filename=filename, purpose=purpose, status="uploaded"
         )
 
         # Save file content
@@ -142,7 +133,7 @@ class FileStorage:
             raise ValueError(f"File {file_id} not found")
 
         requests = []
-        lines = content.decode('utf-8').strip().split('\n')
+        lines = content.decode("utf-8").strip().split("\n")
 
         for line_num, line in enumerate(lines, 1):
             if not line.strip():
@@ -160,11 +151,7 @@ class FileStorage:
         logger.info(f"Parsed {len(requests)} requests from file {file_id}")
         return requests
 
-    def save_batch_output(
-        self,
-        batch_id: str,
-        responses: List[BatchResponseLine]
-    ) -> str:
+    def save_batch_output(self, batch_id: str, responses: List[BatchResponseLine]) -> str:
         """Save batch output as JSONL file.
 
         Args:
@@ -179,7 +166,7 @@ class FileStorage:
         for response in responses:
             output_lines.append(response.model_dump_json())
 
-        content = '\n'.join(output_lines).encode('utf-8')
+        content = "\n".join(output_lines).encode("utf-8")
         filename = f"{batch_id}_output.jsonl"
 
         file_obj = self.save_file(content, filename, purpose="batch")
@@ -192,11 +179,7 @@ class FileStorage:
         logger.info(f"Saved batch output {file_obj.id} with {len(responses)} responses")
         return file_obj.id
 
-    def save_batch_errors(
-        self,
-        batch_id: str,
-        errors: List[Dict[str, Any]]
-    ) -> Optional[str]:
+    def save_batch_errors(self, batch_id: str, errors: List[Dict[str, Any]]) -> Optional[str]:
         """Save batch errors as JSONL file.
 
         Args:
@@ -214,7 +197,7 @@ class FileStorage:
         for error in errors:
             error_lines.append(json.dumps(error))
 
-        content = '\n'.join(error_lines).encode('utf-8')
+        content = "\n".join(error_lines).encode("utf-8")
         filename = f"{batch_id}_errors.jsonl"
 
         file_obj = self.save_file(content, filename, purpose="batch")

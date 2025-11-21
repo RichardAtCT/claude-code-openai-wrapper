@@ -29,11 +29,9 @@ def create_batch_file(output_path: str = "batch_input.jsonl"):
             "url": "/v1/chat/completions",
             "body": {
                 "model": "claude-sonnet-4-5-20250929",
-                "messages": [
-                    {"role": "user", "content": "What is 25 * 47?"}
-                ],
-                "max_tokens": 100
-            }
+                "messages": [{"role": "user", "content": "What is 25 * 47?"}],
+                "max_tokens": 100,
+            },
         },
         {
             "custom_id": "geography-1",
@@ -41,11 +39,9 @@ def create_batch_file(output_path: str = "batch_input.jsonl"):
             "url": "/v1/chat/completions",
             "body": {
                 "model": "claude-sonnet-4-5-20250929",
-                "messages": [
-                    {"role": "user", "content": "What is the capital of Japan?"}
-                ],
-                "max_tokens": 100
-            }
+                "messages": [{"role": "user", "content": "What is the capital of Japan?"}],
+                "max_tokens": 100,
+            },
         },
         {
             "custom_id": "coding-1",
@@ -54,10 +50,13 @@ def create_batch_file(output_path: str = "batch_input.jsonl"):
             "body": {
                 "model": "claude-sonnet-4-5-20250929",
                 "messages": [
-                    {"role": "user", "content": "Write a Python function to check if a number is prime."}
+                    {
+                        "role": "user",
+                        "content": "Write a Python function to check if a number is prime.",
+                    }
                 ],
-                "max_tokens": 500
-            }
+                "max_tokens": 500,
+            },
         },
         {
             "custom_id": "science-1",
@@ -68,8 +67,8 @@ def create_batch_file(output_path: str = "batch_input.jsonl"):
                 "messages": [
                     {"role": "user", "content": "Explain photosynthesis in simple terms."}
                 ],
-                "max_tokens": 300
-            }
+                "max_tokens": 300,
+            },
         },
         {
             "custom_id": "history-1",
@@ -80,8 +79,8 @@ def create_batch_file(output_path: str = "batch_input.jsonl"):
                 "messages": [
                     {"role": "user", "content": "Who was the first person to walk on the moon?"}
                 ],
-                "max_tokens": 100
-            }
+                "max_tokens": 100,
+            },
         },
     ]
 
@@ -129,10 +128,7 @@ def create_batch(file_id: str):
         "input_file_id": file_id,
         "endpoint": "/v1/chat/completions",
         "completion_window": "24h",
-        "metadata": {
-            "description": "Example batch job",
-            "created_by": "batch_example.py"
-        }
+        "metadata": {"description": "Example batch job", "created_by": "batch_example.py"},
     }
 
     response = requests.post(url, json=payload, headers=headers)
@@ -169,13 +165,15 @@ def wait_for_completion(batch_id: str, poll_interval: int = 2, max_wait: int = 3
         status = batch["status"]
         counts = batch["request_counts"]
 
-        print(f"   Status: {status} | Completed: {counts['completed']}/{counts['total']} | Failed: {counts['failed']}")
+        print(
+            f"   Status: {status} | Completed: {counts['completed']}/{counts['total']} | Failed: {counts['failed']}"
+        )
 
         if status == "completed":
-            print(f"✅ Batch completed successfully!")
+            print("✅ Batch completed successfully!")
             return batch
         elif status == "failed":
-            print(f"❌ Batch failed!")
+            print("❌ Batch failed!")
             return batch
         elif status in ["cancelled", "expired"]:
             print(f"⚠️  Batch {status}")
@@ -183,7 +181,7 @@ def wait_for_completion(batch_id: str, poll_interval: int = 2, max_wait: int = 3
 
         time.sleep(poll_interval)
 
-    print(f"⏰ Timeout waiting for batch completion")
+    print("⏰ Timeout waiting for batch completion")
     return batch
 
 
@@ -235,7 +233,9 @@ def parse_results(results_file: str):
 
                     if "usage" in body:
                         usage = body["usage"]
-                        print(f"   Tokens: {usage['prompt_tokens']} prompt + {usage['completion_tokens']} completion = {usage['total_tokens']} total")
+                        print(
+                            f"   Tokens: {usage['prompt_tokens']} prompt + {usage['completion_tokens']} completion = {usage['total_tokens']} total"
+                        )
             else:
                 error = result.get("error", {})
                 print(f"   Error: {error.get('message', 'Unknown error')}")
@@ -276,7 +276,7 @@ def main():
 
     except requests.exceptions.RequestException as e:
         print(f"\n❌ API Error: {e}")
-        if hasattr(e.response, 'text'):
+        if hasattr(e.response, "text"):
             print(f"   Response: {e.response.text}")
     except Exception as e:
         print(f"\n❌ Error: {e}")

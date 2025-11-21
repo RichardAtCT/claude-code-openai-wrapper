@@ -5,7 +5,6 @@ Tests the core workflow: file upload → batch creation → status check → res
 """
 
 import json
-import pytest
 from fastapi.testclient import TestClient
 import sys
 from pathlib import Path
@@ -27,11 +26,9 @@ def create_test_batch_file():
             "url": "/v1/chat/completions",
             "body": {
                 "model": "claude-sonnet-4-5-20250929",
-                "messages": [
-                    {"role": "user", "content": "What is 2+2?"}
-                ],
-                "max_tokens": 100
-            }
+                "messages": [{"role": "user", "content": "What is 2+2?"}],
+                "max_tokens": 100,
+            },
         },
         {
             "custom_id": "request-2",
@@ -39,17 +36,15 @@ def create_test_batch_file():
             "url": "/v1/chat/completions",
             "body": {
                 "model": "claude-sonnet-4-5-20250929",
-                "messages": [
-                    {"role": "user", "content": "What is the capital of France?"}
-                ],
-                "max_tokens": 100
-            }
-        }
+                "messages": [{"role": "user", "content": "What is the capital of France?"}],
+                "max_tokens": 100,
+            },
+        },
     ]
 
     # Convert to JSONL
     jsonl_content = "\n".join([json.dumps(req) for req in requests])
-    return jsonl_content.encode('utf-8')
+    return jsonl_content.encode("utf-8")
 
 
 def test_file_upload():
@@ -59,7 +54,7 @@ def test_file_upload():
     response = client.post(
         "/v1/files",
         files={"file": ("test_batch.jsonl", file_content, "application/jsonl")},
-        data={"purpose": "batch"}
+        data={"purpose": "batch"},
     )
 
     assert response.status_code == 200, f"Upload failed: {response.json()}"
@@ -85,8 +80,8 @@ def test_batch_creation():
         json={
             "input_file_id": file_id,
             "endpoint": "/v1/chat/completions",
-            "completion_window": "24h"
-        }
+            "completion_window": "24h",
+        },
     )
 
     assert response.status_code == 200, f"Batch creation failed: {response.json()}"
@@ -166,8 +161,8 @@ def test_invalid_batch_creation():
         json={
             "input_file_id": "file-nonexistent",
             "endpoint": "/v1/chat/completions",
-            "completion_window": "24h"
-        }
+            "completion_window": "24h",
+        },
     )
 
     assert response.status_code == 400  # Should fail validation

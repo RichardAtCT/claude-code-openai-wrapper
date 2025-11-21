@@ -86,7 +86,7 @@ cd claude-code-openai-wrapper
 poetry install
 
 # 4. Start the server
-poetry run uvicorn main:app --reload --port 8000
+poetry run uvicorn src.main:app --reload --port 8000
 
 # 5. Test it works
 poetry run python test_endpoints.py
@@ -288,7 +288,7 @@ RATE_LIMIT_HEALTH_PER_MINUTE=30
 
    **Development mode (recommended - auto-reloads on changes):**
    ```bash
-   poetry run uvicorn main:app --reload --port 8000
+   poetry run uvicorn src.main:app --reload --port 8000
    ```
 
    **Production mode:**
@@ -385,7 +385,7 @@ docker run -d -p 8000:8000 \
   -v $(pwd):/app \
   --name claude-wrapper-container \
   claude-wrapper:latest \
-  poetry run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+  poetry run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 - `-v $(pwd):/app`: Mounts the current directory (repo root) into the container for live code edits.
 - Command Override: Uses Uvicorn with `--reload` for development.
@@ -405,7 +405,7 @@ services:
     environment:
       - PORT=8000
       - MAX_TIMEOUT=600
-    command: ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]  # Dev example
+    command: ["poetry", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]  # Dev example
     restart: unless-stopped
 ```
 - Run: `docker-compose up -d` (builds if needed, runs detached).

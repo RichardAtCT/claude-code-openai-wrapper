@@ -19,9 +19,6 @@ from src.models import (
     BatchResponseLine,
     RequestCounts,
     ChatCompletionResponse,
-    Message,
-    Choice,
-    Usage,
 )
 from src.file_storage import FileStorage
 from src.constants import (
@@ -41,7 +38,7 @@ class BatchManager:
         self,
         file_storage: FileStorage,
         storage_dir: str = BATCH_STORAGE_DIR,
-        cleanup_interval_minutes: int = BATCH_CLEANUP_INTERVAL_MINUTES
+        cleanup_interval_minutes: int = BATCH_CLEANUP_INTERVAL_MINUTES,
     ):
         """Initialize batch manager.
 
@@ -61,13 +58,14 @@ class BatchManager:
         self._processing_tasks: Dict[str, asyncio.Task] = {}
 
         # Chat completion handler (will be set externally)
-        self._chat_handler: Optional[Callable[[BatchRequestLine], Awaitable[ChatCompletionResponse]]] = None
+        self._chat_handler: Optional[
+            Callable[[BatchRequestLine], Awaitable[ChatCompletionResponse]]
+        ] = None
 
         logger.info(f"BatchManager initialized at {self.storage_dir}")
 
     def set_chat_handler(
-        self,
-        handler: Callable[[BatchRequestLine], Awaitable[ChatCompletionResponse]]
+        self, handler: Callable[[BatchRequestLine], Awaitable[ChatCompletionResponse]]
     ):
         """Set the chat completion handler for processing requests.
 
@@ -136,7 +134,7 @@ class BatchManager:
             status="validating",
             expires_at=expires_at,
             metadata=batch_request.metadata,
-            request_counts=RequestCounts(total=len(requests), completed=0, failed=0)
+            request_counts=RequestCounts(total=len(requests), completed=0, failed=0),
         )
 
         with self.lock:
@@ -228,7 +226,9 @@ class BatchManager:
             # Process each request sequentially
             for idx, request_line in enumerate(requests, 1):
                 try:
-                    logger.debug(f"Processing request {idx}/{len(requests)} (custom_id: {request_line.custom_id})")
+                    logger.debug(
+                        f"Processing request {idx}/{len(requests)} (custom_id: {request_line.custom_id})"
+                    )
 
                     # Process single request using the chat handler
                     response = await self._chat_handler(request_line)
@@ -239,8 +239,8 @@ class BatchManager:
                         response={
                             "status_code": 200,
                             "request_id": response.id,
-                            "body": response.model_dump()
-                        }
+                            "body": response.model_dump(),
+                        },
                     )
                     responses.append(response_line)
 
@@ -253,21 +253,15 @@ class BatchManager:
                     # Create error response
                     error_response = BatchResponseLine(
                         custom_id=request_line.custom_id,
-                        response={
-                            "status_code": 500,
-                            "body": None
-                        },
+                        response={"status_code": 500, "body": None},
                         error={
                             "message": str(e),
                             "type": "processing_error",
-                            "code": "batch_request_failed"
-                        }
+                            "code": "batch_request_failed",
+                        },
                     )
                     responses.append(error_response)
-                    errors.append({
-                        "custom_id": request_line.custom_id,
-                        "error": str(e)
-                    })
+                    errors.append({"custom_id": request_line.custom_id, "error": str(e)})
 
                     # Update batch counts
                     batch.request_counts.failed += 1
@@ -388,8 +382,11 @@ class BatchManager:
                     if batch.status in ["completed", "failed", "cancelled", "expired"]:
                         # Check if old enough
                         completion_time = (
-                            batch.completed_at or batch.failed_at or
-                            batch.cancelled_at or batch.expired_at or batch.created_at
+                            batch.completed_at
+                            or batch.failed_at
+                            or batch.cancelled_at
+                            or batch.expired_at
+                            or batch.created_at
                         )
 
                         if completion_time < cutoff_time:
