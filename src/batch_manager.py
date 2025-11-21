@@ -230,8 +230,15 @@ class BatchManager:
                         f"Processing request {idx}/{len(requests)} (custom_id: {request_line.custom_id})"
                     )
 
-                    # Process single request using the chat handler
-                    response = await self._chat_handler(request_line)
+                    # Process single request using the chat handler with timeout
+                    # Use 300 second timeout (5 minutes) for individual requests
+                    timeout_seconds = 300
+                    try:
+                        response = await asyncio.wait_for(
+                            self._chat_handler(request_line), timeout=timeout_seconds
+                        )
+                    except asyncio.TimeoutError:
+                        raise TimeoutError(f"Request exceeded timeout of {timeout_seconds} seconds")
 
                     # Create response line
                     response_line = BatchResponseLine(
@@ -246,6 +253,25 @@ class BatchManager:
 
                     # Update batch counts
                     batch.request_counts.completed += 1
+
+                except asyncio.TimeoutError as e:
+                    logger.error(f"Request {request_line.custom_id} timed out: {e}")
+
+                    # Create timeout error response
+                    error_response = BatchResponseLine(
+                        custom_id=request_line.custom_id,
+                        response={"status_code": 408, "body": None},
+                        error={
+                            "message": str(e),
+                            "type": "timeout_error",
+                            "code": "request_timeout",
+                        },
+                    )
+                    responses.append(error_response)
+                    errors.append({"custom_id": request_line.custom_id, "error": str(e)})
+
+                    # Update batch counts
+                    batch.request_counts.failed += 1
 
                 except Exception as e:
                     logger.error(f"Error processing request {request_line.custom_id}: {e}")

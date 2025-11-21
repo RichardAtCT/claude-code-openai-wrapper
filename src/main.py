@@ -1173,6 +1173,27 @@ async def upload_file(
     await verify_api_key(request, credentials)
 
     try:
+        # Validate file extension
+        if not file.filename.endswith(".jsonl"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type. Only .jsonl files are supported. Got: {file.filename}",
+            )
+
+        # Validate MIME type
+        allowed_mime_types = [
+            "application/jsonl",
+            "application/x-jsonl",
+            "text/jsonl",
+            "application/json-lines",
+            "text/plain",
+        ]
+        if file.content_type and file.content_type not in allowed_mime_types:
+            logger.warning(
+                f"File uploaded with MIME type {file.content_type}, expected one of {allowed_mime_types}"
+            )
+            # Don't reject, just warn - some clients may not set correct MIME type
+
         # Read file content
         content = await file.read()
 
@@ -1182,6 +1203,24 @@ async def upload_file(
             raise HTTPException(
                 status_code=400, detail=f"File size exceeds maximum of {max_size_bytes} bytes"
             )
+
+        # Validate JSONL content format
+        try:
+            lines = content.decode("utf-8").strip().split("\n")
+            if not lines or all(not line.strip() for line in lines):
+                raise HTTPException(
+                    status_code=400, detail="File is empty or contains no valid content"
+                )
+            # Try parsing first line to validate it's valid JSON
+            import json
+
+            first_line = next((line for line in lines if line.strip()), None)
+            if first_line:
+                json.loads(first_line)
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="File must be UTF-8 encoded")
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSONL format: {str(e)}")
 
         # Save file
         file_obj = file_storage.save_file(content, file.filename, purpose)

@@ -154,6 +154,63 @@ def test_batch_not_found():
     assert response.status_code == 404
 
 
+def test_file_extension_validation():
+    """Test file upload rejects non-JSONL files."""
+    # Try uploading a .txt file
+    content = b"Some text content"
+
+    response = client.post(
+        "/v1/files", files={"file": ("test.txt", content, "text/plain")}, data={"purpose": "batch"}
+    )
+
+    assert response.status_code == 400
+    assert "Only .jsonl files are supported" in response.json()["detail"]
+
+
+def test_empty_file_validation():
+    """Test file upload rejects empty files."""
+    content = b""
+
+    response = client.post(
+        "/v1/files",
+        files={"file": ("empty.jsonl", content, "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+
+    assert response.status_code == 400
+    assert "empty" in response.json()["detail"].lower()
+
+
+def test_invalid_jsonl_format():
+    """Test file upload validates JSONL format."""
+    # Invalid JSON content
+    content = b"This is not valid JSON\n{invalid json}"
+
+    response = client.post(
+        "/v1/files",
+        files={"file": ("invalid.jsonl", content, "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid JSONL format" in response.json()["detail"]
+
+
+def test_non_utf8_file():
+    """Test file upload rejects non-UTF8 files."""
+    # Create non-UTF8 content
+    content = b"\xff\xfe Invalid UTF-8"
+
+    response = client.post(
+        "/v1/files",
+        files={"file": ("test.jsonl", content, "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+
+    assert response.status_code == 400
+    assert "UTF-8" in response.json()["detail"]
+
+
 def test_invalid_batch_creation():
     """Test batch creation with invalid input file."""
     response = client.post(
@@ -197,7 +254,14 @@ if __name__ == "__main__":
         test_batch_not_found()
         print("   ✅ Error handling works")
 
-        print("\n7. Testing invalid requests...")
+        print("\n7. Testing file validation...")
+        test_file_extension_validation()
+        test_empty_file_validation()
+        test_invalid_jsonl_format()
+        test_non_utf8_file()
+        print("   ✅ File validation works")
+
+        print("\n8. Testing invalid requests...")
         test_invalid_batch_creation()
         print("   ✅ Input validation works")
 
