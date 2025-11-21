@@ -7,10 +7,19 @@ import string
 from typing import Optional, AsyncGenerator, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Request,
+    Depends,
+    UploadFile,
+    File,
+    Form,
+    BackgroundTasks,
+)
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from dotenv import load_dotenv
@@ -32,6 +41,9 @@ from src.models import (
     MCPServerInfoResponse,
     MCPServersListResponse,
     MCPConnectionRequest,
+    BatchRequest,
+    BatchListResponse,
+    BatchRequestLine,
 )
 from src.claude_cli import ClaudeCodeCLI
 from src.message_adapter import MessageAdapter
@@ -46,6 +58,8 @@ from src.rate_limiter import (
     rate_limit_endpoint,
 )
 from src.constants import CLAUDE_MODELS, CLAUDE_TOOLS
+from src.file_storage import FileStorage
+from src.batch_manager import BatchManager
 
 # Load environment variables
 load_dotenv()
@@ -121,6 +135,10 @@ claude_cli = ClaudeCodeCLI(
     timeout=int(os.getenv("MAX_TIMEOUT", "600000")), cwd=os.getenv("CLAUDE_CWD")
 )
 
+# Initialize batch processing components
+file_storage = FileStorage()
+batch_manager = BatchManager(file_storage=file_storage)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -185,11 +203,16 @@ async def lifespan(app: FastAPI):
     # Start session cleanup task
     session_manager.start_cleanup_task()
 
+    # Start batch cleanup task
+    batch_manager.start_cleanup_task()
+    logger.info("✅ Batch processing system initialized")
+
     yield
 
     # Cleanup on shutdown
     logger.info("Shutting down session manager...")
     session_manager.shutdown()
+    logger.info("Shutting down batch manager...")
 
 
 # Create FastAPI app
@@ -1131,6 +1154,254 @@ async def get_mcp_stats(
     """Get statistics about MCP connections."""
     await verify_api_key(request, credentials)
     return mcp_client.get_stats()
+
+
+# ============================================================================
+# Batch API Endpoints (OpenAI compatibility)
+# ============================================================================
+
+
+@app.post("/v1/files")
+@rate_limit_endpoint("general")
+async def upload_file(
+    file: UploadFile = File(...),
+    purpose: str = Form("batch"),
+    request: Request = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Upload a JSONL file for batch processing."""
+    await verify_api_key(request, credentials)
+
+    try:
+        # Read file content
+        content = await file.read()
+
+        # Validate file size
+        max_size_bytes = 100 * 1024 * 1024  # 100 MB
+        if len(content) > max_size_bytes:
+            raise HTTPException(
+                status_code=400, detail=f"File size exceeds maximum of {max_size_bytes} bytes"
+            )
+
+        # Save file
+        file_obj = file_storage.save_file(content, file.filename, purpose)
+
+        return file_obj
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"File upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/batches")
+@rate_limit_endpoint("general")
+async def create_batch(
+    batch_request: BatchRequest,
+    background_tasks: BackgroundTasks,
+    request: Request = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Create a new batch job."""
+    await verify_api_key(request, credentials)
+
+    try:
+        # Create batch job
+        batch = batch_manager.create_batch(batch_request)
+
+        # Define chat handler for processing batch requests
+        async def process_chat_request(request_line: BatchRequestLine) -> ChatCompletionResponse:
+            """Process a single chat completion request from batch."""
+            # Process messages without session (each request is independent)
+            all_messages = request_line.body.messages
+
+            # Convert messages to prompt
+            prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+
+            # Add sampling instructions
+            sampling_instructions = request_line.body.get_sampling_instructions()
+            if sampling_instructions:
+                if system_prompt:
+                    system_prompt = f"{system_prompt}\n\n{sampling_instructions}"
+                else:
+                    system_prompt = sampling_instructions
+
+            # Filter content
+            prompt = MessageAdapter.filter_content(prompt)
+            if system_prompt:
+                system_prompt = MessageAdapter.filter_content(system_prompt)
+
+            # Get Claude options
+            claude_options = request_line.body.to_claude_options()
+
+            # Disable tools by default
+            if not request_line.body.enable_tools:
+                claude_options["disallowed_tools"] = CLAUDE_TOOLS
+                claude_options["max_turns"] = 1
+
+            # Run completion
+            chunks = []
+            async for chunk in claude_cli.run_completion(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=claude_options.get("model"),
+                max_turns=claude_options.get("max_turns", 10),
+                allowed_tools=claude_options.get("allowed_tools"),
+                disallowed_tools=claude_options.get("disallowed_tools"),
+                stream=False,
+            ):
+                chunks.append(chunk)
+
+            # Extract and filter assistant message
+            raw_content = claude_cli.parse_claude_message(chunks)
+            if not raw_content:
+                raise ValueError("No response from Claude Code")
+
+            assistant_content = MessageAdapter.filter_content(raw_content)
+
+            # Estimate tokens
+            prompt_tokens = MessageAdapter.estimate_tokens(prompt)
+            completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+
+            # Create response
+            from src.models import ChatCompletionResponse, Choice, Message, Usage
+
+            response = ChatCompletionResponse(
+                id=f"chatcmpl-{os.urandom(8).hex()}",
+                model=request_line.body.model,
+                choices=[
+                    Choice(
+                        index=0,
+                        message=Message(role="assistant", content=assistant_content),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                ),
+            )
+
+            return response
+
+        # Set the chat handler
+        batch_manager.set_chat_handler(process_chat_request)
+
+        # Start processing in background
+        background_tasks.add_task(batch_manager.start_processing, batch.id)
+
+        logger.info(f"Created batch {batch.id}")
+        return batch
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Batch creation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/batches/{batch_id}")
+@rate_limit_endpoint("general")
+async def get_batch(
+    batch_id: str,
+    request: Request = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Get batch job status and information."""
+    await verify_api_key(request, credentials)
+
+    batch = batch_manager.get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail=f"Batch {batch_id} not found")
+
+    return batch
+
+
+@app.get("/v1/batches")
+@rate_limit_endpoint("general")
+async def list_batches(
+    limit: int = 20,
+    request: Request = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """List all batch jobs."""
+    await verify_api_key(request, credentials)
+
+    batches = batch_manager.list_batches(limit=limit)
+
+    return BatchListResponse(
+        data=batches,
+        first_id=batches[0].id if batches else None,
+        last_id=batches[-1].id if batches else None,
+        has_more=False,
+    )
+
+
+@app.post("/v1/batches/{batch_id}/cancel")
+@rate_limit_endpoint("general")
+async def cancel_batch(
+    batch_id: str,
+    request: Request = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Cancel a batch job."""
+    await verify_api_key(request, credentials)
+
+    batch = batch_manager.cancel_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail=f"Batch {batch_id} not found")
+
+    return batch
+
+
+@app.get("/v1/files/{file_id}")
+@rate_limit_endpoint("general")
+async def get_file(
+    file_id: str,
+    request: Request = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Get file metadata."""
+    await verify_api_key(request, credentials)
+
+    file_obj = file_storage.get_file_metadata(file_id)
+    if file_obj is None:
+        raise HTTPException(status_code=404, detail=f"File {file_id} not found")
+
+    return file_obj
+
+
+@app.get("/v1/files/{file_id}/content")
+@rate_limit_endpoint("general")
+async def get_file_content(
+    file_id: str,
+    request: Request = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Download file content."""
+    await verify_api_key(request, credentials)
+
+    file_obj = file_storage.get_file_metadata(file_id)
+    if file_obj is None:
+        raise HTTPException(status_code=404, detail=f"File {file_id} not found")
+
+    content = file_storage.get_file_content(file_id)
+    if content is None:
+        raise HTTPException(status_code=404, detail=f"File content for {file_id} not found")
+
+    return Response(
+        content=content,
+        media_type=(
+            "application/jsonl"
+            if file_obj.filename.endswith(".jsonl")
+            else "application/octet-stream"
+        ),
+        headers={
+            "Content-Disposition": f'attachment; filename="{file_obj.filename}"',
+        },
+    )
 
 
 @app.exception_handler(HTTPException)

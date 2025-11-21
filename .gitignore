@@ -57,4 +57,4 @@ test_debug_*.py
 test_performance_*.py
 test_user_*.py
 test_new_*.py
-test_roocode_compatibility.py
+test_roocode_compatibility.pylocal_tests/
