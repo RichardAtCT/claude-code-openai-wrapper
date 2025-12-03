@@ -4,6 +4,7 @@ import asyncio
 import logging
 import secrets
 import string
+import time
 from typing import Optional, AsyncGenerator, Dict, Any
 from contextlib import asynccontextmanager
 
@@ -46,6 +47,7 @@ from src.rate_limiter import (
     rate_limit_endpoint,
 )
 from src.constants import CLAUDE_MODELS, CLAUDE_TOOLS
+from src.model_manager import initialize_model_manager, get_model_manager
 
 # Load environment variables
 load_dotenv()
@@ -120,6 +122,9 @@ def prompt_for_api_protection() -> Optional[str]:
 claude_cli = ClaudeCodeCLI(
     timeout=int(os.getenv("MAX_TIMEOUT", "600000")), cwd=os.getenv("CLAUDE_CWD")
 )
+
+# Initialize model manager with Claude CLI
+initialize_model_manager(claude_cli)
 
 
 @asynccontextmanager
@@ -704,20 +709,217 @@ async def chat_completions(
 
 @app.get("/v1/models")
 async def list_models(
-    request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    request: Request, 
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    refresh: bool = False
 ):
-    """List available models."""
+    """
+    List available models with dynamic validation.
+    
+    Query parameters:
+    - refresh: If true, force refresh model availability cache
+    """
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
 
-    # Use constants for single source of truth
-    return {
-        "object": "list",
-        "data": [
-            {"id": model_id, "object": "model", "owned_by": "anthropic"}
-            for model_id in CLAUDE_MODELS
-        ],
-    }
+    manager = get_model_manager()
+    
+    if manager:
+        try:
+            # Get validated available models
+            if refresh:
+                logger.info("Forcing model availability refresh...")
+                available_models = await manager.validate_available_models(force_refresh=True)
+            else:
+                # Try to get from cache first, then validate if cache is stale
+                available_models = manager.get_available_models()
+                if not available_models or not manager._cache_timestamp:
+                    logger.info("No cached models, validating availability...")
+                    available_models = await manager.validate_available_models()
+            
+            # Return available models with metadata
+            return {
+                "object": "list",
+                "data": [
+                    {
+                        "id": model_id, 
+                        "object": "model", 
+                        "owned_by": "anthropic",
+                        "family": manager.get_model_info(model_id).family if manager.get_model_info(model_id) else "unknown",
+                        "variant": manager.get_model_info(model_id).variant if manager.get_model_info(model_id) else "unknown"
+                    }
+                    for model_id in available_models
+                ],
+                "cache_info": {
+                    "last_validated": manager._cache_timestamp,
+                    "total_models_tested": len(manager._model_cache),
+                    "available_count": len(available_models)
+                }
+            }
+        except Exception as e:
+            logger.warning(f"Model validation failed, falling back to static list: {e}")
+            # Fallback to static model list if validation fails
+            return {
+                "object": "list",
+                "data": [
+                    {"id": model_id, "object": "model", "owned_by": "anthropic"}
+                    for model_id in CLAUDE_MODELS
+                ],
+                "fallback": True,
+                "error": str(e)
+            }
+    else:
+        # Fallback if model manager not available
+        return {
+            "object": "list",
+            "data": [
+                {"id": model_id, "object": "model", "owned_by": "anthropic"}
+                for model_id in CLAUDE_MODELS
+            ],
+            "fallback": True
+        }
+
+
+@app.get("/v1/models/validate")
+@rate_limit_endpoint("general")
+async def validate_models(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    model_id: Optional[str] = None
+):
+    """
+    Validate model availability and get detailed information.
+    
+    Query parameters:
+    - model_id: If specified, validate only this model. Otherwise validate all models.
+    """
+    await verify_api_key(request, credentials)
+    
+    manager = get_model_manager()
+    if not manager:
+        raise HTTPException(status_code=503, detail="Model manager not available")
+    
+    try:
+        if model_id:
+            # Validate specific model
+            is_valid = await manager._validate_single_model(model_id)
+            model_info = manager.get_model_info(model_id)
+            
+            if model_info:
+                model_info.available = is_valid
+                model_info.last_validated = time.time()
+            
+            return {
+                "model_id": model_id,
+                "available": is_valid,
+                "info": {
+                    "family": model_info.family if model_info else "unknown",
+                    "variant": model_info.variant if model_info else "unknown",
+                    "last_validated": model_info.last_validated if model_info else None
+                } if model_info else None
+            }
+        else:
+            # Validate all models
+            available_models = await manager.validate_available_models(force_refresh=True)
+            cache_stats = manager.get_cache_stats()
+            
+            return {
+                "validation_complete": True,
+                "available_models": available_models,
+                "stats": cache_stats,
+                "model_details": [
+                    {
+                        "id": model_id,
+                        "available": info.available,
+                        "family": info.family,
+                        "variant": info.variant,
+                        "last_validated": info.last_validated,
+                        "validation_error": info.validation_error
+                    }
+                    for model_id, info in manager._model_cache.items()
+                ]
+            }
+    except Exception as e:
+        logger.error(f"Model validation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+
+
+@app.post("/v1/models/add")
+@rate_limit_endpoint("general")  
+async def add_custom_model(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
+    """Add a custom model to the model cache for testing."""
+    await verify_api_key(request, credentials)
+    
+    body = await request.json()
+    model_id = body.get("model_id")
+    
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id is required")
+    
+    manager = get_model_manager()
+    if not manager:
+        raise HTTPException(status_code=503, detail="Model manager not available")
+    
+    # Add the custom model
+    manager.add_custom_model(model_id)
+    
+    # Validate it
+    try:
+        is_valid = await manager._validate_single_model(model_id)
+        model_info = manager.get_model_info(model_id)
+        if model_info:
+            model_info.available = is_valid
+            model_info.last_validated = time.time()
+        
+        return {
+            "message": f"Model {model_id} added and validated",
+            "available": is_valid,
+            "model_info": {
+                "family": model_info.family if model_info else "unknown",
+                "variant": model_info.variant if model_info else "unknown"
+            }
+        }
+    except Exception as e:
+        return {
+            "message": f"Model {model_id} added but validation failed",
+            "available": False,
+            "error": str(e)
+        }
+
+
+@app.get("/v1/models/stats")
+@rate_limit_endpoint("general")
+async def get_model_stats(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
+    """Get detailed statistics about model cache and availability."""
+    await verify_api_key(request, credentials)
+    
+    manager = get_model_manager()
+    if not manager:
+        raise HTTPException(status_code=503, detail="Model manager not available")
+    
+    stats = manager.get_cache_stats()
+    
+    # Add breakdown by family and variant
+    stats["by_family"] = {}
+    stats["by_variant"] = {}
+    
+    for model_id, info in manager._model_cache.items():
+        if info.available:
+            if info.family not in stats["by_family"]:
+                stats["by_family"][info.family] = []
+            stats["by_family"][info.family].append(model_id)
+            
+            if info.variant not in stats["by_variant"]:
+                stats["by_variant"][info.variant] = []
+            stats["by_variant"][info.variant].append(model_id)
+    
+    return stats
 
 
 @app.post("/v1/compatibility")

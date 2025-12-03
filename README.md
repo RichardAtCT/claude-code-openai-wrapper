@@ -622,6 +622,7 @@ for chunk in stream:
 All Claude models through November 2025 are supported:
 
 ### Claude 4.5 Family (Latest - Fall 2025)
+- **`claude-opus-4-5-20250929`** 🎯 Most Capable - Latest Opus with enhanced reasoning and capabilities
 - **`claude-sonnet-4-5-20250929`** ⭐ Recommended - Best coding model, superior reasoning and math
 - **`claude-haiku-4-5-20251001`** ⚡ Fast & Cheap - Similar performance to Sonnet 4 at 1/3 cost
 
@@ -636,6 +637,90 @@ All Claude models through November 2025 are supported:
 - `claude-3-5-haiku-20241022` - Previous generation fast model
 
 **Note:** The model parameter is passed to Claude Code via the SDK's model selection.
+
+## Dynamic Model Management 🆕
+
+The wrapper now features **intelligent model management** that reduces the need for manual model list updates while maintaining reliability and performance.
+
+### How It Works
+
+Instead of relying solely on hardcoded model lists, the wrapper:
+
+- **Validates model availability** dynamically using your authentication method
+- **Caches results** for 1 hour to optimize performance  
+- **Discovers new models** by testing common patterns
+- **Falls back gracefully** to static lists if validation fails
+- **Provides rich metadata** about model families and variants
+
+### Enhanced Model Endpoints
+
+#### `GET /v1/models` - Smart Model Listing
+```bash
+# Get available models (cached)
+curl http://localhost:8000/v1/models
+
+# Force refresh model cache
+curl "http://localhost:8000/v1/models?refresh=true"
+```
+
+The response now includes cache information and model metadata:
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "claude-opus-4-5-20250929",
+      "object": "model",
+      "owned_by": "anthropic",
+      "family": "claude-4.5",
+      "variant": "opus"
+    }
+  ],
+  "cache_info": {
+    "last_validated": 1701234567,
+    "total_models_tested": 6,
+    "available_count": 5
+  }
+}
+```
+
+#### `GET /v1/models/validate` - Model Validation
+```bash
+# Validate all models
+curl http://localhost:8000/v1/models/validate
+
+# Validate specific model
+curl "http://localhost:8000/v1/models/validate?model_id=claude-opus-4-5-20250929"
+```
+
+#### `POST /v1/models/add` - Add Custom Models
+```bash
+# Test a new model that might be available
+curl -X POST http://localhost:8000/v1/models/add \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "claude-opus-4-6-20251201"}'
+```
+
+#### `GET /v1/models/stats` - Model Statistics  
+```bash
+# Get detailed model cache statistics
+curl http://localhost:8000/v1/models/stats
+```
+
+### Benefits
+
+✅ **Automatic discovery** - New models found without code changes  
+✅ **Auth-aware filtering** - Only shows models that work with your setup  
+✅ **Performance optimized** - Intelligent caching with configurable refresh  
+✅ **Backwards compatible** - Graceful fallback to static lists  
+✅ **Rich debugging** - Detailed validation results and error tracking  
+
+### Migration from Static Lists
+
+The dynamic system is **fully backwards compatible**. Existing code continues to work unchanged, but you now get:
+- Automatic filtering of unavailable models
+- Discovery of newly released models
+- Better error messages for unsupported models
 
 ## Session Continuity 🆕
 
