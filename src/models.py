@@ -6,6 +6,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Import DEFAULT_MODEL to avoid circular imports
+def get_default_model():
+    """Get default model from constants to avoid circular imports."""
+    from src.constants import DEFAULT_MODEL
+    return DEFAULT_MODEL
+
 
 class ContentPart(BaseModel):
     """Content part for multimodal messages (OpenAI format)."""
@@ -46,7 +52,7 @@ class StreamOptions(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str
+    model: str = Field(default_factory=get_default_model)
     messages: List[Message]
     temperature: Optional[float] = Field(default=1.0, ge=0, le=2)
     top_p: Optional[float] = Field(default=1.0, ge=0, le=1)

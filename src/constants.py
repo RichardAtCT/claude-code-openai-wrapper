@@ -4,6 +4,8 @@ Constants and configuration for Claude Code OpenAI Wrapper.
 Single source of truth for tool names, models, and other configuration values.
 """
 
+import os
+
 # Claude Agent SDK Tool Names
 # These are the built-in tools available in the Claude Agent SDK
 CLAUDE_TOOLS = [
@@ -64,7 +66,8 @@ CLAUDE_MODELS = [
 ]
 
 # Default model (recommended for most use cases)
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+# Can be overridden via DEFAULT_MODEL environment variable
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-5-20250929")
 
 # Fast model (for speed/cost optimization)
 FAST_MODEL = "claude-haiku-4-5-20251001"

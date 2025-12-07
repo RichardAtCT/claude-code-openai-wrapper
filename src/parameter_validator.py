@@ -24,9 +24,9 @@ class ParameterValidator:
         """Validate that the model is supported by Claude Code SDK."""
         if model not in cls.SUPPORTED_MODELS:
             logger.warning(
-                f"Model '{model}' may not be supported by Claude Code SDK. Supported models: {cls.SUPPORTED_MODELS}"
+                f"Model '{model}' is not in the known supported models list. It will still be attempted but may fail. Supported models: {sorted(cls.SUPPORTED_MODELS)}"
             )
-            return False
+            # Return True anyway to allow graceful degradation
         return True
 
     @classmethod
