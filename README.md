@@ -622,6 +622,7 @@ for chunk in stream:
 All Claude models through November 2025 are supported:
 
 ### Claude 4.5 Family (Latest - Fall 2025)
+- **`claude-opus-4-5-20250929`** 🎯 Most Capable - Latest Opus with enhanced reasoning and capabilities
 - **`claude-sonnet-4-5-20250929`** ⭐ Recommended - Best coding model, superior reasoning and math
 - **`claude-haiku-4-5-20251001`** ⚡ Fast & Cheap - Similar performance to Sonnet 4 at 1/3 cost
 
