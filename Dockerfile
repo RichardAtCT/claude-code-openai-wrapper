@@ -1,10 +1,8 @@
 FROM python:3.12-slim
 
-# Install system deps for Node.js and general utils
+# Install system deps (curl for Poetry installer)
 RUN apt-get update && apt-get install -y \
     curl \
-    nodejs \
-    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Poetry globally
@@ -13,8 +11,8 @@ RUN curl -sSL https://install.python-poetry.org | python3 -
 # Add Poetry to PATH
 ENV PATH="/root/.local/bin:${PATH}"
 
-# Install Claude Code CLI globally (for SDK compatibility)
-RUN npm install -g @anthropic-ai/claude-code
+# Note: Claude Code CLI is bundled with claude-agent-sdk >= 0.1.8
+# No separate Node.js/npm installation required
 
 # Copy the app code
 COPY . /app

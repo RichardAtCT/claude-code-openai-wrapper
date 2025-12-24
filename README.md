@@ -1,19 +1,18 @@
 # Claude Code OpenAI API Wrapper
 
-An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Code with any OpenAI client library. **Now powered by the official Claude Agent SDK v0.1.6** with enhanced authentication and features.
+An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Code with any OpenAI client library. **Now powered by the official Claude Agent SDK v0.1.18** with enhanced authentication and features.
 
 ## Version
 
-**Current Version:** 2.0.0 🆕
-- **Major Update:** Migrated from deprecated `claude-code-sdk` to `claude-agent-sdk` v0.1.6
-- **Breaking Changes:** Internal SDK changes only - no API consumer impact
-- **Requirements:** Claude Code CLI 2.0.0+ now required (was any version)
+**Current Version:** 2.1.0 🆕
+- **SDK Upgrade:** Updated to `claude-agent-sdk` v0.1.18 (from v0.1.6)
+- **Simplified Setup:** Claude Code CLI is now bundled with the SDK (no separate Node.js install required!)
+- **Smaller Docker Image:** Removed Node.js/npm dependencies
 
 **Upgrading from v1.x?**
-1. Update Claude Code CLI: `npm install -g @anthropic-ai/claude-code`
-2. Pull latest code: `git pull origin main`
-3. Update dependencies: `poetry install`
-4. Restart server - that's it!
+1. Pull latest code: `git pull origin main`
+2. Update dependencies: `poetry install`
+3. Restart server - that's it!
 
 **Migration Resources:**
 - [MIGRATION_STATUS.md](./MIGRATION_STATUS.md) - Detailed v2.0.0 migration status
@@ -22,7 +21,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 ## Status
 
 🎉 **Production Ready** - All core features working and tested:
-- ✅ Chat completions endpoint with **official Claude Agent SDK v0.1.6**
+- ✅ Chat completions endpoint with **official Claude Agent SDK v0.1.18**
 - ✅ Streaming and non-streaming responses
 - ✅ Full OpenAI SDK compatibility
 - ✅ **Multi-provider authentication** (API key, Bedrock, Vertex AI, CLI auth)
@@ -45,7 +44,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - Automatic model validation and selection
 
 ### 🛠 **Claude Agent SDK Integration**
-- **Official Claude Agent SDK** integration (v0.1.6) 🆕
+- **Official Claude Agent SDK** integration (v0.1.18) 🆕
 - **Real-time cost tracking** - actual costs from SDK metadata
 - **Accurate token counting** - input/output tokens from SDK
 - **Session management** - proper session IDs and continuity
@@ -72,22 +71,19 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 Get started in under 2 minutes:
 
 ```bash
-# 1. Install Claude Code CLI (if not already installed)
-npm install -g @anthropic-ai/claude-code
-
-# 2. Authenticate (choose one method)
-claude auth login  # Recommended for development
-# OR set: export ANTHROPIC_API_KEY=your-api-key
-
-# 3. Clone and setup the wrapper
+# 1. Clone and setup the wrapper
 git clone https://github.com/RichardAtCT/claude-code-openai-wrapper
 cd claude-code-openai-wrapper
-poetry install
+poetry install  # Installs SDK with bundled Claude Code CLI
 
-# 4. Start the server
+# 2. Authenticate (choose one method)
+export ANTHROPIC_API_KEY=your-api-key  # Recommended
+# OR use CLI auth: claude auth login
+
+# 3. Start the server
 poetry run uvicorn src.main:app --reload --port 8000
 
-# 5. Test it works
+# 4. Test it works
 poetry run python test_endpoints.py
 ```
 
@@ -95,39 +91,26 @@ poetry run python test_endpoints.py
 
 ## Prerequisites
 
-1. **Claude Code CLI**: Install Claude Code CLI 2.0.0+
-   ```bash
-   # Install Claude Code (v2.0.0 or higher required)
-   npm install -g @anthropic-ai/claude-code
+1. **Python 3.10+**: Required for the server (supports Python 3.10, 3.11, 3.12, 3.13)
 
-   # Verify installation
-   claude --version
-   ```
-
-2. **Authentication**: Choose one method:
-   - **Option A**: Authenticate via CLI (Recommended for development)
-     ```bash
-     claude auth login
-     ```
-   - **Option B**: Set environment variable
-     ```bash
-     export ANTHROPIC_API_KEY=your-api-key
-     ```
-   - **Option C**: Use AWS Bedrock or Google Vertex AI (see Configuration section)
-
-3. **Node.js**: Required for Claude Code CLI 2.0.0+
-   ```bash
-   # Verify Node.js is installed
-   node --version
-   ```
-
-4. **Python 3.10+**: Required for the server (supports Python 3.10, 3.11, 3.12, 3.13)
-
-5. **Poetry**: For dependency management
+2. **Poetry**: For dependency management
    ```bash
    # Install Poetry (if not already installed)
    curl -sSL https://install.python-poetry.org | python3 -
    ```
+
+3. **Authentication**: Choose one method:
+   - **Option A**: Set environment variable (Recommended)
+     ```bash
+     export ANTHROPIC_API_KEY=your-api-key
+     ```
+   - **Option B**: Authenticate via CLI
+     ```bash
+     claude auth login
+     ```
+   - **Option C**: Use AWS Bedrock or Google Vertex AI (see Configuration section)
+
+> **Note:** The Claude Code CLI is bundled with the SDK (v0.1.8+). No separate Node.js or npm installation required!
 
 ## Installation
 
@@ -321,7 +304,7 @@ Before building or running the container, ensure the following:
   - Tools for Remote Deployment: Access to a VPS (e.g., AWS EC2, DigitalOcean), cloud registry (e.g., Docker Hub), or platform (e.g., Heroku, Google Cloud Run) if planning remote use.
 
 ## Building the Docker Image
-The `Dockerfile` in the root defines a lightweight Python 3.12-based image with all dependencies (Poetry, Node.js for CLI, FastAPI/Uvicorn, and the Claude Code SDK).
+The `Dockerfile` in the root defines a lightweight Python 3.12-based image with all dependencies (Poetry, FastAPI/Uvicorn, and the Claude Agent SDK with bundled CLI).
 
 1. Navigate to the repository root (where the Dockerfile is).
 2. Build the image:
@@ -759,7 +742,8 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 - [ ] **MCP integration** - Model Context Protocol server support
 
 ### ✅ **Recent Improvements (v2.0.0)**
-- **✅ Claude Agent SDK Migration**: Upgraded from deprecated `claude-code-sdk` to `claude-agent-sdk` v0.1.6 🆕
+- **✅ Claude Agent SDK Migration**: Upgraded from deprecated `claude-code-sdk` to `claude-agent-sdk` v0.1.18 🆕
+- **✅ Bundled CLI**: No separate Node.js/npm installation required 🆕
 - **✅ Modern SDK Features**: Access to latest SDK capabilities and improvements 🆕
 - **✅ SDK Integration**: Official Python SDK replaces subprocess calls
 - **✅ Real Metadata**: Accurate costs and token counts from SDK

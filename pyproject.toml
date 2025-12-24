@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "claude-code-openai-wrapper"
-version = "2.0.0"
+version = "2.1.0"
 description = "OpenAI API-compatible wrapper for Claude Code"
 authors = ["Richard Atkinson <richardatk01@gmail.com>"]
 readme = "README.md"
@@ -16,7 +16,7 @@ python-dotenv = "^1.0.1"
 httpx = "^0.27.2"
 sse-starlette = "^2.1.3"
 python-multipart = "^0.0.18"
-claude-agent-sdk = "^0.1.6"
+claude-agent-sdk = "^0.1.18"
 slowapi = "^0.1.9"
 
 [tool.poetry.group.dev.dependencies]
