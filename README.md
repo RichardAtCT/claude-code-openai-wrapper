@@ -4,10 +4,10 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 
 ## Version
 
-**Current Version:** 2.0.0 🆕
-- **Major Update:** Migrated from deprecated `claude-code-sdk` to `claude-agent-sdk` v0.1.18
-- **Breaking Changes:** Internal SDK changes only - no API consumer impact
+**Current Version:** 2.1.0 🆕
+- **SDK Upgrade:** Updated to `claude-agent-sdk` v0.1.18 (from v0.1.6)
 - **Simplified Setup:** Claude Code CLI is now bundled with the SDK (no separate Node.js install required!)
+- **Smaller Docker Image:** Removed Node.js/npm dependencies
 
 **Upgrading from v1.x?**
 1. Pull latest code: `git pull origin main`

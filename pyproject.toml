@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "claude-code-openai-wrapper"
-version = "2.0.0"
+version = "2.1.0"
 description = "OpenAI API-compatible wrapper for Claude Code"
 authors = ["Richard Atkinson <richardatk01@gmail.com>"]
 readme = "README.md"
