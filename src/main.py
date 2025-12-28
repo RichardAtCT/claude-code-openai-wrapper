@@ -45,7 +45,7 @@ from src.rate_limiter import (
     rate_limit_exceeded_handler,
     rate_limit_endpoint,
 )
-from src.constants import CLAUDE_MODELS, CLAUDE_TOOLS
+from src.constants import CLAUDE_MODELS, CLAUDE_TOOLS, DEFAULT_ALLOWED_TOOLS
 
 # Load environment variables
 load_dotenv()
@@ -385,7 +385,11 @@ async def generate_streaming_response(
             claude_options["max_turns"] = 1  # Single turn for Q&A
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
-            logger.info("Tools enabled by user request")
+            # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
+            claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
+            # Set permission mode to bypass prompts (required for API/headless usage)
+            claude_options["permission_mode"] = "bypassPermissions"
+            logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
 
         # Run Claude Code
         chunks_buffer = []
@@ -399,6 +403,7 @@ async def generate_streaming_response(
             max_turns=claude_options.get("max_turns", 10),
             allowed_tools=claude_options.get("allowed_tools"),
             disallowed_tools=claude_options.get("disallowed_tools"),
+            permission_mode=claude_options.get("permission_mode"),
             stream=True,
         ):
             chunks_buffer.append(chunk)
@@ -642,7 +647,11 @@ async def chat_completions(
                 claude_options["max_turns"] = 1  # Single turn for Q&A
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
-                logger.info("Tools enabled by user request")
+                # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
+                claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
+                # Set permission mode to bypass prompts (required for API/headless usage)
+                claude_options["permission_mode"] = "bypassPermissions"
+                logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
 
             # Collect all chunks
             chunks = []
@@ -653,6 +662,7 @@ async def chat_completions(
                 max_turns=claude_options.get("max_turns", 10),
                 allowed_tools=claude_options.get("allowed_tools"),
                 disallowed_tools=claude_options.get("disallowed_tools"),
+                permission_mode=claude_options.get("permission_mode"),
                 stream=False,
             ):
                 chunks.append(chunk)

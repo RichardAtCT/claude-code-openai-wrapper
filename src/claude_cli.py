@@ -103,6 +103,7 @@ class ClaudeCodeCLI:
         disallowed_tools: Optional[List[str]] = None,
         session_id: Optional[str] = None,
         continue_session: bool = False,
+        permission_mode: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run Claude Agent using the Python SDK and yield response chunks."""
 
@@ -135,6 +136,10 @@ class ClaudeCodeCLI:
                     options.allowed_tools = allowed_tools
                 if disallowed_tools:
                     options.disallowed_tools = disallowed_tools
+
+                # Set permission mode (needed for tool execution in API context)
+                if permission_mode:
+                    options.permission_mode = permission_mode
 
                 # Handle session continuity
                 if continue_session:
@@ -188,7 +193,18 @@ class ClaudeCodeCLI:
             }
 
     def parse_claude_message(self, messages: List[Dict[str, Any]]) -> Optional[str]:
-        """Extract the assistant message from Claude Agent SDK messages."""
+        """Extract the assistant message from Claude Agent SDK messages.
+
+        Prioritizes ResultMessage.result for multi-turn conversations,
+        falls back to last AssistantMessage content.
+        """
+        # First, check for ResultMessage with 'result' field (multi-turn completion)
+        for message in messages:
+            if message.get("subtype") == "success" and "result" in message:
+                return message["result"]
+
+        # Collect all text from AssistantMessages (take the last one with text)
+        last_text = None
         for message in messages:
             # Look for AssistantMessage type (new SDK format)
             if "content" in message and isinstance(message["content"], list):
@@ -203,7 +219,7 @@ class ClaudeCodeCLI:
                         text_parts.append(block)
 
                 if text_parts:
-                    return "\n".join(text_parts)
+                    last_text = "\n".join(text_parts)
 
             # Fallback: look for old format
             elif message.get("type") == "assistant" and "message" in message:
@@ -216,11 +232,12 @@ class ClaudeCodeCLI:
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "text":
                                 text_parts.append(block.get("text", ""))
-                        return "\n".join(text_parts) if text_parts else None
+                        if text_parts:
+                            last_text = "\n".join(text_parts)
                     elif isinstance(content, str):
-                        return content
+                        last_text = content
 
-        return None
+        return last_text
 
     def extract_metadata(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Extract metadata like costs, tokens, and session info from SDK messages."""
