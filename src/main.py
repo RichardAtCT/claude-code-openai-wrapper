@@ -32,6 +32,11 @@ from src.models import (
     MCPServerInfoResponse,
     MCPServersListResponse,
     MCPConnectionRequest,
+    # Anthropic API compatible models
+    AnthropicMessagesRequest,
+    AnthropicMessagesResponse,
+    AnthropicTextBlock,
+    AnthropicUsage,
 )
 from src.claude_cli import ClaudeCodeCLI
 from src.message_adapter import MessageAdapter
@@ -709,6 +714,102 @@ async def chat_completions(
         raise
     except Exception as e:
         logger.error(f"Chat completion error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/messages")
+@rate_limit_endpoint("chat")
+async def anthropic_messages(
+    request_body: AnthropicMessagesRequest,
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Anthropic Messages API compatible endpoint.
+
+    This endpoint provides compatibility with the native Anthropic SDK,
+    allowing tools like VC to use this wrapper via the VC_API_BASE setting.
+    """
+    # Check FastAPI API key if configured
+    await verify_api_key(request, credentials)
+
+    # Validate Claude Code authentication
+    auth_valid, auth_info = validate_claude_code_auth()
+
+    if not auth_valid:
+        error_detail = {
+            "message": "Claude Code authentication failed",
+            "errors": auth_info.get("errors", []),
+            "method": auth_info.get("method", "none"),
+            "help": "Check /v1/auth/status for detailed authentication information",
+        }
+        raise HTTPException(status_code=503, detail=error_detail)
+
+    try:
+        logger.info(f"Anthropic Messages API request: model={request_body.model}")
+
+        # Convert Anthropic messages to internal format
+        messages = request_body.to_openai_messages()
+
+        # Build prompt from messages
+        prompt_parts = []
+        for msg in messages:
+            if msg.role == "user":
+                prompt_parts.append(msg.content)
+            elif msg.role == "assistant":
+                prompt_parts.append(f"Assistant: {msg.content}")
+
+        prompt = "\n\n".join(prompt_parts)
+        system_prompt = request_body.system
+
+        # Filter content
+        prompt = MessageAdapter.filter_content(prompt)
+        if system_prompt:
+            system_prompt = MessageAdapter.filter_content(system_prompt)
+
+        # Run Claude Code - tools enabled by default for Anthropic SDK clients
+        # (they're typically using this for agentic workflows)
+        chunks = []
+        async for chunk in claude_cli.run_completion(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=request_body.model,
+            max_turns=10,
+            allowed_tools=DEFAULT_ALLOWED_TOOLS,
+            permission_mode="bypassPermissions",
+            stream=False,
+        ):
+            chunks.append(chunk)
+
+        # Extract assistant message
+        raw_assistant_content = claude_cli.parse_claude_message(chunks)
+
+        if not raw_assistant_content:
+            raise HTTPException(status_code=500, detail="No response from Claude Code")
+
+        # Filter out tool usage and thinking blocks
+        assistant_content = MessageAdapter.filter_content(raw_assistant_content)
+
+        # Estimate tokens
+        prompt_tokens = MessageAdapter.estimate_tokens(prompt)
+        completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+
+        # Create Anthropic-format response
+        response = AnthropicMessagesResponse(
+            model=request_body.model,
+            content=[AnthropicTextBlock(text=assistant_content)],
+            stop_reason="end_turn",
+            usage=AnthropicUsage(
+                input_tokens=prompt_tokens,
+                output_tokens=completion_tokens,
+            ),
+        )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Anthropic Messages API error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
