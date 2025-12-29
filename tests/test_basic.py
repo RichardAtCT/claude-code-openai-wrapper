@@ -153,6 +153,49 @@ def test_streaming():
         return False
 
 
+@requires_server
+def test_version_endpoint():
+    """Test the version endpoint."""
+    print("\nTesting version endpoint...")
+    try:
+        response = requests.get("http://localhost:8000/version")
+        if response.status_code == 200:
+            data = response.json()
+            assert "version" in data, "Response missing 'version' field"
+            assert "service" in data, "Response missing 'service' field"
+            assert data["service"] == "claude-code-openai-wrapper"
+            print(f"✓ Version endpoint works. Version: {data['version']}")
+            return True
+        else:
+            print(f"✗ Version endpoint failed: {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"✗ Version endpoint error: {e}")
+        return False
+
+
+@requires_server
+def test_landing_page():
+    """Test the landing page returns HTML."""
+    print("\nTesting landing page...")
+    try:
+        response = requests.get("http://localhost:8000/")
+        if response.status_code == 200:
+            content_type = response.headers.get("content-type", "")
+            assert "text/html" in content_type, f"Expected HTML, got {content_type}"
+            assert "Claude Code OpenAI Wrapper" in response.text, "Missing page title"
+            assert "Quick Start" in response.text, "Missing Quick Start section"
+            assert "API Endpoints" in response.text, "Missing API Endpoints section"
+            print("✓ Landing page works")
+            return True
+        else:
+            print(f"✗ Landing page failed: {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"✗ Landing page error: {e}")
+        return False
+
+
 def main():
     """Run all tests."""
     print("Claude Code OpenAI Wrapper - Basic Tests")
