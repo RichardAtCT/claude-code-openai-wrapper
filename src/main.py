@@ -1022,7 +1022,7 @@ async def root():
         </script>
         <script>
             // Copy quickstart command to clipboard
-            const quickstartText = 'curl -X POST http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d \'{{\"model\": \"claude-sonnet-4-5-20250929\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}\'';
+            const quickstartText = "curl -X POST http://localhost:8000/v1/chat/completions -H \\"Content-Type: application/json\\" -d '{{\\"model\\": \\"claude-sonnet-4-5-20250929\\", \\"messages\\": [{{\\"role\\": \\"user\\", \\"content\\": \\"Hello!\\"}}]}}'";
 
             function copyQuickstart() {{
                 // Try modern clipboard API first, fallback to execCommand
