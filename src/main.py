@@ -920,49 +920,41 @@ async def root():
             .accordion-content.open {{ max-height: 500px; overflow-y: auto; }}
             .chevron {{ transition: transform 0.3s ease; }}
             .chevron.open {{ transform: rotate(90deg); }}
-            /* JSON Syntax Highlighting - Light mode (darker, more contrast) */
-            .json-key {{ color: #166534; font-weight: 600; }}
-            .json-string {{ color: #b45309; }}
-            .json-number {{ color: #1d4ed8; }}
-            .json-boolean {{ color: #7c3aed; }}
-            .json-null {{ color: #4b5563; font-style: italic; }}
-            /* JSON Syntax Highlighting - Dark mode (brighter) */
-            .dark .json-key {{ color: #4ade80; font-weight: 600; }}
-            .dark .json-string {{ color: #fbbf24; }}
-            .dark .json-number {{ color: #60a5fa; }}
-            .dark .json-boolean {{ color: #a78bfa; }}
-            .dark .json-null {{ color: #9ca3af; font-style: italic; }}
+            /* Shiki code block styling */
+            .shiki {{ padding: 1rem; border-radius: 0.5rem; overflow-x: auto; font-size: 0.75rem; }}
+            .shiki code {{ white-space: pre-wrap; word-break: break-word; }}
         </style>
-        <script>
-            // JSON syntax highlighting
-            function syntaxHighlight(json) {{
-                if (typeof json !== 'string') {{
-                    json = JSON.stringify(json, null, 2);
+        <script type="module">
+            // Import Shiki from CDN
+            import {{ codeToHtml }} from 'https://esm.sh/shiki@3.0.0';
+
+            // Cache the highlighter themes
+            let lightTheme = 'github-light';
+            let darkTheme = 'github-dark';
+
+            // Highlight JSON with Shiki
+            async function highlightJson(json, targetId) {{
+                const code = typeof json === 'string' ? json : JSON.stringify(json, null, 2);
+                const isDark = document.documentElement.classList.contains('dark');
+                const theme = isDark ? darkTheme : lightTheme;
+
+                try {{
+                    const html = await codeToHtml(code, {{
+                        lang: 'json',
+                        theme: theme
+                    }});
+                    document.getElementById(targetId).innerHTML = html;
+                }} catch (e) {{
+                    document.getElementById(targetId).innerHTML = '<pre class="text-red-500">Error highlighting: ' + e.message + '</pre>';
                 }}
-                json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                return json.replace(/("(\\u[a-zA-Z0-9]{{4}}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {{
-                    let cls = 'json-number';
-                    if (/^"/.test(match)) {{
-                        if (/:$/.test(match)) {{
-                            cls = 'json-key';
-                        }} else {{
-                            cls = 'json-string';
-                        }}
-                    }} else if (/true|false/.test(match)) {{
-                        cls = 'json-boolean';
-                    }} else if (/null/.test(match)) {{
-                        cls = 'json-null';
-                    }}
-                    return '<span class="' + cls + '">' + match + '</span>';
-                }});
             }}
 
             // Accordion toggle with lazy loading
-            async function toggleAccordion(id, endpoint) {{
+            window.toggleAccordion = async function(id, endpoint) {{
                 const content = document.getElementById('content-' + id);
                 const chevron = document.getElementById('chevron-' + id);
                 const loader = document.getElementById('loader-' + id);
-                const data = document.getElementById('data-' + id);
+                const dataContainer = document.getElementById('data-' + id);
 
                 if (content.classList.contains('open')) {{
                     content.classList.remove('open');
@@ -972,19 +964,39 @@ async def root():
                     chevron.classList.add('open');
 
                     // Fetch data if not already loaded
-                    if (data.innerHTML === '') {{
+                    if (dataContainer.innerHTML === '' || dataContainer.dataset.theme !== (document.documentElement.classList.contains('dark') ? 'dark' : 'light')) {{
                         loader.classList.remove('hidden');
                         try {{
                             const response = await fetch(endpoint);
                             const json = await response.json();
-                            data.innerHTML = syntaxHighlight(json);
+                            await highlightJson(json, 'data-' + id);
+                            dataContainer.dataset.theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
                         }} catch (e) {{
-                            data.innerHTML = '<span class="text-red-500">Error: ' + e.message + '</span>';
+                            dataContainer.innerHTML = '<span class="text-red-500">Error: ' + e.message + '</span>';
                         }}
                         loader.classList.add('hidden');
                     }}
                 }}
-            }}
+            }};
+
+            // Re-highlight open accordions when theme changes
+            window.addEventListener('themeChanged', async () => {{
+                const openAccordions = document.querySelectorAll('.accordion-content.open');
+                for (const accordion of openAccordions) {{
+                    const id = accordion.id.replace('content-', '');
+                    const dataContainer = document.getElementById('data-' + id);
+                    if (dataContainer && dataContainer.innerHTML) {{
+                        // Re-fetch and re-highlight with new theme
+                        const endpoint = accordion.closest('.rounded-xl').querySelector('button').getAttribute('onclick').match(/'([^']+)'/g)[1].replace(/'/g, '');
+                        const response = await fetch(endpoint);
+                        const json = await response.json();
+                        await highlightJson(json, 'data-' + id);
+                        dataContainer.dataset.theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+                    }}
+                }}
+            }});
+        </script>
+        <script>
 
             // Theme toggle logic
             function toggleTheme() {{
@@ -999,6 +1011,8 @@ async def root():
                     localStorage.setItem('theme', 'dark');
                     updateThemeIcon(true);
                 }}
+                // Dispatch event for Shiki to re-highlight
+                window.dispatchEvent(new Event('themeChanged'));
             }}
 
             function updateThemeIcon(isDark) {{
@@ -1122,7 +1136,7 @@ async def root():
                         <div id="content-models" class="accordion-content">
                             <div class="p-3 pt-0">
                                 <div id="loader-models" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
-                                <pre id="data-models" class="bg-gray-300 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap"></pre>
+                                <div id="data-models"></div>
                             </div>
                         </div>
                     </div>
@@ -1137,7 +1151,7 @@ async def root():
                         <div id="content-auth" class="accordion-content">
                             <div class="p-3 pt-0">
                                 <div id="loader-auth" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
-                                <pre id="data-auth" class="bg-gray-300 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap"></pre>
+                                <div id="data-auth"></div>
                             </div>
                         </div>
                     </div>
@@ -1152,7 +1166,7 @@ async def root():
                         <div id="content-sessions" class="accordion-content">
                             <div class="p-3 pt-0">
                                 <div id="loader-sessions" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
-                                <pre id="data-sessions" class="bg-gray-300 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap"></pre>
+                                <div id="data-sessions"></div>
                             </div>
                         </div>
                     </div>
@@ -1167,7 +1181,7 @@ async def root():
                         <div id="content-health" class="accordion-content">
                             <div class="p-3 pt-0">
                                 <div id="loader-health" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
-                                <pre id="data-health" class="bg-gray-300 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap"></pre>
+                                <div id="data-health"></div>
                             </div>
                         </div>
                     </div>
@@ -1182,7 +1196,7 @@ async def root():
                         <div id="content-version" class="accordion-content">
                             <div class="p-3 pt-0">
                                 <div id="loader-version" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
-                                <pre id="data-version" class="bg-gray-300 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap"></pre>
+                                <div id="data-version"></div>
                             </div>
                         </div>
                     </div>
