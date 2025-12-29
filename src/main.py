@@ -1022,19 +1022,42 @@ async def root():
         </script>
         <script>
             // Copy quickstart command to clipboard
-            const quickstartText = `curl -X POST http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'`;
+            const quickstartText = 'curl -X POST http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d \'{{\"model\": \"claude-sonnet-4-5-20250929\", \"messages\": [{{\"role\": \"user\", \"content\": \"Hello!\"}}]}}\'';
 
             function copyQuickstart() {{
-                navigator.clipboard.writeText(quickstartText).then(() => {{
-                    const copyIcon = document.getElementById('copy-icon');
-                    const checkIcon = document.getElementById('check-icon');
-                    copyIcon.classList.add('hidden');
-                    checkIcon.classList.remove('hidden');
-                    setTimeout(() => {{
-                        copyIcon.classList.remove('hidden');
-                        checkIcon.classList.add('hidden');
-                    }}, 2000);
-                }});
+                // Try modern clipboard API first, fallback to execCommand
+                if (navigator.clipboard && navigator.clipboard.writeText) {{
+                    navigator.clipboard.writeText(quickstartText).then(showCopySuccess).catch(fallbackCopy);
+                }} else {{
+                    fallbackCopy();
+                }}
+            }}
+
+            function fallbackCopy() {{
+                const textarea = document.createElement('textarea');
+                textarea.value = quickstartText;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                try {{
+                    document.execCommand('copy');
+                    showCopySuccess();
+                }} catch (e) {{
+                    console.error('Copy failed:', e);
+                }}
+                document.body.removeChild(textarea);
+            }}
+
+            function showCopySuccess() {{
+                const copyIcon = document.getElementById('copy-icon');
+                const checkIcon = document.getElementById('check-icon');
+                copyIcon.classList.add('hidden');
+                checkIcon.classList.remove('hidden');
+                setTimeout(() => {{
+                    copyIcon.classList.remove('hidden');
+                    checkIcon.classList.add('hidden');
+                }}, 2000);
             }}
 
             // Theme toggle logic
