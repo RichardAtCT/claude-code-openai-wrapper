@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from dotenv import load_dotenv
@@ -866,6 +866,178 @@ async def check_compatibility(request_body: ChatCompletionRequest):
 async def health_check(request: Request):
     """Health check endpoint."""
     return {"status": "healthy", "service": "claude-code-openai-wrapper"}
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """Landing page with API documentation."""
+    auth_info = get_claude_code_auth_info()
+    auth_method = auth_info.get("method", "unknown")
+    auth_valid = auth_info.get("status", {}).get("valid", False)
+    status_color = "green" if auth_valid else "red"
+    status_text = "Connected" if auth_valid else "Not Connected"
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en" class="dark">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Claude Code OpenAI Wrapper</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script>
+            tailwind.config = {{
+                darkMode: 'class',
+                theme: {{
+                    extend: {{
+                        colors: {{
+                            primary: {{ 50: '#f0fdf4', 100: '#dcfce7', 200: '#bbf7d0', 300: '#86efac', 400: '#4ade80', 500: '#22c55e', 600: '#16a34a', 700: '#15803d', 800: '#166534', 900: '#14532d', 950: '#052e16' }}
+                        }}
+                    }}
+                }}
+            }}
+        </script>
+        <style>
+            .gradient-border {{ background: linear-gradient(135deg, #22c55e 0%, #0ea5e9 100%); }}
+        </style>
+    </head>
+    <body class="bg-gray-950 text-gray-100 min-h-screen">
+        <div class="max-w-4xl mx-auto px-6 py-12">
+            <!-- Header -->
+            <div class="flex items-center gap-4 mb-8">
+                <div class="gradient-border p-[2px] rounded-xl">
+                    <div class="bg-gray-900 rounded-xl p-3">
+                        <svg class="w-8 h-8 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        </svg>
+                    </div>
+                </div>
+                <div>
+                    <h1 class="text-3xl font-bold text-white">Claude Code OpenAI Wrapper</h1>
+                    <p class="text-gray-400">OpenAI-compatible API for Claude</p>
+                </div>
+            </div>
+
+            <!-- Status Card -->
+            <div class="bg-gray-900 rounded-2xl border border-gray-800 p-6 mb-8">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-3 h-3 rounded-full bg-{status_color}-500 animate-pulse"></div>
+                        <span class="text-lg font-medium">{status_text}</span>
+                    </div>
+                    <div class="px-3 py-1 bg-gray-800 rounded-full text-sm text-gray-300">
+                        Auth: <span class="text-primary-400 font-mono">{auth_method}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Start -->
+            <div class="bg-gray-900 rounded-2xl border border-gray-800 p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                    Quick Start
+                </h2>
+                <div class="bg-gray-950 rounded-xl p-4 font-mono text-sm overflow-x-auto">
+                    <span class="text-gray-500">$</span> <span class="text-primary-400">curl</span> http://localhost:8000/v1/chat/completions \\<br>
+                    &nbsp;&nbsp;-H <span class="text-amber-400">"Content-Type: application/json"</span> \\<br>
+                    &nbsp;&nbsp;-d <span class="text-amber-400">'{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'</span>
+                </div>
+            </div>
+
+            <!-- Endpoints -->
+            <div class="bg-gray-900 rounded-2xl border border-gray-800 p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                    </svg>
+                    API Endpoints
+                </h2>
+                <div class="space-y-3">
+                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
+                        <span class="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-bold rounded">POST</span>
+                        <code class="text-gray-200">/v1/chat/completions</code>
+                        <span class="text-gray-500 text-sm ml-auto">OpenAI-compatible chat</span>
+                    </div>
+                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
+                        <span class="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-bold rounded">POST</span>
+                        <code class="text-gray-200">/v1/messages</code>
+                        <span class="text-gray-500 text-sm ml-auto">Anthropic-compatible</span>
+                    </div>
+                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
+                        <span class="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold rounded">GET</span>
+                        <code class="text-gray-200">/v1/models</code>
+                        <span class="text-gray-500 text-sm ml-auto">List models</span>
+                    </div>
+                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
+                        <span class="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold rounded">GET</span>
+                        <code class="text-gray-200">/v1/auth/status</code>
+                        <span class="text-gray-500 text-sm ml-auto">Auth status</span>
+                    </div>
+                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
+                        <span class="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold rounded">GET</span>
+                        <code class="text-gray-200">/v1/sessions</code>
+                        <span class="text-gray-500 text-sm ml-auto">Active sessions</span>
+                    </div>
+                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
+                        <span class="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold rounded">GET</span>
+                        <code class="text-gray-200">/health</code>
+                        <span class="text-gray-500 text-sm ml-auto">Health check</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Configuration -->
+            <div class="bg-gray-900 rounded-2xl border border-gray-800 p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                    Configuration
+                </h2>
+                <p class="text-gray-400 mb-4">Set <code class="bg-gray-800 px-2 py-1 rounded text-primary-400">CLAUDE_AUTH_METHOD</code> to choose authentication:</p>
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="p-3 bg-gray-950 rounded-xl">
+                        <code class="text-primary-400">cli</code>
+                        <p class="text-gray-500 text-sm mt-1">Claude CLI auth</p>
+                    </div>
+                    <div class="p-3 bg-gray-950 rounded-xl">
+                        <code class="text-primary-400">api_key</code>
+                        <p class="text-gray-500 text-sm mt-1">ANTHROPIC_API_KEY</p>
+                    </div>
+                    <div class="p-3 bg-gray-950 rounded-xl">
+                        <code class="text-primary-400">bedrock</code>
+                        <p class="text-gray-500 text-sm mt-1">AWS Bedrock</p>
+                    </div>
+                    <div class="p-3 bg-gray-950 rounded-xl">
+                        <code class="text-primary-400">vertex</code>
+                        <p class="text-gray-500 text-sm mt-1">Google Vertex AI</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="flex items-center justify-center gap-6 text-gray-500">
+                <a href="/docs" class="flex items-center gap-2 hover:text-primary-400 transition-colors">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                    </svg>
+                    API Docs
+                </a>
+                <a href="/redoc" class="flex items-center gap-2 hover:text-primary-400 transition-colors">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                    </svg>
+                    ReDoc
+                </a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
 
 @app.post("/v1/debug/request")

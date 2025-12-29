@@ -32,7 +32,32 @@ class ClaudeCodeAuthManager:
         return self.env_api_key
 
     def _detect_auth_method(self) -> str:
-        """Detect which Claude Code authentication method is configured."""
+        """Detect which Claude Code authentication method is configured.
+
+        Priority:
+        1. Explicit CLAUDE_AUTH_METHOD env var (cli, api_key, bedrock, vertex)
+        2. Legacy env vars (CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_VERTEX)
+        3. Auto-detect based on ANTHROPIC_API_KEY presence
+        4. Default to claude_cli
+        """
+        # Check for explicit auth method first
+        explicit_method = os.getenv("CLAUDE_AUTH_METHOD", "").lower()
+        if explicit_method:
+            method_map = {
+                "cli": "claude_cli",
+                "claude_cli": "claude_cli",
+                "api_key": "anthropic",
+                "anthropic": "anthropic",
+                "bedrock": "bedrock",
+                "vertex": "vertex",
+            }
+            if explicit_method in method_map:
+                logger.info(f"Using explicit auth method: {method_map[explicit_method]}")
+                return method_map[explicit_method]
+            else:
+                logger.warning(f"Unknown CLAUDE_AUTH_METHOD '{explicit_method}', falling back to auto-detect")
+
+        # Fall back to legacy env vars and auto-detection
         if os.getenv("CLAUDE_CODE_USE_BEDROCK") == "1":
             return "bedrock"
         elif os.getenv("CLAUDE_CODE_USE_VERTEX") == "1":
