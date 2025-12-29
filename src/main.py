@@ -889,143 +889,353 @@ async def root():
     auth_info = get_claude_code_auth_info()
     auth_method = auth_info.get("method", "unknown")
     auth_valid = auth_info.get("status", {}).get("valid", False)
-    status_color = "green" if auth_valid else "red"
+    status_color = "#22c55e" if auth_valid else "#ef4444"
     status_text = "Connected" if auth_valid else "Not Connected"
 
     html_content = f"""
     <!DOCTYPE html>
-    <html lang="en" class="dark">
+    <html lang="en" data-theme="dark">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="color-scheme" content="light dark">
         <title>Claude Code OpenAI Wrapper</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <script>
-            tailwind.config = {{
-                darkMode: 'class',
-                theme: {{
-                    extend: {{
-                        colors: {{
-                            primary: {{ 50: '#f0fdf4', 100: '#dcfce7', 200: '#bbf7d0', 300: '#86efac', 400: '#4ade80', 500: '#22c55e', 600: '#16a34a', 700: '#15803d', 800: '#166534', 900: '#14532d', 950: '#052e16' }}
-                        }}
-                    }}
-                }}
-            }}
-        </script>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
         <style>
-            .gradient-border {{ background: linear-gradient(135deg, #22c55e 0%, #0ea5e9 100%); }}
-            .endpoint-card {{ transition: all 0.15s ease-in-out; }}
-            .endpoint-card:hover {{ background-color: rgba(34, 197, 94, 0.05); }}
-            .accordion-content {{ max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; }}
-            .accordion-content.open {{ max-height: 500px; overflow-y: auto; }}
-            .chevron {{ transition: transform 0.3s ease; }}
-            .chevron.open {{ transform: rotate(90deg); }}
-            /* Shiki code block styling */
-            .shiki {{ padding: 1.25rem; border-radius: 0.75rem; overflow-x: auto; font-size: 0.95rem; line-height: 1.75; }}
+            :root {{
+                --pico-font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                --accent-color: #16a34a;
+            }}
+            /* Light mode colors */
+            [data-theme="light"] {{
+                --card-bg: #ffffff;
+                --subtle-bg: #f1f5f9;
+                --border-color: #e2e8f0;
+                --page-bg: #f8fafc;
+            }}
+            /* Dark mode colors */
+            [data-theme="dark"] {{
+                --card-bg: #1e293b;
+                --subtle-bg: #334155;
+                --border-color: #475569;
+                --page-bg: #0f172a;
+            }}
+            /* Page background */
+            body {{ background: var(--page-bg); }}
+            /* GLOBAL FIX: Remove Pico's default code styling everywhere */
+            code:not(pre code) {{
+                background: transparent !important;
+                padding: 0 !important;
+                border-radius: 0 !important;
+                color: inherit !important;
+            }}
+            /* Only style code green where we explicitly want it */
+            .green-code {{ color: var(--accent-color) !important; }}
+            /* Constrain page width - wider for modern screens */
+            .container {{
+                max-width: 1100px;
+                margin: 0 auto;
+                padding: 1.5rem 2rem;
+            }}
+            /* Override Pico article styling */
+            article {{
+                background: var(--card-bg);
+                border: 1px solid var(--border-color);
+                border-radius: 0.75rem;
+                margin-bottom: 1rem;
+                padding: 1rem 1.25rem;
+            }}
+            article header {{
+                padding: 0;
+                margin-bottom: 0.75rem;
+                background: transparent;
+                border: none;
+            }}
+            /* Section headers with icons - matches status-flex layout */
+            .section-header {{
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                margin-bottom: 0.75rem;
+            }}
+            .section-icon {{
+                width: 1rem;
+                height: 1rem;
+                color: var(--accent-color);
+                flex-shrink: 0;
+            }}
+            /* Status indicator */
+            .status-dot {{
+                width: 0.75rem;
+                height: 0.75rem;
+                border-radius: 50%;
+                display: inline-block;
+                animation: pulse 2s infinite;
+            }}
+            @keyframes pulse {{
+                0%, 100% {{ opacity: 1; }}
+                50% {{ opacity: 0.5; }}
+            }}
+            /* Method badges */
+            .badge {{
+                display: inline-block;
+                padding: 0.25rem 0.5rem;
+                font-size: 0.7rem;
+                font-weight: 700;
+                border-radius: 0.25rem;
+                text-transform: uppercase;
+            }}
+            .badge-post {{ background: rgba(34, 197, 94, 0.15); color: #16a34a; }}
+            .badge-get {{ background: rgba(59, 130, 246, 0.15); color: #2563eb; }}
+            /* Header layout */
+            .header-flex {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 1rem;
+                margin-bottom: 1rem;
+            }}
+            .header-left {{
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+                flex-shrink: 0;
+            }}
+            .header-right {{
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                flex-shrink: 0;
+            }}
+            .icon-btn {{
+                padding: 0.5rem;
+                border-radius: 0.5rem;
+                background: var(--subtle-bg);
+                border: 1px solid var(--border-color);
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                color: inherit;
+            }}
+            .icon-btn:hover {{ opacity: 0.8; }}
+            .icon-btn svg {{ width: 1.25rem; height: 1.25rem; }}
+            .version-badge {{
+                padding: 0.25rem 0.75rem;
+                background: var(--subtle-bg);
+                border: 1px solid var(--border-color);
+                border-radius: 0.5rem;
+                font-family: monospace;
+                font-size: 0.875rem;
+            }}
+            /* Logo container */
+            .logo-container {{
+                background: linear-gradient(135deg, #22c55e 0%, #0ea5e9 100%);
+                padding: 2px;
+                border-radius: 0.75rem;
+            }}
+            .logo-inner {{
+                background: var(--card-bg);
+                border-radius: calc(0.75rem - 2px);
+                padding: 0.75rem;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+            .logo-inner svg {{ width: 2rem; height: 2rem; color: #22c55e; }}
+            /* Endpoint list */
+            .endpoint-item {{
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                padding: 0.5rem 0;
+                border-bottom: 1px solid var(--pico-muted-border-color);
+            }}
+            .endpoint-item:last-child {{ border-bottom: none; }}
+            .endpoint-item code {{ flex: 1; }}
+            .endpoint-desc {{ color: var(--pico-muted-color); font-size: 0.85rem; }}
+            /* Details accordion styling */
+            details {{
+                border: 1px solid var(--border-color);
+                border-radius: 0.5rem;
+                margin-bottom: 0.4rem;
+                background: var(--subtle-bg);
+            }}
+            details summary {{
+                padding: 0.5rem 0.75rem;
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                cursor: pointer;
+                list-style: none;
+            }}
+            details summary::-webkit-details-marker {{ display: none; }}
+            details summary::after {{
+                content: "";
+                margin-left: auto;
+                width: 0.5rem;
+                height: 0.5rem;
+                border-right: 2px solid currentColor;
+                border-bottom: 2px solid currentColor;
+                transform: rotate(-45deg);
+                transition: transform 0.2s;
+            }}
+            details[open] summary::after {{ transform: rotate(45deg); }}
+            details .content {{ padding: 0 1rem 1rem; }}
+            details .content pre {{
+                margin: 0;
+                font-size: 0.875rem;
+                overflow-x: auto;
+            }}
+            /* Config grid */
+            .config-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+                gap: 0.75rem;
+            }}
+            .config-item {{
+                padding: 0.75rem;
+                background: var(--subtle-bg);
+                border: 1px solid var(--border-color);
+                border-radius: 0.5rem;
+            }}
+            .config-item code {{ font-weight: 600; }}
+            .config-item p {{ margin: 0.25rem 0 0; font-size: 0.875rem; color: var(--pico-muted-color); }}
+            /* Footer */
+            footer nav {{
+                display: flex;
+                justify-content: center;
+                gap: 2rem;
+            }}
+            footer a {{
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }}
+            footer svg {{ width: 1rem; height: 1rem; }}
+            /* Quick start */
+            .quickstart-wrapper {{ position: relative; }}
+            .copy-btn {{
+                position: absolute;
+                top: 0.5rem;
+                right: 0.5rem;
+                padding: 0.5rem;
+                background: var(--subtle-bg);
+                border: 1px solid var(--border-color);
+                border-radius: 0.5rem;
+                cursor: pointer;
+                z-index: 1;
+                color: inherit;
+            }}
+            .copy-btn:hover {{ opacity: 0.8; }}
+            .copy-btn svg {{ width: 1rem; height: 1rem; }}
+            .hidden {{ display: none !important; }}
+            /* Shiki code styling */
+            .shiki {{ padding: 1rem; border-radius: 0.5rem; overflow-x: auto; }}
             .shiki code {{ white-space: pre-wrap; word-break: break-word; }}
-            #quickstart-code .shiki {{ font-size: 1rem; line-height: 1.85; padding: 1.5rem; }}
+            /* Status card layout */
+            .status-flex {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 1rem;
+            }}
+            .status-left {{
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+            }}
+            .auth-badge {{
+                padding: 0.25rem 0.75rem;
+                background: var(--subtle-bg);
+                border: 1px solid var(--border-color);
+                border-radius: 1rem;
+                font-size: 0.875rem;
+            }}
         </style>
         <script type="module">
-            // Import Shiki from CDN
             import {{ codeToHtml }} from 'https://esm.sh/shiki@3.0.0';
 
-            // Cache the highlighter themes
-            let lightTheme = 'github-light';
-            let darkTheme = 'github-dark';
+            const lightTheme = 'github-light';
+            const darkTheme = 'github-dark';
 
-            // Highlight JSON with Shiki
+            function isDark() {{
+                return document.documentElement.getAttribute('data-theme') === 'dark';
+            }}
+
             async function highlightJson(json, targetId) {{
                 const code = typeof json === 'string' ? json : JSON.stringify(json, null, 2);
-                const isDark = document.documentElement.classList.contains('dark');
-                const theme = isDark ? darkTheme : lightTheme;
-
+                const theme = isDark() ? darkTheme : lightTheme;
                 try {{
-                    const html = await codeToHtml(code, {{
-                        lang: 'json',
-                        theme: theme
-                    }});
+                    const html = await codeToHtml(code, {{ lang: 'json', theme }});
                     document.getElementById(targetId).innerHTML = html;
                 }} catch (e) {{
-                    document.getElementById(targetId).innerHTML = '<pre class="text-red-500">Error highlighting: ' + e.message + '</pre>';
+                    document.getElementById(targetId).innerHTML = '<pre style="color:red;">Error: ' + e.message + '</pre>';
                 }}
             }}
 
-            // Accordion toggle with lazy loading
-            window.toggleAccordion = async function(id, endpoint) {{
-                const content = document.getElementById('content-' + id);
-                const chevron = document.getElementById('chevron-' + id);
-                const loader = document.getElementById('loader-' + id);
-                const dataContainer = document.getElementById('data-' + id);
-
-                if (content.classList.contains('open')) {{
-                    content.classList.remove('open');
-                    chevron.classList.remove('open');
-                }} else {{
-                    content.classList.add('open');
-                    chevron.classList.add('open');
-
-                    // Fetch data if not already loaded
-                    if (dataContainer.innerHTML === '' || dataContainer.dataset.theme !== (document.documentElement.classList.contains('dark') ? 'dark' : 'light')) {{
-                        loader.classList.remove('hidden');
-                        try {{
-                            const response = await fetch(endpoint);
-                            const json = await response.json();
-                            await highlightJson(json, 'data-' + id);
-                            dataContainer.dataset.theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-                        }} catch (e) {{
-                            dataContainer.innerHTML = '<span class="text-red-500">Error: ' + e.message + '</span>';
+            // Lazy load data when details opens
+            document.querySelectorAll('details[data-endpoint]').forEach(details => {{
+                details.addEventListener('toggle', async () => {{
+                    if (details.open) {{
+                        const id = details.id;
+                        const endpoint = details.dataset.endpoint;
+                        const dataContainer = document.getElementById('data-' + id);
+                        const loader = document.getElementById('loader-' + id);
+                        if (dataContainer.innerHTML === '' || dataContainer.dataset.theme !== (isDark() ? 'dark' : 'light')) {{
+                            loader.classList.remove('hidden');
+                            try {{
+                                const response = await fetch(endpoint);
+                                const json = await response.json();
+                                await highlightJson(json, 'data-' + id);
+                                dataContainer.dataset.theme = isDark() ? 'dark' : 'light';
+                            }} catch (e) {{
+                                dataContainer.innerHTML = '<span style="color:red;">Error: ' + e.message + '</span>';
+                            }}
+                            loader.classList.add('hidden');
                         }}
-                        loader.classList.add('hidden');
                     }}
-                }}
-            }};
+                }});
+            }});
 
-            // Re-highlight open accordions when theme changes
+            // Re-highlight on theme change
             window.addEventListener('themeChanged', async () => {{
-                // Re-highlight quickstart
                 await highlightQuickstart();
-                // Re-highlight open accordions
-                const openAccordions = document.querySelectorAll('.accordion-content.open');
-                for (const accordion of openAccordions) {{
-                    const id = accordion.id.replace('content-', '');
+                document.querySelectorAll('details[open][data-endpoint]').forEach(async details => {{
+                    const id = details.id;
+                    const endpoint = details.dataset.endpoint;
                     const dataContainer = document.getElementById('data-' + id);
                     if (dataContainer && dataContainer.innerHTML) {{
-                        // Re-fetch and re-highlight with new theme
-                        const endpoint = accordion.closest('.rounded-xl').querySelector('button').getAttribute('onclick').match(/'([^']+)'/g)[1].replace(/'/g, '');
                         const response = await fetch(endpoint);
                         const json = await response.json();
                         await highlightJson(json, 'data-' + id);
-                        dataContainer.dataset.theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+                        dataContainer.dataset.theme = isDark() ? 'dark' : 'light';
                     }}
-                }}
+                }});
             }});
 
-            // Highlight quickstart curl example
-            const quickstartCode = `curl -X POST http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'`;
+            const quickstartCode = `curl -X POST http://localhost:8000/v1/chat/completions \\\\
+  -H "Content-Type: application/json" \\\\
+  -d '{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'`;
 
             async function highlightQuickstart() {{
-                const isDark = document.documentElement.classList.contains('dark');
-                const theme = isDark ? darkTheme : lightTheme;
+                const theme = isDark() ? darkTheme : lightTheme;
                 try {{
-                    const html = await codeToHtml(quickstartCode, {{
-                        lang: 'bash',
-                        theme: theme
-                    }});
+                    const html = await codeToHtml(quickstartCode, {{ lang: 'bash', theme }});
                     document.getElementById('quickstart-code').innerHTML = html;
                 }} catch (e) {{
                     document.getElementById('quickstart-code').innerHTML = '<pre>' + quickstartCode + '</pre>';
                 }}
             }}
 
-            // Highlight on page load
+            window.highlightQuickstart = highlightQuickstart;
             highlightQuickstart();
         </script>
         <script>
-            // Copy quickstart command to clipboard
-            const quickstartText = "curl -X POST http://localhost:8000/v1/chat/completions -H \\"Content-Type: application/json\\" -d '{{\\"model\\": \\"claude-sonnet-4-5-20250929\\", \\"messages\\": [{{\\"role\\": \\"user\\", \\"content\\": \\"Hello!\\"}}]}}'";
+            const quickstartText = 'curl -X POST http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d \\'{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}\\'';
 
             function copyQuickstart() {{
-                // Try modern clipboard API first, fallback to execCommand
                 if (navigator.clipboard && navigator.clipboard.writeText) {{
                     navigator.clipboard.writeText(quickstartText).then(showCopySuccess).catch(fallbackCopy);
                 }} else {{
@@ -1040,12 +1250,7 @@ async def root():
                 textarea.style.opacity = '0';
                 document.body.appendChild(textarea);
                 textarea.select();
-                try {{
-                    document.execCommand('copy');
-                    showCopySuccess();
-                }} catch (e) {{
-                    console.error('Copy failed:', e);
-                }}
+                try {{ document.execCommand('copy'); showCopySuccess(); }} catch (e) {{ console.error('Copy failed:', e); }}
                 document.body.removeChild(textarea);
             }}
 
@@ -1060,263 +1265,223 @@ async def root():
                 }}, 2000);
             }}
 
-            // Theme toggle logic
             function toggleTheme() {{
                 const html = document.documentElement;
-                const isDark = html.classList.contains('dark');
-                if (isDark) {{
-                    html.classList.remove('dark');
-                    localStorage.setItem('theme', 'light');
-                    updateThemeIcon(false);
-                }} else {{
-                    html.classList.add('dark');
-                    localStorage.setItem('theme', 'dark');
-                    updateThemeIcon(true);
-                }}
-                // Dispatch event for Shiki to re-highlight
+                const current = html.getAttribute('data-theme');
+                const next = current === 'dark' ? 'light' : 'dark';
+                html.setAttribute('data-theme', next);
+                localStorage.setItem('theme', next);
+                updateThemeIcon(next === 'dark');
                 window.dispatchEvent(new Event('themeChanged'));
             }}
 
             function updateThemeIcon(isDark) {{
-                const sunIcon = document.getElementById('sun-icon');
-                const moonIcon = document.getElementById('moon-icon');
-                if (sunIcon && moonIcon) {{
-                    sunIcon.classList.toggle('hidden', isDark);
-                    moonIcon.classList.toggle('hidden', !isDark);
-                }}
+                document.getElementById('sun-icon').classList.toggle('hidden', isDark);
+                document.getElementById('moon-icon').classList.toggle('hidden', !isDark);
             }}
 
-            // Apply saved theme on page load
-            document.addEventListener('DOMContentLoaded', function() {{
-                const savedTheme = localStorage.getItem('theme');
-                const html = document.documentElement;
-                if (savedTheme === 'light') {{
-                    html.classList.remove('dark');
-                    updateThemeIcon(false);
+            document.addEventListener('DOMContentLoaded', () => {{
+                const saved = localStorage.getItem('theme');
+                if (saved) {{
+                    document.documentElement.setAttribute('data-theme', saved);
+                    updateThemeIcon(saved === 'dark');
                 }} else {{
-                    html.classList.add('dark');
                     updateThemeIcon(true);
                 }}
             }});
         </script>
     </head>
-    <body class="bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 min-h-screen transition-colors">
-        <div class="max-w-4xl mx-auto px-6 py-12">
+    <body>
+        <main class="container">
             <!-- Header -->
-            <div class="flex items-center justify-between mb-8">
-                <div class="flex items-center gap-4">
-                    <div class="gradient-border p-[2px] rounded-xl">
-                        <div class="bg-gray-100 dark:bg-gray-900 rounded-xl p-3">
-                            <svg class="w-8 h-8 text-primary-500 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <header class="header-flex">
+                <div class="header-left">
+                    <div class="logo-container">
+                        <div class="logo-inner">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
                             </svg>
                         </div>
                     </div>
                     <div>
-                        <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Claude Code OpenAI Wrapper</h1>
-                        <p class="text-gray-500 dark:text-gray-400">OpenAI-compatible API for Claude</p>
+                        <h1 style="margin:0;">Claude Code OpenAI Wrapper</h1>
+                        <p style="margin:0;color:var(--pico-muted-color);">OpenAI-compatible API for Claude</p>
                     </div>
                 </div>
-                <div class="flex items-center gap-4">
-                    <!-- Version Badge -->
-                    <span class="px-2 py-1 bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-sm font-mono rounded-lg">v{__version__}</span>
-                    <!-- Theme Toggle -->
-                    <button onclick="toggleTheme()" class="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors" title="Toggle theme">
-                        <svg id="sun-icon" class="w-5 h-5 text-amber-500 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div class="header-right">
+                    <span class="version-badge">v{__version__}</span>
+                    <button onclick="toggleTheme()" class="icon-btn" title="Toggle theme">
+                        <svg id="sun-icon" class="hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
                         </svg>
-                        <svg id="moon-icon" class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg id="moon-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
                         </svg>
                     </button>
-                    <!-- GitHub Link -->
-                    <a href="https://github.com/aaronlippold/claude-code-openai-wrapper" target="_blank" rel="noopener noreferrer" class="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors" title="View on GitHub">
-                        <svg class="w-5 h-5 text-gray-700 dark:text-gray-300" fill="currentColor" viewBox="0 0 24 24">
+                    <a href="https://github.com/aaronlippold/claude-code-openai-wrapper" target="_blank" rel="noopener noreferrer" class="icon-btn" title="View on GitHub">
+                        <svg fill="currentColor" viewBox="0 0 24 24">
                             <path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd"/>
                         </svg>
                     </a>
                 </div>
-            </div>
+            </header>
 
             <!-- Status Card -->
-            <div class="bg-gray-100 dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 mb-8">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-3">
-                        <div class="w-3 h-3 rounded-full bg-{status_color}-500 animate-pulse"></div>
-                        <span class="text-lg font-medium text-gray-900 dark:text-white">{status_text}</span>
+            <article>
+                <div class="status-flex">
+                    <div class="status-left">
+                        <span class="status-dot" style="background-color: {status_color};"></span>
+                        <strong>{status_text}</strong>
                     </div>
-                    <div class="px-3 py-1 bg-gray-200 dark:bg-gray-800 rounded-full text-sm text-gray-600 dark:text-gray-300">
-                        Auth: <span class="text-primary-600 dark:text-primary-400 font-mono">{auth_method}</span>
-                    </div>
+                    <span class="auth-badge">Auth: <code class="green-code">{auth_method}</code></span>
                 </div>
-            </div>
+            </article>
 
             <!-- Quick Start -->
-            <div class="bg-gray-100 dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 mb-8">
-                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
-                    <svg class="w-5 h-5 text-primary-500 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                    </svg>
-                    Quick Start
-                </h2>
-                <div class="relative">
-                    <button onclick="copyQuickstart()" id="copy-btn" class="absolute top-3 right-3 p-2 rounded-lg bg-gray-200/80 dark:bg-gray-800/80 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors z-10" title="Copy to clipboard">
-                        <svg id="copy-icon" class="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <article>
+                <div class="section-header">
+                    <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    <strong>Quick Start</strong>
+                </div>
+                <div class="quickstart-wrapper">
+                    <button onclick="copyQuickstart()" class="copy-btn" title="Copy to clipboard">
+                        <svg id="copy-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
                         </svg>
-                        <svg id="check-icon" class="w-4 h-4 text-green-500 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg id="check-icon" class="hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color:#22c55e;">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                         </svg>
                     </button>
                     <div id="quickstart-code"></div>
                 </div>
-            </div>
+            </article>
 
-            <!-- Endpoints -->
-            <div class="bg-gray-100 dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 mb-8">
-                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
-                    <svg class="w-5 h-5 text-primary-500 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
-                    </svg>
-                    API Endpoints
-                </h2>
-                <div class="space-y-3">
-                    <!-- POST endpoints (no accordion) -->
-                    <div class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-card cursor-default">
-                        <span class="px-2 py-1 bg-green-500/20 text-green-600 dark:text-green-400 text-xs font-bold rounded">POST</span>
-                        <code class="text-gray-800 dark:text-gray-200">/v1/chat/completions</code>
-                        <span class="text-gray-500 text-sm ml-auto">OpenAI-compatible chat</span>
-                    </div>
-                    <div class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-card cursor-default">
-                        <span class="px-2 py-1 bg-green-500/20 text-green-600 dark:text-green-400 text-xs font-bold rounded">POST</span>
-                        <code class="text-gray-800 dark:text-gray-200">/v1/messages</code>
-                        <span class="text-gray-500 text-sm ml-auto">Anthropic-compatible</span>
-                    </div>
-
-                    <!-- GET endpoints with accordion -->
-                    <div class="bg-gray-200 dark:bg-gray-950 rounded-xl overflow-hidden">
-                        <button onclick="toggleAccordion('models', '/v1/models')" class="w-full flex items-center gap-3 p-3 endpoint-card cursor-pointer">
-                            <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
-                            <code class="text-gray-800 dark:text-gray-200">/v1/models</code>
-                            <span class="text-gray-500 text-sm ml-auto">List models</span>
-                            <svg id="chevron-models" class="w-4 h-4 text-gray-400 chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                        </button>
-                        <div id="content-models" class="accordion-content">
-                            <div class="p-3 pt-0">
-                                <div id="loader-models" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
-                                <div id="data-models"></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="bg-gray-200 dark:bg-gray-950 rounded-xl overflow-hidden">
-                        <button onclick="toggleAccordion('auth', '/v1/auth/status')" class="w-full flex items-center gap-3 p-3 endpoint-card cursor-pointer">
-                            <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
-                            <code class="text-gray-800 dark:text-gray-200">/v1/auth/status</code>
-                            <span class="text-gray-500 text-sm ml-auto">Auth status</span>
-                            <svg id="chevron-auth" class="w-4 h-4 text-gray-400 chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                        </button>
-                        <div id="content-auth" class="accordion-content">
-                            <div class="p-3 pt-0">
-                                <div id="loader-auth" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
-                                <div id="data-auth"></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="bg-gray-200 dark:bg-gray-950 rounded-xl overflow-hidden">
-                        <button onclick="toggleAccordion('sessions', '/v1/sessions')" class="w-full flex items-center gap-3 p-3 endpoint-card cursor-pointer">
-                            <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
-                            <code class="text-gray-800 dark:text-gray-200">/v1/sessions</code>
-                            <span class="text-gray-500 text-sm ml-auto">Active sessions</span>
-                            <svg id="chevron-sessions" class="w-4 h-4 text-gray-400 chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                        </button>
-                        <div id="content-sessions" class="accordion-content">
-                            <div class="p-3 pt-0">
-                                <div id="loader-sessions" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
-                                <div id="data-sessions"></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="bg-gray-200 dark:bg-gray-950 rounded-xl overflow-hidden">
-                        <button onclick="toggleAccordion('health', '/health')" class="w-full flex items-center gap-3 p-3 endpoint-card cursor-pointer">
-                            <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
-                            <code class="text-gray-800 dark:text-gray-200">/health</code>
-                            <span class="text-gray-500 text-sm ml-auto">Health check</span>
-                            <svg id="chevron-health" class="w-4 h-4 text-gray-400 chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                        </button>
-                        <div id="content-health" class="accordion-content">
-                            <div class="p-3 pt-0">
-                                <div id="loader-health" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
-                                <div id="data-health"></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="bg-gray-200 dark:bg-gray-950 rounded-xl overflow-hidden">
-                        <button onclick="toggleAccordion('version', '/version')" class="w-full flex items-center gap-3 p-3 endpoint-card cursor-pointer">
-                            <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
-                            <code class="text-gray-800 dark:text-gray-200">/version</code>
-                            <span class="text-gray-500 text-sm ml-auto">API version</span>
-                            <svg id="chevron-version" class="w-4 h-4 text-gray-400 chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                        </button>
-                        <div id="content-version" class="accordion-content">
-                            <div class="p-3 pt-0">
-                                <div id="loader-version" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
-                                <div id="data-version"></div>
-                            </div>
-                        </div>
-                    </div>
+            <!-- API Endpoints -->
+            <article>
+                <div class="section-header">
+                    <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    <strong>API Endpoints</strong>
                 </div>
-            </div>
+
+                <!-- Static POST endpoints -->
+                <div class="endpoint-item">
+                    <span class="badge badge-post">POST</span>
+                    <code>/v1/chat/completions</code>
+                    <span class="endpoint-desc">OpenAI-compatible chat</span>
+                </div>
+                <div class="endpoint-item">
+                    <span class="badge badge-post">POST</span>
+                    <code>/v1/messages</code>
+                    <span class="endpoint-desc">Anthropic-compatible</span>
+                </div>
+
+                <!-- Expandable GET endpoints -->
+                <details id="models" data-endpoint="/v1/models" name="endpoints">
+                    <summary>
+                        <span class="badge badge-get">GET</span>
+                        <code>/v1/models</code>
+                        <span class="endpoint-desc">List models</span>
+                    </summary>
+                    <div class="content">
+                        <small id="loader-models" class="hidden">Loading...</small>
+                        <div id="data-models"></div>
+                    </div>
+                </details>
+
+                <details id="auth" data-endpoint="/v1/auth/status" name="endpoints">
+                    <summary>
+                        <span class="badge badge-get">GET</span>
+                        <code>/v1/auth/status</code>
+                        <span class="endpoint-desc">Auth status</span>
+                    </summary>
+                    <div class="content">
+                        <small id="loader-auth" class="hidden">Loading...</small>
+                        <div id="data-auth"></div>
+                    </div>
+                </details>
+
+                <details id="sessions" data-endpoint="/v1/sessions" name="endpoints">
+                    <summary>
+                        <span class="badge badge-get">GET</span>
+                        <code>/v1/sessions</code>
+                        <span class="endpoint-desc">Active sessions</span>
+                    </summary>
+                    <div class="content">
+                        <small id="loader-sessions" class="hidden">Loading...</small>
+                        <div id="data-sessions"></div>
+                    </div>
+                </details>
+
+                <details id="health" data-endpoint="/health" name="endpoints">
+                    <summary>
+                        <span class="badge badge-get">GET</span>
+                        <code>/health</code>
+                        <span class="endpoint-desc">Health check</span>
+                    </summary>
+                    <div class="content">
+                        <small id="loader-health" class="hidden">Loading...</small>
+                        <div id="data-health"></div>
+                    </div>
+                </details>
+
+                <details id="version" data-endpoint="/version" name="endpoints">
+                    <summary>
+                        <span class="badge badge-get">GET</span>
+                        <code>/version</code>
+                        <span class="endpoint-desc">API version</span>
+                    </summary>
+                    <div class="content">
+                        <small id="loader-version" class="hidden">Loading...</small>
+                        <div id="data-version"></div>
+                    </div>
+                </details>
+            </article>
 
             <!-- Configuration -->
-            <div class="bg-gray-100 dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 mb-8">
-                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
-                    <svg class="w-5 h-5 text-primary-500 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                    </svg>
-                    Configuration
-                </h2>
-                <p class="text-gray-600 dark:text-gray-400 mb-4">Set <code class="bg-gray-200 dark:bg-gray-800 px-2 py-1 rounded text-primary-600 dark:text-primary-400">CLAUDE_AUTH_METHOD</code> to choose authentication:</p>
-                <div class="grid grid-cols-2 gap-3">
-                    <div class="p-3 bg-gray-200 dark:bg-gray-950 rounded-xl">
-                        <code class="text-primary-600 dark:text-primary-400">cli</code>
-                        <p class="text-gray-500 text-sm mt-1">Claude CLI auth</p>
+            <article>
+                <div class="section-header">
+                    <svg class="section-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    <strong>Configuration</strong>
+                </div>
+                <p>Set <code>CLAUDE_AUTH_METHOD</code> to choose authentication:</p>
+                <div class="config-grid">
+                    <div class="config-item">
+                        <code class="green-code">cli</code>
+                        <p>Claude CLI auth</p>
                     </div>
-                    <div class="p-3 bg-gray-200 dark:bg-gray-950 rounded-xl">
-                        <code class="text-primary-600 dark:text-primary-400">api_key</code>
-                        <p class="text-gray-500 text-sm mt-1">ANTHROPIC_API_KEY</p>
+                    <div class="config-item">
+                        <code class="green-code">api_key</code>
+                        <p>ANTHROPIC_API_KEY</p>
                     </div>
-                    <div class="p-3 bg-gray-200 dark:bg-gray-950 rounded-xl">
-                        <code class="text-primary-600 dark:text-primary-400">bedrock</code>
-                        <p class="text-gray-500 text-sm mt-1">AWS Bedrock</p>
+                    <div class="config-item">
+                        <code class="green-code">bedrock</code>
+                        <p>AWS Bedrock</p>
                     </div>
-                    <div class="p-3 bg-gray-200 dark:bg-gray-950 rounded-xl">
-                        <code class="text-primary-600 dark:text-primary-400">vertex</code>
-                        <p class="text-gray-500 text-sm mt-1">Google Vertex AI</p>
+                    <div class="config-item">
+                        <code class="green-code">vertex</code>
+                        <p>Google Vertex AI</p>
                     </div>
                 </div>
-            </div>
+            </article>
 
             <!-- Footer -->
-            <div class="flex items-center justify-center gap-6 text-gray-500">
-                <a href="/docs" class="flex items-center gap-2 hover:text-primary-500 dark:hover:text-primary-400 transition-colors">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                    </svg>
-                    API Docs
-                </a>
-                <a href="/redoc" class="flex items-center gap-2 hover:text-primary-500 dark:hover:text-primary-400 transition-colors">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
-                    </svg>
-                    ReDoc
-                </a>
-            </div>
-        </div>
+            <footer>
+                <nav>
+                    <a href="/docs">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        API Docs
+                    </a>
+                    <a href="/redoc">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                        </svg>
+                        ReDoc
+                    </a>
+                </nav>
+            </footer>
+        </main>
     </body>
     </html>
     """
