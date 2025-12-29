@@ -868,9 +868,24 @@ async def health_check(request: Request):
     return {"status": "healthy", "service": "claude-code-openai-wrapper"}
 
 
+@app.get("/version")
+@rate_limit_endpoint("health")
+async def version_info(request: Request):
+    """Version information endpoint."""
+    from src import __version__
+
+    return {
+        "version": __version__,
+        "service": "claude-code-openai-wrapper",
+        "api_version": "v1",
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """Landing page with API documentation."""
+    from src import __version__
+
     auth_info = get_claude_code_auth_info()
     auth_method = auth_info.get("method", "unknown")
     auth_valid = auth_info.get("status", {}).get("valid", False)
@@ -899,120 +914,191 @@ async def root():
         </script>
         <style>
             .gradient-border {{ background: linear-gradient(135deg, #22c55e 0%, #0ea5e9 100%); }}
+            .endpoint-link {{ transition: all 0.15s ease-in-out; }}
+            .endpoint-link:hover {{ transform: translateX(4px); background-color: rgba(34, 197, 94, 0.1); }}
         </style>
+        <script>
+            // Theme toggle logic
+            function toggleTheme() {{
+                const html = document.documentElement;
+                const isDark = html.classList.contains('dark');
+                if (isDark) {{
+                    html.classList.remove('dark');
+                    localStorage.setItem('theme', 'light');
+                    updateThemeIcon(false);
+                }} else {{
+                    html.classList.add('dark');
+                    localStorage.setItem('theme', 'dark');
+                    updateThemeIcon(true);
+                }}
+            }}
+
+            function updateThemeIcon(isDark) {{
+                const sunIcon = document.getElementById('sun-icon');
+                const moonIcon = document.getElementById('moon-icon');
+                if (sunIcon && moonIcon) {{
+                    sunIcon.classList.toggle('hidden', isDark);
+                    moonIcon.classList.toggle('hidden', !isDark);
+                }}
+            }}
+
+            // Apply saved theme on page load
+            document.addEventListener('DOMContentLoaded', function() {{
+                const savedTheme = localStorage.getItem('theme');
+                const html = document.documentElement;
+                if (savedTheme === 'light') {{
+                    html.classList.remove('dark');
+                    updateThemeIcon(false);
+                }} else {{
+                    html.classList.add('dark');
+                    updateThemeIcon(true);
+                }}
+            }});
+        </script>
     </head>
-    <body class="bg-gray-950 text-gray-100 min-h-screen">
+    <body class="bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 min-h-screen transition-colors">
         <div class="max-w-4xl mx-auto px-6 py-12">
             <!-- Header -->
-            <div class="flex items-center gap-4 mb-8">
-                <div class="gradient-border p-[2px] rounded-xl">
-                    <div class="bg-gray-900 rounded-xl p-3">
-                        <svg class="w-8 h-8 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-                        </svg>
+            <div class="flex items-center justify-between mb-8">
+                <div class="flex items-center gap-4">
+                    <div class="gradient-border p-[2px] rounded-xl">
+                        <div class="bg-gray-100 dark:bg-gray-900 rounded-xl p-3">
+                            <svg class="w-8 h-8 text-primary-500 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div>
+                        <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Claude Code OpenAI Wrapper</h1>
+                        <p class="text-gray-500 dark:text-gray-400">OpenAI-compatible API for Claude</p>
                     </div>
                 </div>
-                <div>
-                    <h1 class="text-3xl font-bold text-white">Claude Code OpenAI Wrapper</h1>
-                    <p class="text-gray-400">OpenAI-compatible API for Claude</p>
+                <div class="flex items-center gap-4">
+                    <!-- Version Badge -->
+                    <span class="px-2 py-1 bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-sm font-mono rounded-lg">v{__version__}</span>
+                    <!-- Theme Toggle -->
+                    <button onclick="toggleTheme()" class="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors" title="Toggle theme">
+                        <svg id="sun-icon" class="w-5 h-5 text-amber-500 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                        </svg>
+                        <svg id="moon-icon" class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                        </svg>
+                    </button>
+                    <!-- GitHub Link -->
+                    <a href="https://github.com/aaronlippold/claude-code-openai-wrapper" target="_blank" rel="noopener noreferrer" class="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors" title="View on GitHub">
+                        <svg class="w-5 h-5 text-gray-700 dark:text-gray-300" fill="currentColor" viewBox="0 0 24 24">
+                            <path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd"/>
+                        </svg>
+                    </a>
                 </div>
             </div>
 
             <!-- Status Card -->
-            <div class="bg-gray-900 rounded-2xl border border-gray-800 p-6 mb-8">
+            <div class="bg-gray-100 dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 mb-8">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center gap-3">
                         <div class="w-3 h-3 rounded-full bg-{status_color}-500 animate-pulse"></div>
-                        <span class="text-lg font-medium">{status_text}</span>
+                        <span class="text-lg font-medium text-gray-900 dark:text-white">{status_text}</span>
                     </div>
-                    <div class="px-3 py-1 bg-gray-800 rounded-full text-sm text-gray-300">
-                        Auth: <span class="text-primary-400 font-mono">{auth_method}</span>
+                    <div class="px-3 py-1 bg-gray-200 dark:bg-gray-800 rounded-full text-sm text-gray-600 dark:text-gray-300">
+                        Auth: <span class="text-primary-600 dark:text-primary-400 font-mono">{auth_method}</span>
                     </div>
                 </div>
             </div>
 
             <!-- Quick Start -->
-            <div class="bg-gray-900 rounded-2xl border border-gray-800 p-6 mb-8">
-                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
-                    <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div class="bg-gray-100 dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
+                    <svg class="w-5 h-5 text-primary-500 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                     </svg>
                     Quick Start
                 </h2>
-                <div class="bg-gray-950 rounded-xl p-4 font-mono text-sm overflow-x-auto">
-                    <span class="text-gray-500">$</span> <span class="text-primary-400">curl</span> http://localhost:8000/v1/chat/completions \\<br>
-                    &nbsp;&nbsp;-H <span class="text-amber-400">"Content-Type: application/json"</span> \\<br>
-                    &nbsp;&nbsp;-d <span class="text-amber-400">'{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'</span>
+                <div class="bg-gray-200 dark:bg-gray-950 rounded-xl p-4 font-mono text-sm overflow-x-auto">
+                    <span class="text-gray-500">$</span> <span class="text-primary-600 dark:text-primary-400">curl</span> http://localhost:8000/v1/chat/completions \\<br>
+                    &nbsp;&nbsp;-H <span class="text-amber-600 dark:text-amber-400">"Content-Type: application/json"</span> \\<br>
+                    &nbsp;&nbsp;-d <span class="text-amber-600 dark:text-amber-400">'{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'</span>
                 </div>
             </div>
 
             <!-- Endpoints -->
-            <div class="bg-gray-900 rounded-2xl border border-gray-800 p-6 mb-8">
-                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
-                    <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div class="bg-gray-100 dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
+                    <svg class="w-5 h-5 text-primary-500 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
                     </svg>
                     API Endpoints
                 </h2>
                 <div class="space-y-3">
-                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
-                        <span class="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-bold rounded">POST</span>
-                        <code class="text-gray-200">/v1/chat/completions</code>
+                    <div class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link cursor-default">
+                        <span class="px-2 py-1 bg-green-500/20 text-green-600 dark:text-green-400 text-xs font-bold rounded">POST</span>
+                        <code class="text-gray-800 dark:text-gray-200">/v1/chat/completions</code>
                         <span class="text-gray-500 text-sm ml-auto">OpenAI-compatible chat</span>
                     </div>
-                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
-                        <span class="px-2 py-1 bg-green-500/20 text-green-400 text-xs font-bold rounded">POST</span>
-                        <code class="text-gray-200">/v1/messages</code>
+                    <div class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link cursor-default">
+                        <span class="px-2 py-1 bg-green-500/20 text-green-600 dark:text-green-400 text-xs font-bold rounded">POST</span>
+                        <code class="text-gray-800 dark:text-gray-200">/v1/messages</code>
                         <span class="text-gray-500 text-sm ml-auto">Anthropic-compatible</span>
                     </div>
-                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
-                        <span class="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold rounded">GET</span>
-                        <code class="text-gray-200">/v1/models</code>
+                    <a href="/v1/models" class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link">
+                        <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
+                        <code class="text-gray-800 dark:text-gray-200">/v1/models</code>
                         <span class="text-gray-500 text-sm ml-auto">List models</span>
-                    </div>
-                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
-                        <span class="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold rounded">GET</span>
-                        <code class="text-gray-200">/v1/auth/status</code>
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </a>
+                    <a href="/v1/auth/status" class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link">
+                        <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
+                        <code class="text-gray-800 dark:text-gray-200">/v1/auth/status</code>
                         <span class="text-gray-500 text-sm ml-auto">Auth status</span>
-                    </div>
-                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
-                        <span class="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold rounded">GET</span>
-                        <code class="text-gray-200">/v1/sessions</code>
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </a>
+                    <a href="/v1/sessions" class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link">
+                        <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
+                        <code class="text-gray-800 dark:text-gray-200">/v1/sessions</code>
                         <span class="text-gray-500 text-sm ml-auto">Active sessions</span>
-                    </div>
-                    <div class="flex items-center gap-3 p-3 bg-gray-950 rounded-xl">
-                        <span class="px-2 py-1 bg-blue-500/20 text-blue-400 text-xs font-bold rounded">GET</span>
-                        <code class="text-gray-200">/health</code>
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </a>
+                    <a href="/health" class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link">
+                        <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
+                        <code class="text-gray-800 dark:text-gray-200">/health</code>
                         <span class="text-gray-500 text-sm ml-auto">Health check</span>
-                    </div>
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </a>
+                    <a href="/version" class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link">
+                        <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
+                        <code class="text-gray-800 dark:text-gray-200">/version</code>
+                        <span class="text-gray-500 text-sm ml-auto">API version</span>
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </a>
                 </div>
             </div>
 
             <!-- Configuration -->
-            <div class="bg-gray-900 rounded-2xl border border-gray-800 p-6 mb-8">
-                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
-                    <svg class="w-5 h-5 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div class="bg-gray-100 dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 mb-8">
+                <h2 class="text-xl font-semibold mb-4 flex items-center gap-2 text-gray-900 dark:text-white">
+                    <svg class="w-5 h-5 text-primary-500 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                     </svg>
                     Configuration
                 </h2>
-                <p class="text-gray-400 mb-4">Set <code class="bg-gray-800 px-2 py-1 rounded text-primary-400">CLAUDE_AUTH_METHOD</code> to choose authentication:</p>
+                <p class="text-gray-600 dark:text-gray-400 mb-4">Set <code class="bg-gray-200 dark:bg-gray-800 px-2 py-1 rounded text-primary-600 dark:text-primary-400">CLAUDE_AUTH_METHOD</code> to choose authentication:</p>
                 <div class="grid grid-cols-2 gap-3">
-                    <div class="p-3 bg-gray-950 rounded-xl">
-                        <code class="text-primary-400">cli</code>
+                    <div class="p-3 bg-gray-200 dark:bg-gray-950 rounded-xl">
+                        <code class="text-primary-600 dark:text-primary-400">cli</code>
                         <p class="text-gray-500 text-sm mt-1">Claude CLI auth</p>
                     </div>
-                    <div class="p-3 bg-gray-950 rounded-xl">
-                        <code class="text-primary-400">api_key</code>
+                    <div class="p-3 bg-gray-200 dark:bg-gray-950 rounded-xl">
+                        <code class="text-primary-600 dark:text-primary-400">api_key</code>
                         <p class="text-gray-500 text-sm mt-1">ANTHROPIC_API_KEY</p>
                     </div>
-                    <div class="p-3 bg-gray-950 rounded-xl">
-                        <code class="text-primary-400">bedrock</code>
+                    <div class="p-3 bg-gray-200 dark:bg-gray-950 rounded-xl">
+                        <code class="text-primary-600 dark:text-primary-400">bedrock</code>
                         <p class="text-gray-500 text-sm mt-1">AWS Bedrock</p>
                     </div>
-                    <div class="p-3 bg-gray-950 rounded-xl">
-                        <code class="text-primary-400">vertex</code>
+                    <div class="p-3 bg-gray-200 dark:bg-gray-950 rounded-xl">
+                        <code class="text-primary-600 dark:text-primary-400">vertex</code>
                         <p class="text-gray-500 text-sm mt-1">Google Vertex AI</p>
                     </div>
                 </div>
@@ -1020,13 +1106,13 @@ async def root():
 
             <!-- Footer -->
             <div class="flex items-center justify-center gap-6 text-gray-500">
-                <a href="/docs" class="flex items-center gap-2 hover:text-primary-400 transition-colors">
+                <a href="/docs" class="flex items-center gap-2 hover:text-primary-500 dark:hover:text-primary-400 transition-colors">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                     </svg>
                     API Docs
                 </a>
-                <a href="/redoc" class="flex items-center gap-2 hover:text-primary-400 transition-colors">
+                <a href="/redoc" class="flex items-center gap-2 hover:text-primary-500 dark:hover:text-primary-400 transition-colors">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
                     </svg>
