@@ -4,6 +4,7 @@ import asyncio
 import logging
 import secrets
 import string
+import uuid
 from typing import Optional, AsyncGenerator, Dict, Any
 from contextlib import asynccontextmanager
 
@@ -220,23 +221,65 @@ if limiter:
     app.state.limiter = limiter
     app.add_exception_handler(429, rate_limit_exceeded_handler)
 
-# Add debug logging middleware
+# Security configuration
+MAX_REQUEST_SIZE = int(os.getenv("MAX_REQUEST_SIZE", str(10 * 1024 * 1024)))  # 10MB default
+
+# Add middleware
 from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Add unique request ID to each request for audit trails."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        request.state.request_id = request_id
+
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    """Limit request body size to prevent DoS attacks."""
+
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_REQUEST_SIZE:
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "error": {
+                        "message": f"Request body too large. Maximum size is {MAX_REQUEST_SIZE} bytes.",
+                        "type": "request_too_large",
+                        "code": 413,
+                    }
+                },
+            )
+        return await call_next(request)
+
+
+# Add security middleware (order matters - first added = last executed)
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(RequestSizeLimitMiddleware)
 
 
 class DebugLoggingMiddleware(BaseHTTPMiddleware):
     """ASGI-compliant middleware for logging request/response details when debug mode is enabled."""
 
     async def dispatch(self, request: Request, call_next):
+        # Get request ID for correlation
+        request_id = getattr(request.state, "request_id", "unknown")
+
         if not (DEBUG_MODE or VERBOSE):
             return await call_next(request)
 
         # Log request details
         start_time = asyncio.get_event_loop().time()
 
-        # Log basic request info
-        logger.debug(f"🔍 Incoming request: {request.method} {request.url}")
-        logger.debug(f"🔍 Headers: {dict(request.headers)}")
+        # Log basic request info with request ID for correlation
+        logger.debug(f"🔍 [{request_id}] Incoming request: {request.method} {request.url}")
+        logger.debug(f"🔍 [{request_id}] Headers: {dict(request.headers)}")
 
         # For POST requests, try to log body (but don't break if we can't)
         body_logged = False

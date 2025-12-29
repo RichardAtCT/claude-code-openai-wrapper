@@ -44,6 +44,17 @@ jobs:
       - name: Run linting
         run: poetry run black --check src tests
 
+      - name: Type checking
+        run: poetry run mypy src --ignore-missing-imports
+        continue-on-error: true
+
+      - name: Security scan
+        run: poetry run bandit -r src/ -ll -x tests
+
+      - name: Dependency vulnerability scan
+        run: poetry run safety check || true
+        continue-on-error: true
+
       - name: Run tests
         run: poetry run pytest tests/ -v --cov=src --cov-report=xml --cov-report=term-missing
 
