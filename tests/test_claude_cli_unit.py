@@ -361,3 +361,355 @@ class TestClaudeCodeCLIInit:
         """Invalid directory path is detected."""
         path = Path("/nonexistent/path/12345")
         assert not path.exists()
+
+    def test_init_with_cwd(self):
+        """ClaudeCodeCLI initializes with provided cwd."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("src.auth.validate_claude_code_auth") as mock_validate:
+                with patch("src.auth.auth_manager") as mock_auth:
+                    mock_validate.return_value = (True, {"method": "anthropic"})
+                    mock_auth.get_claude_code_env_vars.return_value = {}
+
+                    from src.claude_cli import ClaudeCodeCLI
+                    cli = ClaudeCodeCLI(cwd=temp_dir)
+
+                    assert cli.cwd == Path(temp_dir)
+                    assert cli.temp_dir is None
+                    assert cli.timeout == 600.0  # 600000ms / 1000
+
+    def test_init_with_invalid_cwd_raises(self):
+        """ClaudeCodeCLI raises ValueError for non-existent cwd."""
+        with patch("src.auth.validate_claude_code_auth") as mock_validate:
+            with patch("src.auth.auth_manager") as mock_auth:
+                mock_validate.return_value = (True, {"method": "anthropic"})
+                mock_auth.get_claude_code_env_vars.return_value = {}
+
+                from src.claude_cli import ClaudeCodeCLI
+                with pytest.raises(ValueError, match="Working directory does not exist"):
+                    ClaudeCodeCLI(cwd="/nonexistent/path/12345")
+
+    def test_init_without_cwd_creates_temp(self):
+        """ClaudeCodeCLI creates temp directory when no cwd provided."""
+        with patch("src.auth.validate_claude_code_auth") as mock_validate:
+            with patch("src.auth.auth_manager") as mock_auth:
+                with patch("atexit.register"):  # Don't actually register cleanup
+                    mock_validate.return_value = (True, {"method": "anthropic"})
+                    mock_auth.get_claude_code_env_vars.return_value = {}
+
+                    from src.claude_cli import ClaudeCodeCLI
+                    cli = ClaudeCodeCLI()
+
+                    assert cli.temp_dir is not None
+                    assert cli.cwd == Path(cli.temp_dir)
+                    assert "claude_code_workspace_" in cli.temp_dir
+
+                    # Cleanup
+                    if cli.temp_dir and os.path.exists(cli.temp_dir):
+                        import shutil
+                        shutil.rmtree(cli.temp_dir)
+
+    def test_init_with_custom_timeout(self):
+        """ClaudeCodeCLI uses custom timeout."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("src.auth.validate_claude_code_auth") as mock_validate:
+                with patch("src.auth.auth_manager") as mock_auth:
+                    mock_validate.return_value = (True, {"method": "anthropic"})
+                    mock_auth.get_claude_code_env_vars.return_value = {}
+
+                    from src.claude_cli import ClaudeCodeCLI
+                    cli = ClaudeCodeCLI(timeout=120000, cwd=temp_dir)
+
+                    assert cli.timeout == 120.0
+
+    def test_init_auth_validation_failure(self):
+        """ClaudeCodeCLI handles auth validation failure gracefully."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("src.auth.validate_claude_code_auth") as mock_validate:
+                with patch("src.auth.auth_manager") as mock_auth:
+                    # Auth fails
+                    mock_validate.return_value = (False, {"errors": ["Missing API key"]})
+                    mock_auth.get_claude_code_env_vars.return_value = {}
+
+                    from src.claude_cli import ClaudeCodeCLI
+                    # Should not raise, just log warning
+                    cli = ClaudeCodeCLI(cwd=temp_dir)
+                    assert cli.cwd == Path(temp_dir)
+
+
+class TestClaudeCodeCLIVerifyCLI:
+    """Test ClaudeCodeCLI.verify_cli()"""
+
+    @pytest.fixture
+    def cli_instance(self):
+        """Create a CLI instance with mocked auth."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("src.auth.validate_claude_code_auth") as mock_validate:
+                with patch("src.auth.auth_manager") as mock_auth:
+                    mock_validate.return_value = (True, {"method": "anthropic"})
+                    mock_auth.get_claude_code_env_vars.return_value = {}
+
+                    from src.claude_cli import ClaudeCodeCLI
+                    cli = ClaudeCodeCLI(cwd=temp_dir)
+                    yield cli
+
+    @pytest.mark.asyncio
+    async def test_verify_cli_success(self, cli_instance):
+        """verify_cli returns True on successful SDK response."""
+        mock_message = {"type": "assistant", "content": [{"type": "text", "text": "Hello"}]}
+
+        async def mock_query(*args, **kwargs):
+            yield mock_message
+
+        with patch("src.claude_cli.query", mock_query):
+            result = await cli_instance.verify_cli()
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_verify_cli_no_messages(self, cli_instance):
+        """verify_cli returns False when no messages returned."""
+        async def mock_query(*args, **kwargs):
+            return
+            yield  # Make it a generator but yield nothing
+
+        with patch("src.claude_cli.query", mock_query):
+            result = await cli_instance.verify_cli()
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_verify_cli_exception(self, cli_instance):
+        """verify_cli returns False on exception."""
+        async def mock_query(*args, **kwargs):
+            raise RuntimeError("SDK error")
+            yield  # Make it a generator
+
+        with patch("src.claude_cli.query", mock_query):
+            result = await cli_instance.verify_cli()
+            assert result is False
+
+
+class TestClaudeCodeCLIRunCompletion:
+    """Test ClaudeCodeCLI.run_completion()"""
+
+    @pytest.fixture
+    def cli_instance(self):
+        """Create a CLI instance with mocked auth."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("src.auth.validate_claude_code_auth") as mock_validate:
+                with patch("src.auth.auth_manager") as mock_auth:
+                    mock_validate.return_value = (True, {"method": "anthropic"})
+                    mock_auth.get_claude_code_env_vars.return_value = {"ANTHROPIC_API_KEY": "test-key"}
+
+                    from src.claude_cli import ClaudeCodeCLI
+                    cli = ClaudeCodeCLI(cwd=temp_dir)
+                    yield cli
+
+    @pytest.mark.asyncio
+    async def test_run_completion_basic(self, cli_instance):
+        """run_completion yields messages from SDK."""
+        mock_message = {"type": "assistant", "content": [{"type": "text", "text": "Hello"}]}
+
+        async def mock_query(*args, **kwargs):
+            yield mock_message
+
+        with patch("src.claude_cli.query", mock_query):
+            messages = []
+            async for msg in cli_instance.run_completion("Hello"):
+                messages.append(msg)
+
+            assert len(messages) == 1
+            assert messages[0] == mock_message
+
+    @pytest.mark.asyncio
+    async def test_run_completion_with_system_prompt(self, cli_instance):
+        """run_completion sets system_prompt option."""
+        mock_message = {"type": "assistant", "content": "Response"}
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield mock_message
+
+        with patch("src.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion(
+                "Hello", system_prompt="You are helpful"
+            ):
+                pass
+
+            assert len(captured_options) == 1
+            opts = captured_options[0]
+            assert opts.system_prompt == {"type": "text", "text": "You are helpful"}
+
+    @pytest.mark.asyncio
+    async def test_run_completion_with_model(self, cli_instance):
+        """run_completion sets model option."""
+        mock_message = {"type": "assistant"}
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield mock_message
+
+        with patch("src.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion("Hello", model="claude-3-opus"):
+                pass
+
+            assert captured_options[0].model == "claude-3-opus"
+
+    @pytest.mark.asyncio
+    async def test_run_completion_with_tool_restrictions(self, cli_instance):
+        """run_completion sets allowed/disallowed tools."""
+        mock_message = {"type": "assistant"}
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield mock_message
+
+        with patch("src.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion(
+                "Hello",
+                allowed_tools=["Bash", "Read"],
+                disallowed_tools=["Task"],
+            ):
+                pass
+
+            assert captured_options[0].allowed_tools == ["Bash", "Read"]
+            assert captured_options[0].disallowed_tools == ["Task"]
+
+    @pytest.mark.asyncio
+    async def test_run_completion_with_permission_mode(self, cli_instance):
+        """run_completion sets permission_mode."""
+        mock_message = {"type": "assistant"}
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield mock_message
+
+        with patch("src.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion(
+                "Hello", permission_mode="acceptEdits"
+            ):
+                pass
+
+            assert captured_options[0].permission_mode == "acceptEdits"
+
+    @pytest.mark.asyncio
+    async def test_run_completion_continue_session(self, cli_instance):
+        """run_completion sets continue_session option."""
+        mock_message = {"type": "assistant"}
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield mock_message
+
+        with patch("src.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion(
+                "Hello", continue_session=True
+            ):
+                pass
+
+            assert captured_options[0].continue_session is True
+
+    @pytest.mark.asyncio
+    async def test_run_completion_resume_session(self, cli_instance):
+        """run_completion sets resume option for session_id."""
+        mock_message = {"type": "assistant"}
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield mock_message
+
+        with patch("src.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion(
+                "Hello", session_id="sess-123"
+            ):
+                pass
+
+            assert captured_options[0].resume == "sess-123"
+
+    @pytest.mark.asyncio
+    async def test_run_completion_converts_objects_to_dicts(self, cli_instance):
+        """run_completion converts message objects to dicts."""
+        # Create a mock object with attributes
+        mock_obj = MagicMock()
+        mock_obj.type = "assistant"
+        mock_obj.content = "Hello"
+
+        async def mock_query(*args, **kwargs):
+            yield mock_obj
+
+        with patch("src.claude_cli.query", mock_query):
+            messages = []
+            async for msg in cli_instance.run_completion("Hello"):
+                messages.append(msg)
+
+            assert len(messages) == 1
+            # Should be converted to dict
+            assert isinstance(messages[0], dict)
+            assert "type" in messages[0]
+
+    @pytest.mark.asyncio
+    async def test_run_completion_exception_yields_error(self, cli_instance):
+        """run_completion yields error message on exception."""
+        async def mock_query(*args, **kwargs):
+            raise RuntimeError("SDK failed")
+            yield  # Make it a generator
+
+        with patch("src.claude_cli.query", mock_query):
+            messages = []
+            async for msg in cli_instance.run_completion("Hello"):
+                messages.append(msg)
+
+            assert len(messages) == 1
+            assert messages[0]["type"] == "result"
+            assert messages[0]["subtype"] == "error_during_execution"
+            assert messages[0]["is_error"] is True
+            assert "SDK failed" in messages[0]["error_message"]
+
+    @pytest.mark.asyncio
+    async def test_run_completion_restores_env_vars(self, cli_instance):
+        """run_completion restores environment variables after execution."""
+        # Set an env var that will be modified
+        original_key = os.environ.get("ANTHROPIC_API_KEY")
+
+        mock_message = {"type": "assistant"}
+
+        async def mock_query(*args, **kwargs):
+            yield mock_message
+
+        with patch("src.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion("Hello"):
+                pass
+
+        # Env should be restored
+        if original_key is None:
+            assert "ANTHROPIC_API_KEY" not in os.environ or os.environ.get("ANTHROPIC_API_KEY") == original_key
+        else:
+            assert os.environ.get("ANTHROPIC_API_KEY") == original_key
+
+
+class TestClaudeCodeCLICleanupException:
+    """Test ClaudeCodeCLI._cleanup_temp_dir() exception handling."""
+
+    def test_cleanup_exception_is_caught(self):
+        """Cleanup catches exceptions during rmtree."""
+        from src.claude_cli import ClaudeCodeCLI
+
+        cli = MagicMock(spec=ClaudeCodeCLI)
+        temp_dir = tempfile.mkdtemp(prefix="test_cleanup_exc_")
+        cli.temp_dir = temp_dir
+
+        # Bind the real method
+        cli._cleanup_temp_dir = ClaudeCodeCLI._cleanup_temp_dir.__get__(cli, ClaudeCodeCLI)
+
+        with patch("shutil.rmtree", side_effect=PermissionError("Cannot delete")):
+            # Should not raise
+            cli._cleanup_temp_dir()
+
+        # Clean up manually
+        import shutil
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
