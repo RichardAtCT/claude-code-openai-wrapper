@@ -1939,7 +1939,7 @@ def find_available_port(start_port: int = 8000, max_attempts: int = 10) -> int:
     )
 
 
-def run_server(port: int = None):
+def run_server(port: int = None, host: str = None):
     """Run the server - used as Poetry script entry point."""
     import uvicorn
 
@@ -1950,11 +1950,15 @@ def run_server(port: int = None):
     # Priority: CLI arg > ENV var > default
     if port is None:
         port = int(os.getenv("PORT", "8000"))
+    if host is None:
+        # Default to 0.0.0.0 for container/development use (configurable via CLAUDE_WRAPPER_HOST env)
+        host = os.getenv("CLAUDE_WRAPPER_HOST", "0.0.0.0")  # nosec B104
     preferred_port = port
 
     try:
         # Try the preferred port first
-        uvicorn.run(app, host="0.0.0.0", port=preferred_port)
+        # Binding to 0.0.0.0 is intentional for container/development use
+        uvicorn.run(app, host=host, port=preferred_port)  # nosec B104
     except OSError as e:
         if "Address already in use" in str(e) or e.errno == 48:
             logger.warning(f"Port {preferred_port} is already in use. Finding alternative port...")
@@ -1963,7 +1967,8 @@ def run_server(port: int = None):
                 logger.info(f"Starting server on alternative port {available_port}")
                 print(f"\n🚀 Server starting on http://localhost:{available_port}")
                 print(f"📝 Update your client base_url to: http://localhost:{available_port}/v1")
-                uvicorn.run(app, host="0.0.0.0", port=available_port)
+                # Binding to 0.0.0.0 is intentional for container/development use
+                uvicorn.run(app, host=host, port=available_port)  # nosec B104
             except RuntimeError as port_error:
                 logger.error(f"Could not find available port: {port_error}")
                 print(f"\n❌ Error: {port_error}")
