@@ -2,12 +2,33 @@
 Constants and configuration for Claude Code OpenAI Wrapper.
 
 Single source of truth for tool names, models, and other configuration values.
+
+Usage Examples:
+    # Check if a model is supported
+    from src.constants import CLAUDE_MODELS
+    if model_name in CLAUDE_MODELS:
+        # proceed with request
+
+    # Get default allowed tools
+    from src.constants import DEFAULT_ALLOWED_TOOLS
+    options = {"allowed_tools": DEFAULT_ALLOWED_TOOLS}
+
+    # Use rate limits in FastAPI
+    from src.constants import RATE_LIMIT_CHAT
+    @limiter.limit(f"{RATE_LIMIT_CHAT}/minute")
+    async def chat_endpoint(): ...
+
+Note:
+    - Tool configurations are managed by ToolManager (see tool_manager.py)
+    - Model validation uses graceful degradation (warns but allows unknown models)
+    - Rate limits can be overridden via environment variables
 """
 
 import os
 
 # Claude Agent SDK Tool Names
 # These are the built-in tools available in the Claude Agent SDK
+# See: https://docs.anthropic.com/en/docs/claude-code/sdk
 CLAUDE_TOOLS = [
     "Task",  # Launch agents for complex tasks
     "Bash",  # Execute bash commands
