@@ -1021,6 +1021,21 @@ async def root():
             highlightQuickstart();
         </script>
         <script>
+            // Copy quickstart command to clipboard
+            const quickstartText = `curl -X POST http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'`;
+
+            function copyQuickstart() {{
+                navigator.clipboard.writeText(quickstartText).then(() => {{
+                    const copyIcon = document.getElementById('copy-icon');
+                    const checkIcon = document.getElementById('check-icon');
+                    copyIcon.classList.add('hidden');
+                    checkIcon.classList.remove('hidden');
+                    setTimeout(() => {{
+                        copyIcon.classList.remove('hidden');
+                        checkIcon.classList.add('hidden');
+                    }}, 2000);
+                }});
+            }}
 
             // Theme toggle logic
             function toggleTheme() {{
@@ -1121,7 +1136,17 @@ async def root():
                     </svg>
                     Quick Start
                 </h2>
-                <div id="quickstart-code"></div>
+                <div class="relative">
+                    <button onclick="copyQuickstart()" id="copy-btn" class="absolute top-3 right-3 p-2 rounded-lg bg-gray-200/80 dark:bg-gray-800/80 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors z-10" title="Copy to clipboard">
+                        <svg id="copy-icon" class="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                        </svg>
+                        <svg id="check-icon" class="w-4 h-4 text-green-500 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                    </button>
+                    <div id="quickstart-code"></div>
+                </div>
             </div>
 
             <!-- Endpoints -->
