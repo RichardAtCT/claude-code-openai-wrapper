@@ -920,17 +920,18 @@ async def root():
             .accordion-content.open {{ max-height: 500px; overflow-y: auto; }}
             .chevron {{ transition: transform 0.3s ease; }}
             .chevron.open {{ transform: rotate(90deg); }}
-            /* JSON Syntax Highlighting */
-            .json-key {{ color: #22c55e; }}
-            .json-string {{ color: #f59e0b; }}
-            .json-number {{ color: #3b82f6; }}
-            .json-boolean {{ color: #8b5cf6; }}
-            .json-null {{ color: #6b7280; }}
-            .dark .json-key {{ color: #4ade80; }}
+            /* JSON Syntax Highlighting - Light mode (darker, more contrast) */
+            .json-key {{ color: #166534; font-weight: 600; }}
+            .json-string {{ color: #b45309; }}
+            .json-number {{ color: #1d4ed8; }}
+            .json-boolean {{ color: #7c3aed; }}
+            .json-null {{ color: #4b5563; font-style: italic; }}
+            /* JSON Syntax Highlighting - Dark mode (brighter) */
+            .dark .json-key {{ color: #4ade80; font-weight: 600; }}
             .dark .json-string {{ color: #fbbf24; }}
             .dark .json-number {{ color: #60a5fa; }}
             .dark .json-boolean {{ color: #a78bfa; }}
-            .dark .json-null {{ color: #9ca3af; }}
+            .dark .json-null {{ color: #9ca3af; font-style: italic; }}
         </style>
         <script>
             // JSON syntax highlighting
