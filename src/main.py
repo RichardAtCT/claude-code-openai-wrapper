@@ -914,10 +914,77 @@ async def root():
         </script>
         <style>
             .gradient-border {{ background: linear-gradient(135deg, #22c55e 0%, #0ea5e9 100%); }}
-            .endpoint-link {{ transition: all 0.15s ease-in-out; }}
-            .endpoint-link:hover {{ transform: translateX(4px); background-color: rgba(34, 197, 94, 0.1); }}
+            .endpoint-card {{ transition: all 0.15s ease-in-out; }}
+            .endpoint-card:hover {{ background-color: rgba(34, 197, 94, 0.05); }}
+            .accordion-content {{ max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; }}
+            .accordion-content.open {{ max-height: 500px; overflow-y: auto; }}
+            .chevron {{ transition: transform 0.3s ease; }}
+            .chevron.open {{ transform: rotate(90deg); }}
+            /* JSON Syntax Highlighting */
+            .json-key {{ color: #22c55e; }}
+            .json-string {{ color: #f59e0b; }}
+            .json-number {{ color: #3b82f6; }}
+            .json-boolean {{ color: #8b5cf6; }}
+            .json-null {{ color: #6b7280; }}
+            .dark .json-key {{ color: #4ade80; }}
+            .dark .json-string {{ color: #fbbf24; }}
+            .dark .json-number {{ color: #60a5fa; }}
+            .dark .json-boolean {{ color: #a78bfa; }}
+            .dark .json-null {{ color: #9ca3af; }}
         </style>
         <script>
+            // JSON syntax highlighting
+            function syntaxHighlight(json) {{
+                if (typeof json !== 'string') {{
+                    json = JSON.stringify(json, null, 2);
+                }}
+                json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return json.replace(/("(\\u[a-zA-Z0-9]{{4}}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {{
+                    let cls = 'json-number';
+                    if (/^"/.test(match)) {{
+                        if (/:$/.test(match)) {{
+                            cls = 'json-key';
+                        }} else {{
+                            cls = 'json-string';
+                        }}
+                    }} else if (/true|false/.test(match)) {{
+                        cls = 'json-boolean';
+                    }} else if (/null/.test(match)) {{
+                        cls = 'json-null';
+                    }}
+                    return '<span class="' + cls + '">' + match + '</span>';
+                }});
+            }}
+
+            // Accordion toggle with lazy loading
+            async function toggleAccordion(id, endpoint) {{
+                const content = document.getElementById('content-' + id);
+                const chevron = document.getElementById('chevron-' + id);
+                const loader = document.getElementById('loader-' + id);
+                const data = document.getElementById('data-' + id);
+
+                if (content.classList.contains('open')) {{
+                    content.classList.remove('open');
+                    chevron.classList.remove('open');
+                }} else {{
+                    content.classList.add('open');
+                    chevron.classList.add('open');
+
+                    // Fetch data if not already loaded
+                    if (data.innerHTML === '') {{
+                        loader.classList.remove('hidden');
+                        try {{
+                            const response = await fetch(endpoint);
+                            const json = await response.json();
+                            data.innerHTML = syntaxHighlight(json);
+                        }} catch (e) {{
+                            data.innerHTML = '<span class="text-red-500">Error: ' + e.message + '</span>';
+                        }}
+                        loader.classList.add('hidden');
+                    }}
+                }}
+            }}
+
             // Theme toggle logic
             function toggleTheme() {{
                 const html = document.documentElement;
@@ -1031,46 +1098,93 @@ async def root():
                     API Endpoints
                 </h2>
                 <div class="space-y-3">
-                    <div class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link cursor-default">
+                    <!-- POST endpoints (no accordion) -->
+                    <div class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-card cursor-default">
                         <span class="px-2 py-1 bg-green-500/20 text-green-600 dark:text-green-400 text-xs font-bold rounded">POST</span>
                         <code class="text-gray-800 dark:text-gray-200">/v1/chat/completions</code>
                         <span class="text-gray-500 text-sm ml-auto">OpenAI-compatible chat</span>
                     </div>
-                    <div class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link cursor-default">
+                    <div class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-card cursor-default">
                         <span class="px-2 py-1 bg-green-500/20 text-green-600 dark:text-green-400 text-xs font-bold rounded">POST</span>
                         <code class="text-gray-800 dark:text-gray-200">/v1/messages</code>
                         <span class="text-gray-500 text-sm ml-auto">Anthropic-compatible</span>
                     </div>
-                    <a href="/v1/models" class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link">
-                        <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
-                        <code class="text-gray-800 dark:text-gray-200">/v1/models</code>
-                        <span class="text-gray-500 text-sm ml-auto">List models</span>
-                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    </a>
-                    <a href="/v1/auth/status" class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link">
-                        <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
-                        <code class="text-gray-800 dark:text-gray-200">/v1/auth/status</code>
-                        <span class="text-gray-500 text-sm ml-auto">Auth status</span>
-                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    </a>
-                    <a href="/v1/sessions" class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link">
-                        <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
-                        <code class="text-gray-800 dark:text-gray-200">/v1/sessions</code>
-                        <span class="text-gray-500 text-sm ml-auto">Active sessions</span>
-                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    </a>
-                    <a href="/health" class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link">
-                        <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
-                        <code class="text-gray-800 dark:text-gray-200">/health</code>
-                        <span class="text-gray-500 text-sm ml-auto">Health check</span>
-                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    </a>
-                    <a href="/version" class="flex items-center gap-3 p-3 bg-gray-200 dark:bg-gray-950 rounded-xl endpoint-link">
-                        <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
-                        <code class="text-gray-800 dark:text-gray-200">/version</code>
-                        <span class="text-gray-500 text-sm ml-auto">API version</span>
-                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    </a>
+
+                    <!-- GET endpoints with accordion -->
+                    <div class="bg-gray-200 dark:bg-gray-950 rounded-xl overflow-hidden">
+                        <button onclick="toggleAccordion('models', '/v1/models')" class="w-full flex items-center gap-3 p-3 endpoint-card cursor-pointer">
+                            <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
+                            <code class="text-gray-800 dark:text-gray-200">/v1/models</code>
+                            <span class="text-gray-500 text-sm ml-auto">List models</span>
+                            <svg id="chevron-models" class="w-4 h-4 text-gray-400 chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                        </button>
+                        <div id="content-models" class="accordion-content">
+                            <div class="p-3 pt-0">
+                                <div id="loader-models" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
+                                <pre id="data-models" class="bg-gray-300 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap"></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-200 dark:bg-gray-950 rounded-xl overflow-hidden">
+                        <button onclick="toggleAccordion('auth', '/v1/auth/status')" class="w-full flex items-center gap-3 p-3 endpoint-card cursor-pointer">
+                            <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
+                            <code class="text-gray-800 dark:text-gray-200">/v1/auth/status</code>
+                            <span class="text-gray-500 text-sm ml-auto">Auth status</span>
+                            <svg id="chevron-auth" class="w-4 h-4 text-gray-400 chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                        </button>
+                        <div id="content-auth" class="accordion-content">
+                            <div class="p-3 pt-0">
+                                <div id="loader-auth" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
+                                <pre id="data-auth" class="bg-gray-300 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap"></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-200 dark:bg-gray-950 rounded-xl overflow-hidden">
+                        <button onclick="toggleAccordion('sessions', '/v1/sessions')" class="w-full flex items-center gap-3 p-3 endpoint-card cursor-pointer">
+                            <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
+                            <code class="text-gray-800 dark:text-gray-200">/v1/sessions</code>
+                            <span class="text-gray-500 text-sm ml-auto">Active sessions</span>
+                            <svg id="chevron-sessions" class="w-4 h-4 text-gray-400 chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                        </button>
+                        <div id="content-sessions" class="accordion-content">
+                            <div class="p-3 pt-0">
+                                <div id="loader-sessions" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
+                                <pre id="data-sessions" class="bg-gray-300 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap"></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-200 dark:bg-gray-950 rounded-xl overflow-hidden">
+                        <button onclick="toggleAccordion('health', '/health')" class="w-full flex items-center gap-3 p-3 endpoint-card cursor-pointer">
+                            <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
+                            <code class="text-gray-800 dark:text-gray-200">/health</code>
+                            <span class="text-gray-500 text-sm ml-auto">Health check</span>
+                            <svg id="chevron-health" class="w-4 h-4 text-gray-400 chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                        </button>
+                        <div id="content-health" class="accordion-content">
+                            <div class="p-3 pt-0">
+                                <div id="loader-health" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
+                                <pre id="data-health" class="bg-gray-300 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap"></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-200 dark:bg-gray-950 rounded-xl overflow-hidden">
+                        <button onclick="toggleAccordion('version', '/version')" class="w-full flex items-center gap-3 p-3 endpoint-card cursor-pointer">
+                            <span class="px-2 py-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-bold rounded">GET</span>
+                            <code class="text-gray-800 dark:text-gray-200">/version</code>
+                            <span class="text-gray-500 text-sm ml-auto">API version</span>
+                            <svg id="chevron-version" class="w-4 h-4 text-gray-400 chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                        </button>
+                        <div id="content-version" class="accordion-content">
+                            <div class="p-3 pt-0">
+                                <div id="loader-version" class="hidden text-center py-2"><span class="text-gray-500">Loading...</span></div>
+                                <pre id="data-version" class="bg-gray-300 dark:bg-gray-900 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap"></pre>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
