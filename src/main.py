@@ -981,6 +981,9 @@ async def root():
 
             // Re-highlight open accordions when theme changes
             window.addEventListener('themeChanged', async () => {{
+                // Re-highlight quickstart
+                await highlightQuickstart();
+                // Re-highlight open accordions
                 const openAccordions = document.querySelectorAll('.accordion-content.open');
                 for (const accordion of openAccordions) {{
                     const id = accordion.id.replace('content-', '');
@@ -995,6 +998,28 @@ async def root():
                     }}
                 }}
             }});
+
+            // Highlight quickstart curl example
+            const quickstartCode = `curl http://localhost:8000/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'`;
+
+            async function highlightQuickstart() {{
+                const isDark = document.documentElement.classList.contains('dark');
+                const theme = isDark ? darkTheme : lightTheme;
+                try {{
+                    const html = await codeToHtml(quickstartCode, {{
+                        lang: 'bash',
+                        theme: theme
+                    }});
+                    document.getElementById('quickstart-code').innerHTML = html;
+                }} catch (e) {{
+                    document.getElementById('quickstart-code').innerHTML = '<pre>' + quickstartCode + '</pre>';
+                }}
+            }}
+
+            // Highlight on page load
+            highlightQuickstart();
         </script>
         <script>
 
@@ -1097,11 +1122,7 @@ async def root():
                     </svg>
                     Quick Start
                 </h2>
-                <div class="bg-gray-200 dark:bg-gray-950 rounded-xl p-4 font-mono text-sm overflow-x-auto">
-                    <span class="text-gray-500">$</span> <span class="text-primary-600 dark:text-primary-400">curl</span> http://localhost:8000/v1/chat/completions \\<br>
-                    &nbsp;&nbsp;-H <span class="text-amber-600 dark:text-amber-400">"Content-Type: application/json"</span> \\<br>
-                    &nbsp;&nbsp;-d <span class="text-amber-600 dark:text-amber-400">'{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'</span>
-                </div>
+                <div id="quickstart-code"></div>
             </div>
 
             <!-- Endpoints -->
