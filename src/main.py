@@ -921,8 +921,9 @@ async def root():
             .chevron {{ transition: transform 0.3s ease; }}
             .chevron.open {{ transform: rotate(90deg); }}
             /* Shiki code block styling */
-            .shiki {{ padding: 1rem; border-radius: 0.5rem; overflow-x: auto; font-size: 0.75rem; }}
+            .shiki {{ padding: 1.25rem; border-radius: 0.75rem; overflow-x: auto; font-size: 0.95rem; line-height: 1.75; }}
             .shiki code {{ white-space: pre-wrap; word-break: break-word; }}
+            #quickstart-code .shiki {{ font-size: 1rem; line-height: 1.85; padding: 1.5rem; }}
         </style>
         <script type="module">
             // Import Shiki from CDN
