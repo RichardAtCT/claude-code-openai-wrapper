@@ -55,7 +55,9 @@ class ClaudeCodeAuthManager:
                 logger.info(f"Using explicit auth method: {method_map[explicit_method]}")
                 return method_map[explicit_method]
             else:
-                logger.warning(f"Unknown CLAUDE_AUTH_METHOD '{explicit_method}', falling back to auto-detect")
+                logger.warning(
+                    f"Unknown CLAUDE_AUTH_METHOD '{explicit_method}', falling back to auto-detect"
+                )
 
         # Fall back to legacy env vars and auto-detection
         if os.getenv("CLAUDE_CODE_USE_BEDROCK") == "1":

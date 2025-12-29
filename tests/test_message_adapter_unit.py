@@ -258,9 +258,7 @@ class TestFormatClaudeResponse:
 
     def test_basic_formatting(self):
         """Basic response formatting."""
-        result = MessageAdapter.format_claude_response(
-            content="Hello!", model="claude-3-opus"
-        )
+        result = MessageAdapter.format_claude_response(content="Hello!", model="claude-3-opus")
 
         assert result["role"] == "assistant"
         assert result["content"] == "Hello!"
@@ -277,7 +275,7 @@ class TestFormatClaudeResponse:
 
     def test_preserves_content_exactly(self):
         """Content is preserved exactly as provided."""
-        content = "Multi\nline\ncontent with special chars: <>&\""
+        content = 'Multi\nline\ncontent with special chars: <>&"'
         result = MessageAdapter.format_claude_response(content=content, model="claude")
 
         assert result["content"] == content

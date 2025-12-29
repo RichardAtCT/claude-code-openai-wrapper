@@ -21,6 +21,7 @@ class TestClaudeCodeCLIParseMessage:
     def cli_class(self):
         """Get the ClaudeCodeCLI class without instantiating."""
         from src.claude_cli import ClaudeCodeCLI
+
         return ClaudeCodeCLI
 
     def test_parse_result_message(self, cli_class):
@@ -79,9 +80,7 @@ class TestClaudeCodeCLIParseMessage:
         messages = [
             {
                 "type": "assistant",
-                "message": {
-                    "content": [{"type": "text", "text": "Old format response"}]
-                },
+                "message": {"content": [{"type": "text", "text": "Old format response"}]},
             }
         ]
         result = cli.parse_claude_message(messages)
@@ -150,6 +149,7 @@ class TestClaudeCodeCLIExtractMetadata:
     def cli_class(self):
         """Get the ClaudeCodeCLI class."""
         from src.claude_cli import ClaudeCodeCLI
+
         return ClaudeCodeCLI
 
     def test_extract_from_result_message(self, cli_class):
@@ -248,6 +248,7 @@ class TestClaudeCodeCLIEstimateTokenUsage:
     def cli_class(self):
         """Get the ClaudeCodeCLI class."""
         from src.claude_cli import ClaudeCodeCLI
+
         return ClaudeCodeCLI
 
     def test_estimate_basic(self, cli_class):
@@ -371,6 +372,7 @@ class TestClaudeCodeCLIInit:
                     mock_auth.get_claude_code_env_vars.return_value = {}
 
                     from src.claude_cli import ClaudeCodeCLI
+
                     cli = ClaudeCodeCLI(cwd=temp_dir)
 
                     assert cli.cwd == Path(temp_dir)
@@ -385,6 +387,7 @@ class TestClaudeCodeCLIInit:
                 mock_auth.get_claude_code_env_vars.return_value = {}
 
                 from src.claude_cli import ClaudeCodeCLI
+
                 with pytest.raises(ValueError, match="Working directory does not exist"):
                     ClaudeCodeCLI(cwd="/nonexistent/path/12345")
 
@@ -397,6 +400,7 @@ class TestClaudeCodeCLIInit:
                     mock_auth.get_claude_code_env_vars.return_value = {}
 
                     from src.claude_cli import ClaudeCodeCLI
+
                     cli = ClaudeCodeCLI()
 
                     assert cli.temp_dir is not None
@@ -406,6 +410,7 @@ class TestClaudeCodeCLIInit:
                     # Cleanup
                     if cli.temp_dir and os.path.exists(cli.temp_dir):
                         import shutil
+
                         shutil.rmtree(cli.temp_dir)
 
     def test_init_with_custom_timeout(self):
@@ -417,6 +422,7 @@ class TestClaudeCodeCLIInit:
                     mock_auth.get_claude_code_env_vars.return_value = {}
 
                     from src.claude_cli import ClaudeCodeCLI
+
                     cli = ClaudeCodeCLI(timeout=120000, cwd=temp_dir)
 
                     assert cli.timeout == 120.0
@@ -431,6 +437,7 @@ class TestClaudeCodeCLIInit:
                     mock_auth.get_claude_code_env_vars.return_value = {}
 
                     from src.claude_cli import ClaudeCodeCLI
+
                     # Should not raise, just log warning
                     cli = ClaudeCodeCLI(cwd=temp_dir)
                     assert cli.cwd == Path(temp_dir)
@@ -449,6 +456,7 @@ class TestClaudeCodeCLIVerifyCLI:
                     mock_auth.get_claude_code_env_vars.return_value = {}
 
                     from src.claude_cli import ClaudeCodeCLI
+
                     cli = ClaudeCodeCLI(cwd=temp_dir)
                     yield cli
 
@@ -467,6 +475,7 @@ class TestClaudeCodeCLIVerifyCLI:
     @pytest.mark.asyncio
     async def test_verify_cli_no_messages(self, cli_instance):
         """verify_cli returns False when no messages returned."""
+
         async def mock_query(*args, **kwargs):
             return
             yield  # Make it a generator but yield nothing
@@ -478,6 +487,7 @@ class TestClaudeCodeCLIVerifyCLI:
     @pytest.mark.asyncio
     async def test_verify_cli_exception(self, cli_instance):
         """verify_cli returns False on exception."""
+
         async def mock_query(*args, **kwargs):
             raise RuntimeError("SDK error")
             yield  # Make it a generator
@@ -497,9 +507,12 @@ class TestClaudeCodeCLIRunCompletion:
             with patch("src.auth.validate_claude_code_auth") as mock_validate:
                 with patch("src.auth.auth_manager") as mock_auth:
                     mock_validate.return_value = (True, {"method": "anthropic"})
-                    mock_auth.get_claude_code_env_vars.return_value = {"ANTHROPIC_API_KEY": "test-key"}
+                    mock_auth.get_claude_code_env_vars.return_value = {
+                        "ANTHROPIC_API_KEY": "test-key"
+                    }
 
                     from src.claude_cli import ClaudeCodeCLI
+
                     cli = ClaudeCodeCLI(cwd=temp_dir)
                     yield cli
 
@@ -530,9 +543,7 @@ class TestClaudeCodeCLIRunCompletion:
             yield mock_message
 
         with patch("src.claude_cli.query", mock_query):
-            async for _ in cli_instance.run_completion(
-                "Hello", system_prompt="You are helpful"
-            ):
+            async for _ in cli_instance.run_completion("Hello", system_prompt="You are helpful"):
                 pass
 
             assert len(captured_options) == 1
@@ -587,9 +598,7 @@ class TestClaudeCodeCLIRunCompletion:
             yield mock_message
 
         with patch("src.claude_cli.query", mock_query):
-            async for _ in cli_instance.run_completion(
-                "Hello", permission_mode="acceptEdits"
-            ):
+            async for _ in cli_instance.run_completion("Hello", permission_mode="acceptEdits"):
                 pass
 
             assert captured_options[0].permission_mode == "acceptEdits"
@@ -605,9 +614,7 @@ class TestClaudeCodeCLIRunCompletion:
             yield mock_message
 
         with patch("src.claude_cli.query", mock_query):
-            async for _ in cli_instance.run_completion(
-                "Hello", continue_session=True
-            ):
+            async for _ in cli_instance.run_completion("Hello", continue_session=True):
                 pass
 
             assert captured_options[0].continue_session is True
@@ -623,9 +630,7 @@ class TestClaudeCodeCLIRunCompletion:
             yield mock_message
 
         with patch("src.claude_cli.query", mock_query):
-            async for _ in cli_instance.run_completion(
-                "Hello", session_id="sess-123"
-            ):
+            async for _ in cli_instance.run_completion("Hello", session_id="sess-123"):
                 pass
 
             assert captured_options[0].resume == "sess-123"
@@ -654,6 +659,7 @@ class TestClaudeCodeCLIRunCompletion:
     @pytest.mark.asyncio
     async def test_run_completion_exception_yields_error(self, cli_instance):
         """run_completion yields error message on exception."""
+
         async def mock_query(*args, **kwargs):
             raise RuntimeError("SDK failed")
             yield  # Make it a generator
@@ -686,7 +692,10 @@ class TestClaudeCodeCLIRunCompletion:
 
         # Env should be restored
         if original_key is None:
-            assert "ANTHROPIC_API_KEY" not in os.environ or os.environ.get("ANTHROPIC_API_KEY") == original_key
+            assert (
+                "ANTHROPIC_API_KEY" not in os.environ
+                or os.environ.get("ANTHROPIC_API_KEY") == original_key
+            )
         else:
             assert os.environ.get("ANTHROPIC_API_KEY") == original_key
 
@@ -711,5 +720,6 @@ class TestClaudeCodeCLICleanupException:
 
         # Clean up manually
         import shutil
+
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)

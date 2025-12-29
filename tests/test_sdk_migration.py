@@ -16,11 +16,7 @@ class TestSystemPromptFormats:
     def test_text_system_prompt_format(self):
         """Test text-based system prompt format."""
         options = ClaudeAgentOptions(
-            max_turns=1,
-            system_prompt={
-                "type": "text",
-                "text": "You are a helpful assistant."
-            }
+            max_turns=1, system_prompt={"type": "text", "text": "You are a helpful assistant."}
         )
         assert options.system_prompt is not None
         assert isinstance(options.system_prompt, dict)
@@ -29,11 +25,7 @@ class TestSystemPromptFormats:
     def test_preset_system_prompt_format(self):
         """Test preset-based system prompt format."""
         options = ClaudeAgentOptions(
-            max_turns=1,
-            system_prompt={
-                "type": "preset",
-                "preset": "claude_code"
-            }
+            max_turns=1, system_prompt={"type": "preset", "preset": "claude_code"}
         )
         assert options.system_prompt is not None
         assert isinstance(options.system_prompt, dict)
@@ -51,18 +43,13 @@ class TestClaudeAgentOptions:
 
     def test_options_with_model(self):
         """Test options with model specification."""
-        options = ClaudeAgentOptions(
-            max_turns=1,
-            model="claude-sonnet-4-5-20250929"
-        )
+        options = ClaudeAgentOptions(max_turns=1, model="claude-sonnet-4-5-20250929")
         assert options.model == "claude-sonnet-4-5-20250929"
 
     def test_options_with_tools(self):
         """Test options with tool restrictions."""
         options = ClaudeAgentOptions(
-            max_turns=1,
-            allowed_tools=["Read", "Write"],
-            disallowed_tools=["Bash"]
+            max_turns=1, allowed_tools=["Read", "Write"], disallowed_tools=["Bash"]
         )
         assert options.allowed_tools == ["Read", "Write"]
         assert options.disallowed_tools == ["Bash"]
@@ -153,10 +140,7 @@ class TestAPIModels:
         from src.models import ChatCompletionRequest
 
         request = ChatCompletionRequest(
-            model="claude-sonnet-4-5-20250929",
-            messages=[
-                {"role": "user", "content": "Hello"}
-            ]
+            model="claude-sonnet-4-5-20250929", messages=[{"role": "user", "content": "Hello"}]
         )
 
         assert request.model == "claude-sonnet-4-5-20250929"

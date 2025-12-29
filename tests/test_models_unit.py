@@ -139,34 +139,24 @@ class TestChatCompletionRequest:
 
         # Invalid - too high
         with pytest.raises(ValueError):
-            ChatCompletionRequest(
-                messages=[Message(role="user", content="Hi")], temperature=3.0
-            )
+            ChatCompletionRequest(messages=[Message(role="user", content="Hi")], temperature=3.0)
 
         # Invalid - too low
         with pytest.raises(ValueError):
-            ChatCompletionRequest(
-                messages=[Message(role="user", content="Hi")], temperature=-1.0
-            )
+            ChatCompletionRequest(messages=[Message(role="user", content="Hi")], temperature=-1.0)
 
     def test_top_p_range_validation(self):
         """top_p must be between 0 and 1."""
-        request = ChatCompletionRequest(
-            messages=[Message(role="user", content="Hi")], top_p=0.5
-        )
+        request = ChatCompletionRequest(messages=[Message(role="user", content="Hi")], top_p=0.5)
         assert request.top_p == 0.5
 
         with pytest.raises(ValueError):
-            ChatCompletionRequest(
-                messages=[Message(role="user", content="Hi")], top_p=1.5
-            )
+            ChatCompletionRequest(messages=[Message(role="user", content="Hi")], top_p=1.5)
 
     def test_n_must_be_1(self):
         """n > 1 raises validation error."""
         with pytest.raises(ValueError) as exc_info:
-            ChatCompletionRequest(
-                messages=[Message(role="user", content="Hi")], n=3
-            )
+            ChatCompletionRequest(messages=[Message(role="user", content="Hi")], n=3)
         assert "multiple choices" in str(exc_info.value).lower()
 
     def test_presence_penalty_range(self):
@@ -235,9 +225,7 @@ class TestChatCompletionRequest:
 
     def test_get_sampling_instructions_low_top_p(self):
         """Low top_p produces focused instructions."""
-        request = ChatCompletionRequest(
-            messages=[Message(role="user", content="Hi")], top_p=0.3
-        )
+        request = ChatCompletionRequest(messages=[Message(role="user", content="Hi")], top_p=0.3)
         instructions = request.get_sampling_instructions()
         assert instructions is not None
         assert "probable" in instructions.lower() or "mainstream" in instructions.lower()
@@ -430,9 +418,7 @@ class TestToolModels:
 
     def test_tool_configuration_request(self):
         """Can create ToolConfigurationRequest."""
-        request = ToolConfigurationRequest(
-            allowed_tools=["Read", "Write"], session_id="test"
-        )
+        request = ToolConfigurationRequest(allowed_tools=["Read", "Write"], session_id="test")
         assert len(request.allowed_tools) == 2
 
     def test_tool_validation_response(self):
@@ -535,9 +521,7 @@ class TestAnthropicModels:
 
     def test_anthropic_message_with_blocks(self):
         """Can create AnthropicMessage with content blocks."""
-        msg = AnthropicMessage(
-            role="assistant", content=[AnthropicTextBlock(text="Hi there")]
-        )
+        msg = AnthropicMessage(role="assistant", content=[AnthropicTextBlock(text="Hi there")])
         assert len(msg.content) == 1
 
     def test_anthropic_messages_request(self):

@@ -76,9 +76,7 @@ class TestClaudeCodeAuthManagerDetectMethod:
 
     def test_unknown_method_falls_back(self):
         """Unknown CLAUDE_AUTH_METHOD falls back to auto-detect."""
-        with patch.dict(
-            os.environ, {"CLAUDE_AUTH_METHOD": "unknown_method"}, clear=False
-        ):
+        with patch.dict(os.environ, {"CLAUDE_AUTH_METHOD": "unknown_method"}, clear=False):
             import src.auth
 
             importlib.reload(src.auth)
@@ -94,9 +92,7 @@ class TestClaudeCodeAuthManagerDetectMethod:
         """CLAUDE_CODE_USE_BEDROCK=1 uses bedrock."""
         env = {"CLAUDE_CODE_USE_BEDROCK": "1"}
         # Remove CLAUDE_AUTH_METHOD if present
-        env_copy = {
-            k: v for k, v in os.environ.items() if k != "CLAUDE_AUTH_METHOD"
-        }
+        env_copy = {k: v for k, v in os.environ.items() if k != "CLAUDE_AUTH_METHOD"}
         env_copy.update(env)
         with patch.dict(os.environ, env_copy, clear=True):
             import src.auth
@@ -107,9 +103,7 @@ class TestClaudeCodeAuthManagerDetectMethod:
     def test_legacy_vertex_env_var(self):
         """CLAUDE_CODE_USE_VERTEX=1 uses vertex."""
         env = {"CLAUDE_CODE_USE_VERTEX": "1"}
-        env_copy = {
-            k: v for k, v in os.environ.items() if k != "CLAUDE_AUTH_METHOD"
-        }
+        env_copy = {k: v for k, v in os.environ.items() if k != "CLAUDE_AUTH_METHOD"}
         env_copy.update(env)
         with patch.dict(os.environ, env_copy, clear=True):
             import src.auth
@@ -123,8 +117,7 @@ class TestClaudeCodeAuthManagerDetectMethod:
         env_copy = {
             k: v
             for k, v in os.environ.items()
-            if k
-            not in ["CLAUDE_AUTH_METHOD", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"]
+            if k not in ["CLAUDE_AUTH_METHOD", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"]
         }
         env_copy.update(env)
         with patch.dict(os.environ, env_copy, clear=True):
@@ -269,9 +262,7 @@ class TestClaudeCodeAuthManagerValidation:
 
     def test_validate_claude_cli_always_valid(self):
         """Claude CLI auth is always considered valid initially."""
-        env_copy = {
-            k: v for k, v in os.environ.items() if k != "CLAUDE_AUTH_METHOD"
-        }
+        env_copy = {k: v for k, v in os.environ.items() if k != "CLAUDE_AUTH_METHOD"}
         env_copy["CLAUDE_AUTH_METHOD"] = "cli"
         with patch.dict(os.environ, env_copy, clear=True):
             import src.auth
@@ -343,9 +334,7 @@ class TestClaudeCodeAuthManagerEnvVars:
 
     def test_cli_env_vars_empty(self):
         """CLI method returns no environment variables."""
-        env_copy = {
-            k: v for k, v in os.environ.items() if k != "CLAUDE_AUTH_METHOD"
-        }
+        env_copy = {k: v for k, v in os.environ.items() if k != "CLAUDE_AUTH_METHOD"}
         env_copy["CLAUDE_AUTH_METHOD"] = "cli"
         with patch.dict(os.environ, env_copy, clear=True):
             import src.auth
@@ -388,9 +377,7 @@ class TestVerifyApiKey:
                 scheme="Bearer", credentials="test-secret-key"
             )
 
-            with patch.object(
-                src.auth.auth_manager, "get_api_key", return_value="test-secret-key"
-            ):
+            with patch.object(src.auth.auth_manager, "get_api_key", return_value="test-secret-key"):
                 result = await src.auth.verify_api_key(mock_request, credentials)
                 assert result is True
 
@@ -405,13 +392,9 @@ class TestVerifyApiKey:
             from fastapi.security import HTTPAuthorizationCredentials
 
             mock_request = MagicMock()
-            credentials = HTTPAuthorizationCredentials(
-                scheme="Bearer", credentials="wrong-key"
-            )
+            credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="wrong-key")
 
-            with patch.object(
-                src.auth.auth_manager, "get_api_key", return_value="correct-key"
-            ):
+            with patch.object(src.auth.auth_manager, "get_api_key", return_value="correct-key"):
                 with pytest.raises(HTTPException) as exc_info:
                     await src.auth.verify_api_key(mock_request, credentials)
                 assert exc_info.value.status_code == 401
@@ -428,9 +411,7 @@ class TestVerifyApiKey:
             mock_request = MagicMock()
             # Mock security to return None (no credentials)
             with patch.object(src.auth, "security", AsyncMock(return_value=None)):
-                with patch.object(
-                    src.auth.auth_manager, "get_api_key", return_value="test-key"
-                ):
+                with patch.object(src.auth.auth_manager, "get_api_key", return_value="test-key"):
                     with pytest.raises(HTTPException) as exc_info:
                         await src.auth.verify_api_key(mock_request, None)
                     assert exc_info.value.status_code == 401
