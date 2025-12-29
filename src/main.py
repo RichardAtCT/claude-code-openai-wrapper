@@ -1001,9 +1001,7 @@ async def root():
             }});
 
             // Highlight quickstart curl example
-            const quickstartCode = `curl http://localhost:8000/v1/chat/completions \\
-  -H "Content-Type: application/json" \\
-  -d '{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'`;
+            const quickstartCode = `curl -X POST http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{{"model": "claude-sonnet-4-5-20250929", "messages": [{{"role": "user", "content": "Hello!"}}]}}'`;
 
             async function highlightQuickstart() {{
                 const isDark = document.documentElement.classList.contains('dark');
