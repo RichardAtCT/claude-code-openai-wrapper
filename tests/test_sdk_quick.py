@@ -1,15 +1,28 @@
 #!/usr/bin/env python3
-"""Quick test of Claude Agent SDK to verify migration."""
+"""Quick test of Claude Agent SDK to verify migration.
+
+This is an integration test that calls the Claude API.
+"""
 
 import asyncio
 import sys
 import os
+
+import pytest
 
 # Ensure we're in the right directory
 sys.path.insert(0, os.path.dirname(__file__))
 
 from claude_agent_sdk import query, ClaudeAgentOptions
 
+# Skip if no API key available (integration test)
+pytestmark = pytest.mark.skipif(
+    not os.getenv("ANTHROPIC_API_KEY"),
+    reason="ANTHROPIC_API_KEY not set - skipping SDK integration test",
+)
+
+
+@pytest.mark.asyncio
 async def test_simple_query():
     """Test a simple query with the new SDK."""
     print("Testing Claude Agent SDK with simple query...")
@@ -20,21 +33,24 @@ async def test_simple_query():
         async for message in query(
             prompt="Say 'Hello!' and nothing else.",
             options=ClaudeAgentOptions(
-                max_turns=1,
-                model="claude-3-5-haiku-20241022"  # Fastest model for testing
-            )
+                max_turns=1, model="claude-3-5-haiku-20241022"  # Fastest model for testing
+            ),
         ):
             messages.append(message)
             print(f"Got message type: {type(message)}")
 
             # Try to extract content
-            if hasattr(message, 'content'):
+            if hasattr(message, "content"):
                 print(f"Content: {message.content}")
             elif isinstance(message, dict):
                 print(f"Message dict: {message}")
 
             # Break early if we get an assistant message
-            msg_type = getattr(message, 'type', None) if hasattr(message, 'type') else message.get("type") if isinstance(message, dict) else None
+            msg_type = (
+                getattr(message, "type", None)
+                if hasattr(message, "type")
+                else message.get("type") if isinstance(message, dict) else None
+            )
             if msg_type == "assistant":
                 print("✓ Got assistant response!")
                 break
@@ -50,8 +66,10 @@ async def test_simple_query():
     except Exception as e:
         print(f"✗ Test failed with error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 if __name__ == "__main__":
     result = asyncio.run(test_simple_query())

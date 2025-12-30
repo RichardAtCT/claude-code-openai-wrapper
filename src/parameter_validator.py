@@ -17,7 +17,7 @@ class ParameterValidator:
     SUPPORTED_MODELS = set(CLAUDE_MODELS)
 
     # Valid permission modes for Claude Code SDK
-    VALID_PERMISSION_MODES = {"default", "acceptEdits", "bypassPermissions"}
+    VALID_PERMISSION_MODES = {"default", "acceptEdits", "bypassPermissions", "plan"}
 
     @classmethod
     def validate_model(cls, model: str) -> bool:
