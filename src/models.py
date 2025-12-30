@@ -407,3 +407,142 @@ class MCPToolCallRequest(BaseModel):
         if len(v) > 200:
             raise ValueError("Tool name too long (max 200 characters)")
         return v.strip()
+
+
+# ============================================================================
+# Batch API Models (OpenAI compatibility)
+# ============================================================================
+
+
+class BatchRequestLine(BaseModel):
+    """Single request line in a JSONL batch input file."""
+
+    custom_id: str = Field(description="Developer-provided unique identifier for this request")
+    method: Literal["POST"] = "POST"
+    url: Literal["/v1/chat/completions"] = "/v1/chat/completions"
+    body: ChatCompletionRequest
+
+    @field_validator("custom_id")
+    @classmethod
+    def validate_custom_id(cls, v: str) -> str:
+        """Validate custom_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("custom_id cannot be empty")
+        if len(v) > 100:
+            raise ValueError("custom_id too long (max 100 characters)")
+        return v.strip()
+
+
+class BatchRequest(BaseModel):
+    """Request to create a new batch job."""
+
+    input_file_id: str = Field(description="ID of the uploaded JSONL file containing requests")
+    endpoint: Literal["/v1/chat/completions"] = "/v1/chat/completions"
+    completion_window: Literal["24h"] = "24h"
+    metadata: Optional[Dict[str, str]] = Field(
+        default=None, description="Optional custom metadata (max 16 key-value pairs)"
+    )
+
+    @field_validator("input_file_id")
+    @classmethod
+    def validate_input_file_id(cls, v: str) -> str:
+        """Validate input_file_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("input_file_id cannot be empty")
+        return v.strip()
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata(cls, v: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+        """Validate metadata size limits."""
+        if v is not None:
+            if len(v) > 16:
+                raise ValueError("metadata cannot have more than 16 key-value pairs")
+            for key, value in v.items():
+                if len(key) > 64:
+                    raise ValueError(f"metadata key '{key}' exceeds 64 characters")
+                if len(value) > 512:
+                    raise ValueError(f"metadata value for key '{key}' exceeds 512 characters")
+        return v
+
+
+class RequestCounts(BaseModel):
+    """Counts of requests in different states."""
+
+    total: int = 0
+    completed: int = 0
+    failed: int = 0
+
+
+class BatchJob(BaseModel):
+    """Batch job status and metadata."""
+
+    id: str = Field(default_factory=lambda: f"batch_{uuid.uuid4().hex}")
+    object: Literal["batch"] = "batch"
+    endpoint: str
+    input_file_id: str
+    completion_window: str
+    status: Literal[
+        "validating",
+        "in_progress",
+        "finalizing",
+        "completed",
+        "failed",
+        "expired",
+        "cancelling",
+        "cancelled",
+    ]
+    output_file_id: Optional[str] = None
+    error_file_id: Optional[str] = None
+    created_at: int = Field(default_factory=lambda: int(datetime.now().timestamp()))
+    in_progress_at: Optional[int] = None
+    expires_at: Optional[int] = None
+    finalizing_at: Optional[int] = None
+    completed_at: Optional[int] = None
+    failed_at: Optional[int] = None
+    expired_at: Optional[int] = None
+    cancelling_at: Optional[int] = None
+    cancelled_at: Optional[int] = None
+    request_counts: RequestCounts = Field(default_factory=RequestCounts)
+    metadata: Optional[Dict[str, str]] = None
+
+
+class BatchListResponse(BaseModel):
+    """Response model for listing batch jobs."""
+
+    object: Literal["list"] = "list"
+    data: List[BatchJob]
+    first_id: Optional[str] = None
+    last_id: Optional[str] = None
+    has_more: bool = False
+
+
+class FileObject(BaseModel):
+    """Metadata for an uploaded file."""
+
+    id: str = Field(default_factory=lambda: f"file-{uuid.uuid4().hex}")
+    object: Literal["file"] = "file"
+    bytes: int = Field(description="Size of the file in bytes")
+    created_at: int = Field(default_factory=lambda: int(datetime.now().timestamp()))
+    filename: str = Field(description="Original filename")
+    purpose: Literal["batch"] = "batch"
+    status: Literal["uploaded", "processed", "error"] = "uploaded"
+    status_details: Optional[str] = None
+
+
+class FileListResponse(BaseModel):
+    """Response model for listing files."""
+
+    object: Literal["list"] = "list"
+    data: List[FileObject]
+
+
+class BatchResponseLine(BaseModel):
+    """Single response line in a JSONL batch output file."""
+
+    id: str = Field(default_factory=lambda: f"batch_req_{uuid.uuid4().hex}")
+    custom_id: str
+    response: Dict[str, Any] = Field(
+        description="HTTP response with status_code, request_id, and body"
+    )
+    error: Optional[Dict[str, Any]] = None

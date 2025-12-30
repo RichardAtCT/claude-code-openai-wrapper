@@ -59,6 +59,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - **Google Vertex AI** - GCP authentication support
 
 ### ⚡ **Advanced Features**
+- **Batch processing API** - Asynchronous processing of multiple requests with file-based persistence 🆕
 - **System prompt support** via SDK options
 - **Optional tool usage** - Enable Claude Code tools (Read, Write, Bash, etc.) when needed
 - **Fast default mode** - Tools disabled by default for OpenAI API compatibility
@@ -726,6 +727,62 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 - `GET /v1/sessions/{session_id}` - Get detailed session information
 - `DELETE /v1/sessions/{session_id}` - Delete a specific session
 - `GET /v1/sessions/stats` - Get session manager statistics
+
+### Batch Processing Endpoints 🆕
+- `POST /v1/files` - Upload JSONL file for batch processing
+- `POST /v1/batches` - Create a batch job from uploaded file
+- `GET /v1/batches/{batch_id}` - Get batch job status and details
+- `GET /v1/batches` - List all batch jobs
+- `POST /v1/batches/{batch_id}/cancel` - Cancel a batch job
+- `GET /v1/files/{file_id}` - Get file metadata
+- `GET /v1/files/{file_id}/content` - Download file content (input or results)
+
+**Batch Processing Features:**
+- ✅ OpenAI-compatible `/v1/batches` API
+- ✅ Asynchronous background processing
+- ✅ File-based persistence (survives restarts)
+- ✅ Sequential request processing
+- ✅ JSONL format for input and output
+- ✅ Status tracking (validating → in_progress → completed)
+- ✅ Error handling with separate error files
+- ✅ Automatic cleanup of old batches (7-day retention)
+
+**Example Usage:**
+```python
+# See examples/batch_example.py for complete workflow
+import requests
+
+# 1. Upload JSONL file
+with open("batch_input.jsonl", "rb") as f:
+    response = requests.post(
+        "http://localhost:8000/v1/files",
+        files={"file": ("batch.jsonl", f, "application/jsonl")},
+        data={"purpose": "batch"}
+    )
+file_id = response.json()["id"]
+
+# 2. Create batch job
+response = requests.post(
+    "http://localhost:8000/v1/batches",
+    json={
+        "input_file_id": file_id,
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h"
+    }
+)
+batch_id = response.json()["id"]
+
+# 3. Check status
+response = requests.get(f"http://localhost:8000/v1/batches/{batch_id}")
+status = response.json()["status"]
+
+# 4. Download results when complete
+if status == "completed":
+    output_file_id = response.json()["output_file_id"]
+    response = requests.get(f"http://localhost:8000/v1/files/{output_file_id}/content")
+    with open("results.jsonl", "wb") as f:
+        f.write(response.content)
+```
 
 ## Limitations & Roadmap
 

@@ -93,3 +93,12 @@ RATE_LIMIT_DEFAULT = 60
 RATE_LIMIT_CHAT = 30
 RATE_LIMIT_MODELS = 100
 RATE_LIMIT_HEALTH = 200
+
+# Batch Processing
+BATCH_STORAGE_DIR = "./batch_storage"
+BATCH_MAX_FILE_SIZE_MB = 100  # Maximum size for uploaded JSONL files
+BATCH_FILE_RETENTION_DAYS = 7  # How long to keep batch files before cleanup
+BATCH_CLEANUP_INTERVAL_MINUTES = 60  # How often to run cleanup task
+BATCH_DEFAULT_TIMEOUT_HOURS = 24  # Default completion window
+BATCH_MAX_REQUESTS_PER_BATCH = 50000  # Maximum number of requests in a single batch
+BATCH_REQUEST_TIMEOUT_SECONDS = 300  # Timeout for individual batch requests (5 minutes)
