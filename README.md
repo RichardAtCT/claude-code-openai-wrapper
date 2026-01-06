@@ -695,12 +695,32 @@ All tests should show:
 
 This wrapper is designed to be compliant with [Anthropic's Terms of Service](https://www.anthropic.com/legal).
 
+### Requirements for Users
+
+> **Important:** You must have your own valid Claude subscription or API access to use this wrapper.
+
+- **Claude Pro or Max subscription** - For CLI authentication (`claude auth login`)
+- **Anthropic API key** - Available at [platform.claude.com](https://platform.claude.com)
+- **AWS Bedrock or Google Vertex AI** - For enterprise cloud authentication
+
+This wrapper does not provide Claude access - it provides an OpenAI-compatible interface to Claude services you already have access to.
+
 ### How This Wrapper Works
 
 - **Uses the official Claude Agent SDK** - The same SDK Anthropic provides for developers
 - **Each user authenticates individually** - No credential sharing or pooling
 - **Format translation only** - Converts OpenAI-format requests to Claude SDK calls
 - **No reselling** - Users access Claude through their own subscriptions/API keys
+
+### Personal vs Commercial Use
+
+| Use Case | Recommended Authentication | Notes |
+|----------|---------------------------|-------|
+| Personal projects | CLI Auth (Pro/Max) or API Key | Acceptable at moderate scale |
+| Business/Commercial | API Key, Bedrock, or Vertex AI | Use [platform.claude.com](https://platform.claude.com) |
+| High-scale applications | Bedrock or Vertex AI | Enterprise authentication recommended |
+
+**Note on Consumer Plans:** Claude Pro and Max subscriptions are primarily designed for individual, interactive use. Using them through wrappers or automated implementations is acceptable for personal projects at moderate scale. For business use or applications that scale significantly, Anthropic's commercial API offerings at [platform.claude.com](https://platform.claude.com) are more appropriate.
 
 ### Authentication Methods
 
@@ -718,14 +738,26 @@ Using CLI auth (`claude auth login`) with this wrapper is functionally equivalen
 ### What This Wrapper Does NOT Do
 
 - Does not share or pool credentials between users
+- Does not include or expose API keys or credentials
 - Does not resell API access
 - Does not train competing AI models
 - Does not scrape or harvest data
 - Does not bypass authentication or rate limits
 
+### User Responsibilities
+
+By using this wrapper, you agree to:
+- Comply with [Anthropic's Terms of Service](https://www.anthropic.com/legal/consumer-terms)
+- Comply with [Anthropic's Usage Policy](https://www.anthropic.com/legal/aup)
+- Use your own valid Claude subscription or API access
+- Not share your credentials with others
+- Use commercial API access for business applications
+
 ### Disclaimer
 
-This is an independent open-source project, not affiliated with or endorsed by Anthropic. Users are responsible for ensuring their own usage complies with Anthropic's terms. When in doubt, use `ANTHROPIC_API_KEY` authentication which is explicitly permitted for programmatic access under the Commercial Terms.
+This is an independent open-source project, not affiliated with or endorsed by Anthropic. Users are responsible for ensuring their own usage complies with Anthropic's terms. Anthropic reserves the right to modify their Terms of Service at any time.
+
+When in doubt, use `ANTHROPIC_API_KEY` authentication which is explicitly permitted for programmatic access under the Commercial Terms.
 
 For Anthropic's official terms, see:
 - [Usage Policy](https://www.anthropic.com/legal/aup)
