@@ -691,6 +691,47 @@ All tests should show:
 - **Real cost tracking** (e.g., $0.001-0.005 per test call)
 - **Accurate token counts** from SDK metadata
 
+## Terms Compliance
+
+This wrapper is designed to be compliant with [Anthropic's Terms of Service](https://www.anthropic.com/legal).
+
+### How This Wrapper Works
+
+- **Uses the official Claude Agent SDK** - The same SDK Anthropic provides for developers
+- **Each user authenticates individually** - No credential sharing or pooling
+- **Format translation only** - Converts OpenAI-format requests to Claude SDK calls
+- **No reselling** - Users access Claude through their own subscriptions/API keys
+
+### Authentication Methods
+
+| Method | Terms | Compliance |
+|--------|-------|------------|
+| `ANTHROPIC_API_KEY` | Commercial Terms | Explicitly allowed for programmatic access |
+| AWS Bedrock | Commercial Terms | Explicitly allowed for programmatic access |
+| Google Vertex AI | Commercial Terms | Explicitly allowed for programmatic access |
+| CLI Auth (Pro/Max) | Consumer Terms | Uses official SDK with official auth methods |
+
+### CLI Authentication Note
+
+Using CLI auth (`claude auth login`) with this wrapper is functionally equivalent to using Claude Code directly - both use the Claude Agent SDK with your personal subscription. Anthropic provides the SDK with CLI auth support, and this wrapper simply provides an alternative interface format.
+
+### What This Wrapper Does NOT Do
+
+- Does not share or pool credentials between users
+- Does not resell API access
+- Does not train competing AI models
+- Does not scrape or harvest data
+- Does not bypass authentication or rate limits
+
+### Disclaimer
+
+This is an independent open-source project, not affiliated with or endorsed by Anthropic. Users are responsible for ensuring their own usage complies with Anthropic's terms. When in doubt, use `ANTHROPIC_API_KEY` authentication which is explicitly permitted for programmatic access under the Commercial Terms.
+
+For Anthropic's official terms, see:
+- [Usage Policy](https://www.anthropic.com/legal/aup)
+- [Consumer Terms](https://www.anthropic.com/legal/consumer-terms)
+- [Commercial Terms](https://www.anthropic.com/legal/commercial-terms)
+
 ## Licence
 
 MIT Licence
