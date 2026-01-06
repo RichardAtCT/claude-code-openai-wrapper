@@ -408,7 +408,9 @@ Env vars override defaults and can be set at runtime with `-e` flags or in `dock
 
 - **Core Server Settings**:
   - `PORT=9000`: Changes the internal listening port (default: 8000; update port mapping accordingly).
+  - `CLAUDE_WRAPPER_HOST=127.0.0.1`: Sets the host binding address (default: 0.0.0.0 for all interfaces; use 127.0.0.1 for local-only access).
   - `MAX_TIMEOUT=600`: Sets the request timeout in seconds (default: 300; increase for complex Claude queries).
+  - `MAX_REQUEST_SIZE=10485760`: Maximum request body size in bytes (default: 10MB; increase for large payloads).
   - `CLAUDE_CWD=/path/to/workspace`: Sets Claude Code's working directory (default: isolated temp directory for security).
 
 - **Authentication and Providers**:

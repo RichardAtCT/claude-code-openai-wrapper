@@ -25,6 +25,11 @@ pytest = "^8.0.0"
 pytest-asyncio = "^0.23.0"
 requests = "^2.32.0"
 openai = "^1.0.0"
+pytest-cov = "^7.0.0"
+mypy = "^1.14.0"
+bandit = "^1.8.0"
+safety = "^3.2.0"
+hypothesis = "^6.122.0"
 
 [build-system]
 requires = ["poetry-core"]
