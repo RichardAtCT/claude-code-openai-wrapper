@@ -5,6 +5,7 @@ import logging
 import secrets
 import string
 import uuid
+from datetime import datetime
 from typing import Optional, AsyncGenerator, Dict, Any
 from contextlib import asynccontextmanager
 
@@ -22,6 +23,7 @@ from src.models import (
     ChatCompletionStreamResponse,
     Choice,
     Message,
+    get_default_model,
     Usage,
     StreamChoice,
     SessionListResponse,
@@ -388,6 +390,75 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content=error_response)
 
 
+def _extract_text_from_response_content(content: Any) -> str:
+    """Extract plain text from Responses API content structures."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, str):
+                text_parts.append(part)
+                continue
+            if isinstance(part, dict):
+                part_type = part.get("type")
+                if part_type in ("input_text", "text", "output_text"):
+                    text_parts.append(part.get("text") or part.get("content") or "")
+                elif "text" in part:
+                    text_parts.append(part.get("text", ""))
+                elif "content" in part:
+                    text_parts.append(_extract_text_from_response_content(part.get("content")))
+        return "\n".join(p for p in text_parts if p)
+    if isinstance(content, dict):
+        if "text" in content:
+            return str(content.get("text", ""))
+        if "content" in content:
+            return _extract_text_from_response_content(content.get("content"))
+    return str(content)
+
+
+def _messages_from_responses_input(input_value: Any) -> list[Message]:
+    """Convert OpenAI Responses API input to OpenAI chat messages."""
+    if input_value is None:
+        return []
+    if isinstance(input_value, str):
+        return [Message(role="user", content=input_value)]
+    if isinstance(input_value, dict):
+        if input_value.get("type") == "message" or "role" in input_value:
+            role = input_value.get("role", "user")
+            content = _extract_text_from_response_content(input_value.get("content"))
+            return [Message(role=role, content=content)]
+        return [Message(role="user", content=_extract_text_from_response_content(input_value))]
+    if isinstance(input_value, list):
+        # If it looks like a list of messages, convert each item to a Message.
+        if input_value and isinstance(input_value[0], dict) and (
+            "role" in input_value[0] or input_value[0].get("type") == "message"
+        ):
+            messages: list[Message] = []
+            for item in input_value:
+                role = item.get("role", "user")
+                content = _extract_text_from_response_content(item.get("content"))
+                messages.append(Message(role=role, content=content))
+            return messages
+        # Otherwise treat it as content parts for a single user message.
+        return [Message(role="user", content=_extract_text_from_response_content(input_value))]
+    return [Message(role="user", content=str(input_value))]
+
+
+def _build_responses_output(text: str, item_id: str) -> list[Dict[str, Any]]:
+    """Build Responses API output array."""
+    return [
+        {
+            "id": item_id,
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text}],
+        }
+    ]
+
+
 async def generate_streaming_response(
     request: ChatCompletionRequest, request_id: str, claude_headers: Optional[Dict[str, Any]] = None
 ) -> AsyncGenerator[str, None]:
@@ -605,6 +676,149 @@ async def generate_streaming_response(
         yield f"data: {json.dumps(error_chunk)}\n\n"
 
 
+async def generate_responses_stream(
+    request: ChatCompletionRequest, request_id: str, claude_headers: Optional[Dict[str, Any]] = None
+) -> AsyncGenerator[str, None]:
+    """Generate SSE formatted streaming response for /v1/responses."""
+    try:
+        all_messages, actual_session_id = session_manager.process_messages(
+            request.messages, request.session_id
+        )
+
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+
+        sampling_instructions = request.get_sampling_instructions()
+        if sampling_instructions:
+            if system_prompt:
+                system_prompt = f"{system_prompt}\n\n{sampling_instructions}"
+            else:
+                system_prompt = sampling_instructions
+
+        prompt = MessageAdapter.filter_content(prompt)
+        if system_prompt:
+            system_prompt = MessageAdapter.filter_content(system_prompt)
+
+        claude_options = request.to_claude_options()
+        if claude_headers:
+            claude_options.update(claude_headers)
+
+        if claude_options.get("model"):
+            ParameterValidator.validate_model(claude_options["model"])
+
+        if not request.enable_tools:
+            claude_options["disallowed_tools"] = CLAUDE_TOOLS
+            claude_options["max_turns"] = 1
+        else:
+            claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
+            claude_options["permission_mode"] = "bypassPermissions"
+
+        output_item_id = f"msg_{uuid.uuid4().hex[:24]}"
+        created_ts = int(datetime.now().timestamp())
+        response_created = {
+            "id": request_id,
+            "object": "response",
+            "created": created_ts,
+            "model": request.model,
+            "status": "in_progress",
+        }
+        yield f"event: response.created\ndata: {json.dumps(response_created)}\n\n"
+
+        chunks_buffer = []
+        assistant_text_parts: list[str] = []
+
+        async for chunk in claude_cli.run_completion(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=claude_options.get("model"),
+            max_turns=claude_options.get("max_turns", 10),
+            allowed_tools=claude_options.get("allowed_tools"),
+            disallowed_tools=claude_options.get("disallowed_tools"),
+            permission_mode=claude_options.get("permission_mode"),
+            stream=True,
+        ):
+            chunks_buffer.append(chunk)
+            content = None
+            if chunk.get("type") == "assistant" and "message" in chunk:
+                message = chunk["message"]
+                if isinstance(message, dict) and "content" in message:
+                    content = message["content"]
+            elif "content" in chunk and isinstance(chunk["content"], list):
+                content = chunk["content"]
+
+            if content is None:
+                continue
+
+            if isinstance(content, list):
+                for block in content:
+                    if hasattr(block, "text"):
+                        raw_text = block.text
+                    elif isinstance(block, dict) and block.get("type") == "text":
+                        raw_text = block.get("text", "")
+                    else:
+                        continue
+
+                    filtered_text = MessageAdapter.filter_content(raw_text)
+                    if filtered_text and not filtered_text.isspace():
+                        assistant_text_parts.append(filtered_text)
+                        delta_event = {
+                            "type": "response.output_text.delta",
+                            "delta": filtered_text,
+                            "item_id": output_item_id,
+                            "output_index": 0,
+                            "content_index": 0,
+                        }
+                        yield (
+                            f"event: response.output_text.delta\ndata: {json.dumps(delta_event)}\n\n"
+                        )
+            elif isinstance(content, str):
+                filtered_content = MessageAdapter.filter_content(content)
+                if filtered_content and not filtered_content.isspace():
+                    assistant_text_parts.append(filtered_content)
+                    delta_event = {
+                        "type": "response.output_text.delta",
+                        "delta": filtered_content,
+                        "item_id": output_item_id,
+                        "output_index": 0,
+                        "content_index": 0,
+                    }
+                    yield (
+                        f"event: response.output_text.delta\ndata: {json.dumps(delta_event)}\n\n"
+                    )
+
+        assistant_content = "".join(assistant_text_parts).strip()
+        if not assistant_content and chunks_buffer:
+            assistant_content = claude_cli.parse_claude_message(chunks_buffer) or ""
+            assistant_content = MessageAdapter.filter_content(assistant_content)
+
+        if actual_session_id and assistant_content:
+            assistant_message = Message(role="assistant", content=assistant_content)
+            session_manager.add_assistant_response(actual_session_id, assistant_message)
+
+        token_usage = claude_cli.estimate_token_usage(prompt, assistant_content, request.model)
+        usage = {
+            "input_tokens": token_usage["prompt_tokens"],
+            "output_tokens": token_usage["completion_tokens"],
+            "total_tokens": token_usage["total_tokens"],
+        }
+
+        response_completed = {
+            "id": request_id,
+            "object": "response",
+            "created": created_ts,
+            "model": request.model,
+            "status": "completed",
+            "output": _build_responses_output(assistant_content, output_item_id),
+            "usage": usage,
+        }
+        yield f"event: response.completed\ndata: {json.dumps(response_completed)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    except Exception as e:
+        logger.error(f"Responses streaming error: {e}")
+        error_chunk = {"error": {"message": str(e), "type": "streaming_error"}}
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+
+
 @app.post("/v1/chat/completions")
 @rate_limit_endpoint("chat")
 async def chat_completions(
@@ -757,6 +971,160 @@ async def chat_completions(
         raise
     except Exception as e:
         logger.error(f"Chat completion error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/responses")
+@rate_limit_endpoint("chat")
+async def responses_endpoint(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """OpenAI Responses API compatible endpoint."""
+    await verify_api_key(request, credentials)
+
+    auth_valid, auth_info = validate_claude_code_auth()
+    if not auth_valid:
+        error_detail = {
+            "message": "Claude Code authentication failed",
+            "errors": auth_info.get("errors", []),
+            "method": auth_info.get("method", "none"),
+            "help": "Check /v1/auth/status for detailed authentication information",
+        }
+        raise HTTPException(status_code=503, detail=error_detail)
+
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Invalid request body")
+
+        model = body.get("model") or get_default_model()
+        stream = bool(body.get("stream", False))
+        temperature = body.get("temperature", 1.0)
+        top_p = body.get("top_p", 1.0)
+        max_output_tokens = body.get("max_output_tokens") or body.get("max_tokens")
+        user = body.get("user")
+        session_id = body.get("session_id")
+
+        messages = []
+        if "messages" in body:
+            messages = [Message(**msg) for msg in body.get("messages", [])]
+        else:
+            messages = _messages_from_responses_input(body.get("input"))
+
+        instructions = body.get("instructions") or body.get("system") or body.get("system_prompt")
+        if instructions:
+            messages = [Message(role="system", content=instructions)] + messages
+
+        if not messages:
+            raise HTTPException(status_code=400, detail="Missing input/messages for /v1/responses")
+
+        enable_tools = bool(body.get("enable_tools")) or bool(body.get("tools"))
+
+        request_body = ChatCompletionRequest(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            top_p=top_p,
+            stream=stream,
+            max_completion_tokens=max_output_tokens,
+            user=user,
+            session_id=session_id,
+            enable_tools=enable_tools,
+        )
+
+        request_id = f"resp_{uuid.uuid4().hex[:24]}"
+        claude_headers = ParameterValidator.extract_claude_headers(dict(request.headers))
+
+        if request_body.stream:
+            return StreamingResponse(
+                generate_responses_stream(request_body, request_id, claude_headers),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                },
+            )
+
+        all_messages, actual_session_id = session_manager.process_messages(
+            request_body.messages, request_body.session_id
+        )
+
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+
+        sampling_instructions = request_body.get_sampling_instructions()
+        if sampling_instructions:
+            if system_prompt:
+                system_prompt = f"{system_prompt}\n\n{sampling_instructions}"
+            else:
+                system_prompt = sampling_instructions
+
+        prompt = MessageAdapter.filter_content(prompt)
+        if system_prompt:
+            system_prompt = MessageAdapter.filter_content(system_prompt)
+
+        claude_options = request_body.to_claude_options()
+        if claude_headers:
+            claude_options.update(claude_headers)
+
+        if claude_options.get("model"):
+            ParameterValidator.validate_model(claude_options["model"])
+
+        if not request_body.enable_tools:
+            claude_options["disallowed_tools"] = CLAUDE_TOOLS
+            claude_options["max_turns"] = 1
+        else:
+            claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
+            claude_options["permission_mode"] = "bypassPermissions"
+
+        chunks = []
+        async for chunk in claude_cli.run_completion(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=claude_options.get("model"),
+            max_turns=claude_options.get("max_turns", 10),
+            allowed_tools=claude_options.get("allowed_tools"),
+            disallowed_tools=claude_options.get("disallowed_tools"),
+            permission_mode=claude_options.get("permission_mode"),
+            stream=False,
+        ):
+            chunks.append(chunk)
+
+        raw_assistant_content = claude_cli.parse_claude_message(chunks)
+        if not raw_assistant_content:
+            raise HTTPException(status_code=500, detail="No response from Claude Code")
+
+        assistant_content = MessageAdapter.filter_content(raw_assistant_content)
+
+        if actual_session_id:
+            assistant_message = Message(role="assistant", content=assistant_content)
+            session_manager.add_assistant_response(actual_session_id, assistant_message)
+
+        token_usage = claude_cli.estimate_token_usage(prompt, assistant_content, request_body.model)
+        usage = {
+            "input_tokens": token_usage["prompt_tokens"],
+            "output_tokens": token_usage["completion_tokens"],
+            "total_tokens": token_usage["total_tokens"],
+        }
+
+        output_item_id = f"msg_{uuid.uuid4().hex[:24]}"
+        response = {
+            "id": request_id,
+            "object": "response",
+            "created": int(datetime.now().timestamp()),
+            "model": request_body.model,
+            "status": "completed",
+            "output": _build_responses_output(assistant_content, output_item_id),
+            "output_text": assistant_content,
+            "usage": usage,
+        }
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Responses API error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
