@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Any, Union, Literal
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from datetime import datetime
 import uuid
 import logging
@@ -17,19 +17,49 @@ def get_default_model():
 
 class ContentPart(BaseModel):
     """Content part for multimodal messages (OpenAI format)."""
+    model_config = ConfigDict(extra="ignore")
 
     type: Literal["text"]
     text: str
 
 
 class Message(BaseModel):
-    role: Literal["system", "user", "assistant"]
-    content: Union[str, List[ContentPart]]
+    model_config = ConfigDict(extra="ignore")
+
+    role: Literal["system", "user", "assistant", "developer", "tool"]
+    content: Optional[Union[str, List[ContentPart]]] = None
     name: Optional[str] = None
+    tool_calls: Optional[List[Any]] = Field(
+        default=None,
+        description="Tool calls made by the assistant (OpenAI format)",
+    )
+    tool_call_id: Optional[str] = Field(
+        default=None,
+        description="Tool call ID this message is responding to (for role=tool)",
+    )
 
     @model_validator(mode="after")
     def normalize_content(self):
         """Convert array content to string for Claude Code compatibility."""
+        # Treat 'developer' role as 'system' for Claude compatibility
+        if self.role == "developer":
+            self.role = "system"
+        # Treat 'tool' role as 'user' for Claude compatibility
+        # Include tool_call_id context so Claude knows which tool result this is
+        if self.role == "tool":
+            tool_result_prefix = ""
+            if self.tool_call_id:
+                tool_result_prefix = f"[Tool result for call {self.tool_call_id}]\n"
+            if self.name:
+                tool_result_prefix += f"[Tool: {self.name}]\n"
+            self.role = "user"
+            if self.content is None:
+                self.content = tool_result_prefix or ""
+            else:
+                self.content = f"{tool_result_prefix}{self.content}" if tool_result_prefix else self.content
+        # Handle null content (e.g. assistant messages with tool_calls)
+        if self.content is None:
+            self.content = ""
         if isinstance(self.content, list):
             # Extract text from content parts and concatenate
             text_parts = []
@@ -54,6 +84,8 @@ class StreamOptions(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str = Field(default_factory=get_default_model)
     messages: List[Message]
     temperature: Optional[float] = Field(default=1.0, ge=0, le=2)
@@ -75,6 +107,14 @@ class ChatCompletionRequest(BaseModel):
     enable_tools: Optional[bool] = Field(
         default=False,
         description="Enable Claude Code tools (Read, Write, Bash, etc.) - disabled by default for OpenAI compatibility",
+    )
+    tools: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="OpenAI-format tool definitions. When present, enables passthrough mode with full tool access.",
+    )
+    tool_choice: Optional[Any] = Field(
+        default=None,
+        description="Tool choice preference (auto, none, or specific tool)",
     )
     stream_options: Optional[StreamOptions] = Field(
         default=None, description="Options for streaming responses"
@@ -199,10 +239,23 @@ class ChatCompletionRequest(BaseModel):
         return options
 
 
+class FunctionCall(BaseModel):
+    """OpenAI function call format within a tool call."""
+    name: str
+    arguments: str  # JSON-encoded arguments
+
+
+class ToolCall(BaseModel):
+    """OpenAI tool call format."""
+    id: str
+    type: Literal["function"] = "function"
+    function: FunctionCall
+
+
 class Choice(BaseModel):
     index: int
     message: Message
-    finish_reason: Optional[Literal["stop", "length", "content_filter", "null"]] = None
+    finish_reason: Optional[Literal["stop", "length", "content_filter", "tool_calls", "null"]] = None
 
 
 class Usage(BaseModel):
@@ -224,7 +277,7 @@ class ChatCompletionResponse(BaseModel):
 class StreamChoice(BaseModel):
     index: int
     delta: Dict[str, Any]
-    finish_reason: Optional[Literal["stop", "length", "content_filter", "null"]] = None
+    finish_reason: Optional[Literal["stop", "length", "content_filter", "tool_calls", "null"]] = None
 
 
 class ChatCompletionStreamResponse(BaseModel):

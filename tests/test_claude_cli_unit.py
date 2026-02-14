@@ -548,7 +548,7 @@ class TestClaudeCodeCLIRunCompletion:
 
             assert len(captured_options) == 1
             opts = captured_options[0]
-            assert opts.system_prompt == {"type": "text", "text": "You are helpful"}
+            assert opts.system_prompt == "You are helpful"
 
     @pytest.mark.asyncio
     async def test_run_completion_with_model(self, cli_instance):

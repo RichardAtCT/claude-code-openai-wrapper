@@ -104,6 +104,7 @@ class ClaudeCodeCLI:
         session_id: Optional[str] = None,
         continue_session: bool = False,
         permission_mode: Optional[str] = None,
+        mcp_servers: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run Claude Agent using the Python SDK and yield response chunks."""
 
@@ -123,13 +124,14 @@ class ClaudeCodeCLI:
                 if model:
                     options.model = model
 
-                # Set system prompt - CLAUDE AGENT SDK STRUCTURED FORMAT
-                # Use structured format as per SDK documentation
+                # Set system prompt
+                # SDK's _build_command only handles: None, str, or {"type": "preset", "append": "..."}
+                # Passing a plain string ensures --system-prompt flag is added to CLI command
                 if system_prompt:
-                    options.system_prompt = {"type": "text", "text": system_prompt}
+                    options.system_prompt = system_prompt
                 else:
-                    # Use Claude Code preset to maintain expected behavior
-                    options.system_prompt = {"type": "preset", "preset": "claude_code"}
+                    # No custom prompt - let Claude Code use its default behavior
+                    options.system_prompt = None
 
                 # Set tool restrictions
                 if allowed_tools:
@@ -140,6 +142,10 @@ class ClaudeCodeCLI:
                 # Set permission mode (needed for tool execution in API context)
                 if permission_mode:
                     options.permission_mode = permission_mode
+
+                # Set MCP servers (for OpenClaw tool bridge)
+                if mcp_servers:
+                    options.mcp_servers = mcp_servers
 
                 # Handle session continuity
                 if continue_session:
