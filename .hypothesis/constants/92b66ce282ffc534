@@ -1,0 +1,4 @@
+# file: /home/tekron/claude-code-openai-wrapper/src/openclaw_bridge.py
+# hypothesis_version: 6.148.8
+
+['1.0.0', 'arguments', 'assistant', 'choices', 'content', 'delta', 'description', 'finish_reason', 'function', 'id', 'index', 'input', 'message', 'model', 'name', 'object', 'openclaw_tools', 'parameters', 'properties', 'result', 'subtype', 'success', 'text', 'tool_calls', 'tool_use', 'type']

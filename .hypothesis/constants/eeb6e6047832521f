@@ -1,0 +1,4 @@
+# file: /home/tekron/claude-code-openai-wrapper/src/constants.py
+# hypothesis_version: 6.148.8
+
+[100, 200, 8000, 600000, 'Bash', 'BashOutput', 'DEFAULT_MODEL', 'Edit', 'Glob', 'Grep', 'KillShell', 'NotebookEdit', 'Read', 'Skill', 'SlashCommand', 'Task', 'TodoWrite', 'WebFetch', 'WebSearch', 'Write', 'claude-opus-4-6', 'claude_code', 'preset', 'text']

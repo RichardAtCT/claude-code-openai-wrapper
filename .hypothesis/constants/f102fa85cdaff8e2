@@ -1,0 +1,4 @@
+# file: /home/tekron/claude-code-openai-wrapper/src/mcp_client.py
+# hypothesis_version: 6.148.8
+
+['arguments', 'connected', 'connected_servers', 'description', 'enabled', 'inputSchema', 'input_schema', 'mcp_available', 'mimeType', 'name', 'prompts', 'registered_servers', 'resources', 'servers', 'tools', 'total_prompts', 'total_resources', 'total_tools', 'uri']

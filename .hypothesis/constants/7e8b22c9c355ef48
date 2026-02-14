@@ -1,0 +1,4 @@
+# file: /home/tekron/claude-code-openai-wrapper/src/claude_cli.py
+# hypothesis_version: 6.148.8
+
+[0.0, 1000, 600000, 'Hello', '_', '__dict__', 'assistant', 'claude_code', 'completion_tokens', 'content', 'data', 'duration_ms', 'error_message', 'init', 'is_error', 'message', 'model', 'num_turns', 'preset', 'prompt_tokens', 'result', 'session_id', 'subtype', 'success', 'system', 'text', 'total_cost_usd', 'total_tokens', 'type']

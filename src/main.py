@@ -24,6 +24,8 @@ from src.models import (
     Message,
     Usage,
     StreamChoice,
+    FunctionCall,
+    ToolCall,
     SessionListResponse,
     ToolListResponse,
     ToolMetadataResponse,
@@ -46,12 +48,14 @@ from src.parameter_validator import ParameterValidator, CompatibilityReporter
 from src.session_manager import session_manager
 from src.tool_manager import tool_manager
 from src.mcp_client import mcp_client, MCPServerConfig
+# OpenClaw bridge available for future MCP-based tool passthrough
+# from src.openclaw_bridge import openai_tools_to_mcp_server
 from src.rate_limiter import (
     limiter,
     rate_limit_exceeded_handler,
     rate_limit_endpoint,
 )
-from src.constants import CLAUDE_MODELS, CLAUDE_TOOLS, DEFAULT_ALLOWED_TOOLS
+from src.constants import CLAUDE_MODELS, CLAUDE_TOOLS, DEFAULT_ALLOWED_TOOLS, PASSTHROUGH_ALLOWED_TOOLS
 
 # Load environment variables
 load_dotenv()
@@ -410,10 +414,14 @@ async def generate_streaming_response(
                 system_prompt = sampling_instructions
             logger.debug(f"Added sampling instructions: {sampling_instructions}")
 
-        # Filter content for unsupported features
-        prompt = MessageAdapter.filter_content(prompt)
-        if system_prompt:
-            system_prompt = MessageAdapter.filter_content(system_prompt)
+        # Detect passthrough mode: when caller sends tools (e.g. OpenClaw agent framework)
+        passthrough_mode = bool(request.tools)
+
+        # Filter content for unsupported features (skip in passthrough mode)
+        if not passthrough_mode:
+            prompt = MessageAdapter.filter_content(prompt)
+            if system_prompt:
+                system_prompt = MessageAdapter.filter_content(system_prompt)
 
         # Get Claude Agent SDK options from request
         claude_options = request.to_claude_options()
@@ -426,23 +434,39 @@ async def generate_streaming_response(
         if claude_options.get("model"):
             ParameterValidator.validate_model(claude_options["model"])
 
-        # Handle tools - disabled by default for OpenAI compatibility
-        if not request.enable_tools:
-            # Disable all tools by using CLAUDE_TOOLS constant
-            claude_options["disallowed_tools"] = CLAUDE_TOOLS
-            claude_options["max_turns"] = 1  # Single turn for Q&A
-            logger.info("Tools disabled (default behavior for OpenAI compatibility)")
-        else:
+        # Handle tools based on mode
+        if passthrough_mode:
+            # Passthrough mode: caller sent tools (e.g. OpenClaw agent framework).
+            # Enable Claude's built-in tools so it can fulfill requests using Read, Bash, etc.
+            # The caller's tool definitions are embedded in the system prompt text by the
+            # agent framework, so Claude sees them and outputs text-based tool invocations
+            # that the framework parses on its side.
+            claude_options["allowed_tools"] = PASSTHROUGH_ALLOWED_TOOLS
+            claude_options["permission_mode"] = "bypassPermissions"
+            # Allow many turns so the model can complete complex multi-step tasks
+            claude_options["max_turns"] = 50
+            logger.info(
+                f"Passthrough mode: {len(PASSTHROUGH_ALLOWED_TOOLS)} built-in tools enabled, "
+                f"{len(request.tools)} caller tools detected (handled via system prompt)"
+            )
+        elif request.enable_tools:
             # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
             claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
             # Set permission mode to bypass prompts (required for API/headless usage)
             claude_options["permission_mode"] = "bypassPermissions"
             logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
+        else:
+            # Disable all tools by using CLAUDE_TOOLS constant
+            claude_options["disallowed_tools"] = CLAUDE_TOOLS
+            claude_options["max_turns"] = 1  # Single turn for Q&A
+            logger.info("Tools disabled (default behavior for OpenAI compatibility)")
 
         # Run Claude Code
         chunks_buffer = []
         role_sent = False  # Track if we've sent the initial role chunk
         content_sent = False  # Track if we've sent any content
+        tool_calls_collected = []  # Collect tool_use blocks for passthrough
+        tool_call_index = 0  # Track tool call index for streaming deltas
 
         async for chunk in claude_cli.run_completion(
             prompt=prompt,
@@ -488,6 +512,75 @@ async def generate_streaming_response(
                 # Handle content blocks
                 if isinstance(content, list):
                     for block in content:
+                        # === TOOL CALL PASSTHROUGH ===
+                        # Detect ToolUseBlock from Claude Agent SDK and convert to
+                        # OpenAI tool_calls format for agent framework passthrough
+                        block_type = getattr(block, "type", None) or (
+                            block.get("type") if isinstance(block, dict) else None
+                        )
+
+                        if block_type == "tool_use" and passthrough_mode:
+                            # Extract tool_use data from either object or dict format
+                            if hasattr(block, "id"):
+                                tc_id = block.id
+                                tc_name = block.name
+                                tc_input = block.input
+                            else:
+                                tc_id = block.get("id", f"call_{uuid.uuid4().hex[:24]}")
+                                tc_name = block.get("name", "")
+                                tc_input = block.get("input", {})
+
+                            # Strip MCP namespace prefix if present
+                            # Claude returns "mcp__openclaw_tools__cron" but caller expects "cron"
+                            mcp_prefix = "mcp__openclaw_tools__"
+                            if tc_name.startswith(mcp_prefix):
+                                tc_name = tc_name[len(mcp_prefix):]
+
+                            # Only passthrough tool calls for external (caller) tools
+                            # Skip Claude's built-in tool calls (Read, Bash, etc.)
+                            if external_tool_names and tc_name not in external_tool_names:
+                                logger.debug(f"Skipping built-in tool call: {tc_name}")
+                                continue
+
+                            tc_args = json.dumps(tc_input) if isinstance(tc_input, dict) else str(tc_input)
+
+                            # Collect for finish_reason decision
+                            tool_calls_collected.append({
+                                "id": tc_id,
+                                "name": tc_name,
+                                "arguments": tc_args,
+                            })
+
+                            # Emit OpenAI-format tool_calls delta
+                            # First chunk: includes function name and id
+                            tc_delta = {
+                                "tool_calls": [{
+                                    "index": tool_call_index,
+                                    "id": tc_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc_name,
+                                        "arguments": tc_args,
+                                    },
+                                }]
+                            }
+                            tc_chunk = ChatCompletionStreamResponse(
+                                id=request_id,
+                                model=request.model,
+                                choices=[
+                                    StreamChoice(
+                                        index=0,
+                                        delta=tc_delta,
+                                        finish_reason=None,
+                                    )
+                                ],
+                            )
+                            yield f"data: {tc_chunk.model_dump_json()}\n\n"
+                            tool_call_index += 1
+                            content_sent = True
+                            logger.info(f"Passthrough tool_call emitted: {tc_name}({tc_args[:100]}...)")
+                            continue
+
                         # Handle TextBlock objects from Claude Agent SDK
                         if hasattr(block, "text"):
                             raw_text = block.text
@@ -497,8 +590,11 @@ async def generate_streaming_response(
                         else:
                             continue
 
-                        # Filter out tool usage and thinking blocks
-                        filtered_text = MessageAdapter.filter_content(raw_text)
+                        # Filter out tool usage and thinking blocks (skip in passthrough)
+                        if passthrough_mode:
+                            filtered_text = raw_text
+                        else:
+                            filtered_text = MessageAdapter.filter_content(raw_text)
 
                         if filtered_text and not filtered_text.isspace():
                             # Create streaming chunk
@@ -518,8 +614,11 @@ async def generate_streaming_response(
                             content_sent = True
 
                 elif isinstance(content, str):
-                    # Filter out tool usage and thinking blocks
-                    filtered_content = MessageAdapter.filter_content(content)
+                    # Filter out tool usage and thinking blocks (skip in passthrough)
+                    if passthrough_mode:
+                        filtered_content = content
+                    else:
+                        filtered_content = MessageAdapter.filter_content(content)
 
                     if filtered_content and not filtered_content.isspace():
                         # Create streaming chunk
@@ -551,20 +650,31 @@ async def generate_streaming_response(
             yield f"data: {initial_chunk.model_dump_json()}\n\n"
             role_sent = True
 
-        # If we sent role but no content, send a minimal response
+        # If we sent role but no content (and no tool calls), try to extract from parse_claude_message
+        # This can happen when the SDK returns only tool_use blocks with no text
         if role_sent and not content_sent:
+            # Try to extract any text from the collected chunks
+            fallback_text = None
+            if chunks_buffer:
+                fallback_text = claude_cli.parse_claude_message(chunks_buffer)
+
+            if not fallback_text:
+                fallback_text = "I completed my internal processing but didn't produce a text response. Please try rephrasing your request or asking me to explain what I found."
+                logger.warning("Fallback response triggered: SDK returned no text content blocks")
+
             fallback_chunk = ChatCompletionStreamResponse(
                 id=request_id,
                 model=request.model,
                 choices=[
                     StreamChoice(
                         index=0,
-                        delta={"content": "I'm unable to provide a response at the moment."},
+                        delta={"content": fallback_text},
                         finish_reason=None,
                     )
                 ],
             )
             yield f"data: {fallback_chunk.model_dump_json()}\n\n"
+            content_sent = True
 
         # Extract assistant response from all chunks
         assistant_content = None
@@ -589,11 +699,14 @@ async def generate_streaming_response(
             )
             logger.debug(f"Estimated usage: {usage_data}")
 
+        # Determine finish_reason: "tool_calls" if we emitted tool calls, "stop" otherwise
+        finish_reason = "tool_calls" if tool_calls_collected else "stop"
+
         # Send final chunk with finish reason and optionally usage data
         final_chunk = ChatCompletionStreamResponse(
             id=request_id,
             model=request.model,
-            choices=[StreamChoice(index=0, delta={}, finish_reason="stop")],
+            choices=[StreamChoice(index=0, delta={}, finish_reason=finish_reason)],
             usage=usage_data,
         )
         yield f"data: {final_chunk.model_dump_json()}\n\n"
@@ -672,10 +785,14 @@ async def chat_completions(
                     system_prompt = sampling_instructions
                 logger.debug(f"Added sampling instructions: {sampling_instructions}")
 
-            # Filter content
-            prompt = MessageAdapter.filter_content(prompt)
-            if system_prompt:
-                system_prompt = MessageAdapter.filter_content(system_prompt)
+            # Detect passthrough mode
+            passthrough_mode = bool(request_body.tools)
+
+            # Filter content (skip in passthrough mode)
+            if not passthrough_mode:
+                prompt = MessageAdapter.filter_content(prompt)
+                if system_prompt:
+                    system_prompt = MessageAdapter.filter_content(system_prompt)
 
             # Get Claude Agent SDK options from request
             claude_options = request_body.to_claude_options()
@@ -688,18 +805,29 @@ async def chat_completions(
             if claude_options.get("model"):
                 ParameterValidator.validate_model(claude_options["model"])
 
-            # Handle tools - disabled by default for OpenAI compatibility
-            if not request_body.enable_tools:
-                # Disable all tools by using CLAUDE_TOOLS constant
-                claude_options["disallowed_tools"] = CLAUDE_TOOLS
-                claude_options["max_turns"] = 1  # Single turn for Q&A
-                logger.info("Tools disabled (default behavior for OpenAI compatibility)")
-            else:
+            # Handle tools based on mode
+            if passthrough_mode:
+                # Passthrough mode: caller sent tools (e.g. OpenClaw agent framework).
+                # Enable Claude's built-in tools. Caller's tool definitions are in the
+                # system prompt text, so Claude outputs text-based invocations for them.
+                claude_options["allowed_tools"] = PASSTHROUGH_ALLOWED_TOOLS
+                claude_options["permission_mode"] = "bypassPermissions"
+                claude_options["max_turns"] = 50
+                logger.info(
+                    f"Passthrough mode (non-streaming): {len(PASSTHROUGH_ALLOWED_TOOLS)} built-in tools enabled, "
+                    f"{len(request_body.tools)} caller tools detected (handled via system prompt)"
+                )
+            elif request_body.enable_tools:
                 # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
                 claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
                 # Set permission mode to bypass prompts (required for API/headless usage)
                 claude_options["permission_mode"] = "bypassPermissions"
                 logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
+            else:
+                # Disable all tools by using CLAUDE_TOOLS constant
+                claude_options["disallowed_tools"] = CLAUDE_TOOLS
+                claude_options["max_turns"] = 1  # Single turn for Q&A
+                logger.info("Tools disabled (default behavior for OpenAI compatibility)")
 
             # Collect all chunks
             chunks = []
@@ -715,14 +843,55 @@ async def chat_completions(
             ):
                 chunks.append(chunk)
 
-            # Extract assistant message
+            # Extract assistant message text
             raw_assistant_content = claude_cli.parse_claude_message(chunks)
 
-            if not raw_assistant_content:
+            # Extract tool_use blocks from chunks for passthrough mode
+            # Note: In the current architecture, Claude's built-in tool calls are
+            # handled internally by the SDK. This extraction catches any ToolUseBlock
+            # that surfaces in the response (future MCP bridge support).
+            tool_calls_list = []
+            if passthrough_mode:
+                for chunk in chunks:
+                    content = None
+                    if chunk.get("type") == "assistant" and "message" in chunk:
+                        message = chunk["message"]
+                        if isinstance(message, dict) and "content" in message:
+                            content = message["content"]
+                    elif "content" in chunk and isinstance(chunk["content"], list):
+                        content = chunk["content"]
+
+                    if content and isinstance(content, list):
+                        for block in content:
+                            block_type = getattr(block, "type", None) or (
+                                block.get("type") if isinstance(block, dict) else None
+                            )
+                            if block_type == "tool_use":
+                                if hasattr(block, "id"):
+                                    tc_id = block.id
+                                    tc_name = block.name
+                                    tc_input = block.input
+                                else:
+                                    tc_id = block.get("id", f"call_{uuid.uuid4().hex[:24]}")
+                                    tc_name = block.get("name", "")
+                                    tc_input = block.get("input", {})
+
+                                tc_args = json.dumps(tc_input) if isinstance(tc_input, dict) else str(tc_input)
+                                tool_calls_list.append(
+                                    ToolCall(
+                                        id=tc_id,
+                                        function=FunctionCall(name=tc_name, arguments=tc_args),
+                                    )
+                                )
+
+            if not raw_assistant_content and not tool_calls_list:
                 raise HTTPException(status_code=500, detail="No response from Claude Code")
 
-            # Filter out tool usage and thinking blocks
-            assistant_content = MessageAdapter.filter_content(raw_assistant_content)
+            # Filter out tool usage and thinking blocks (skip in passthrough)
+            if passthrough_mode:
+                assistant_content = raw_assistant_content or ""
+            else:
+                assistant_content = MessageAdapter.filter_content(raw_assistant_content or "")
 
             # Add assistant response to session if using session mode
             if actual_session_id:
@@ -733,23 +902,37 @@ async def chat_completions(
             prompt_tokens = MessageAdapter.estimate_tokens(prompt)
             completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
 
-            # Create response
-            response = ChatCompletionResponse(
-                id=request_id,
-                model=request_body.model,
-                choices=[
-                    Choice(
-                        index=0,
-                        message=Message(role="assistant", content=assistant_content),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=Usage(
+            # Determine finish_reason
+            finish_reason = "tool_calls" if tool_calls_list else "stop"
+
+            # Build response message
+            response_message = Message(role="assistant", content=assistant_content or None)
+
+            # Create response - include tool_calls in the choice if present
+            choice_data = {
+                "index": 0,
+                "message": response_message,
+                "finish_reason": finish_reason,
+            }
+            response_dict = {
+                "id": request_id,
+                "model": request_body.model,
+                "choices": [Choice(**choice_data)],
+                "usage": Usage(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     total_tokens=prompt_tokens + completion_tokens,
                 ),
-            )
+            }
+            response = ChatCompletionResponse(**response_dict)
+
+            # Inject tool_calls into the serialized response (bypasses Pydantic model)
+            if tool_calls_list:
+                resp_json = response.model_dump()
+                resp_json["choices"][0]["message"]["tool_calls"] = [
+                    tc.model_dump() for tc in tool_calls_list
+                ]
+                return JSONResponse(content=resp_json)
 
             return response
 

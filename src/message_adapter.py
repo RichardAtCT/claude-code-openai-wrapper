@@ -6,11 +6,18 @@ import re
 class MessageAdapter:
     """Converts between OpenAI message format and Claude Code prompts."""
 
+    # Max prompt size in characters. Keep small to avoid slow CLI responses.
+    # ~30K chars ≈ ~7.5K tokens — enough context without multi-minute waits.
+    MAX_PROMPT_CHARS = 30_000
+
     @staticmethod
     def messages_to_prompt(messages: List[Message]) -> tuple[str, Optional[str]]:
         """
         Convert OpenAI messages to Claude Code prompt format.
         Returns (prompt, system_prompt)
+
+        Truncates older conversation history if the prompt would exceed
+        the OS command-line argument size limit (ARG_MAX).
         """
         system_prompt = None
         conversation_parts = []
@@ -24,12 +31,25 @@ class MessageAdapter:
             elif message.role == "assistant":
                 conversation_parts.append(f"Assistant: {message.content}")
 
-        # Join conversation parts
-        prompt = "\n\n".join(conversation_parts)
-
-        # If the last message wasn't from the user, add a prompt for assistant
+        # If the last message wasn't from the user, add a continuation prompt
         if messages and messages[-1].role != "user":
-            prompt += "\n\nHuman: Please continue."
+            conversation_parts.append("Human: Please continue.")
+
+        # Truncate from the front (oldest messages) if prompt is too large
+        prompt = "\n\n".join(conversation_parts)
+        if len(prompt) > MessageAdapter.MAX_PROMPT_CHARS and len(conversation_parts) > 1:
+            # Always keep the last message; drop oldest until it fits
+            while len(conversation_parts) > 1:
+                conversation_parts.pop(0)
+                candidate = "[Earlier conversation truncated for length]\n\n" + "\n\n".join(
+                    conversation_parts
+                )
+                if len(candidate) <= MessageAdapter.MAX_PROMPT_CHARS:
+                    prompt = candidate
+                    break
+            else:
+                # Even a single message is too long — hard-truncate it
+                prompt = conversation_parts[0][: MessageAdapter.MAX_PROMPT_CHARS]
 
         return prompt, system_prompt
 
@@ -95,6 +115,14 @@ class MessageAdapter:
         # If content is now empty or only whitespace, provide a fallback
         if not content or content.isspace():
             return "I understand you're testing the system. How can I help you today?"
+
+        # Avoid false-positive billing error detection by downstream platforms.
+        # Some platforms rewrite responses containing "billing" + "credits"/"plans"
+        # to a billing error message. Replace with safe synonyms.
+        content = re.sub(r'\bbilling\b', 'invoicing', content, flags=re.IGNORECASE)
+        content = re.sub(r'\bBilling\b', 'Invoicing', content)
+        content = re.sub(r'\binsufficient credits\b', 'insufficient balance', content, flags=re.IGNORECASE)
+        content = re.sub(r'\bpayment required\b', 'payment needed', content, flags=re.IGNORECASE)
 
         return content
 

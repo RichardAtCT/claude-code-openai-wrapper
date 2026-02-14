@@ -1,0 +1,4 @@
+# file: /home/tekron/claude-code-openai-wrapper/src/message_adapter.py
+# hypothesis_version: 6.148.8
+
+[30000, '<args>.*?</args>', '<bash>.*?</bash>', 'Invoicing', '\\bBilling\\b', '\\bbilling\\b', '\\bpayment required\\b', '\\n\\s*\\n\\s*\\n', 'assistant', 'content', 'finish_reason', 'insufficient balance', 'invoicing', 'model', 'payment needed', 'role', 'stop', 'system', 'user']
