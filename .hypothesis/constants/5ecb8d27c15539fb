@@ -1,4 +1,0 @@
-# file: /home/tekron/claude-code-openai-wrapper/src/rate_limiter.py
-# hypothesis_version: 6.148.8
-
-[429, '/', '1', '10/minute', '15/minute', '2/minute', '30', '30/minute', 'RATE_LIMIT_ENABLED', 'Retry-After', 'auth', 'chat', 'code', 'debug', 'error', 'general', 'health', 'message', 'on', 'rate_limit_exceeded', 'retry_after', 'session', 'too_many_requests', 'true', 'type', 'yes']

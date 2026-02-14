@@ -1,4 +1,0 @@
-# file: /home/tekron/claude-code-openai-wrapper/src/auth.py
-# hypothesis_version: 6.148.8
-
-[401, '1', 'ANTHROPIC_API_KEY', 'API_KEY', 'AWS_ACCESS_KEY_ID', 'AWS_DEFAULT_REGION', 'AWS_REGION', 'Bearer', 'CLAUDE_AUTH_METHOD', 'CLOUD_ML_REGION', 'Invalid API key', 'Missing API key', 'WWW-Authenticate', 'anthropic', 'api_key', 'api_key_length', 'api_key_present', 'aws_region', 'bedrock', 'claude_cli', 'cli', 'config', 'errors', 'method', 'note', 'project_id', 'region', 'runtime_api_key', 'status', 'valid', 'vertex']

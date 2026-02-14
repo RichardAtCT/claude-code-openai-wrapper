@@ -1,4 +1,0 @@
-# file: /home/tekron/claude-code-openai-wrapper/src/models.py
-# hypothesis_version: 6.148.8
-
-[0.3, 0.5, 0.7, 0.9, 1.0, 1.5, 100, 200, 500, 4096, '-_.', 'System prompt', 'after', 'allow', 'assistant', 'chat.completion', 'command', 'content_filter', 'developer', 'end_turn', 'function', 'ignore', 'length', 'max_thinking_tokens', 'max_tokens', 'message', 'model', 'n', 'name', 'null', 'server_name', 'stop', 'stop_sequence', 'system', 'text', 'tool', 'tool_calls', 'tool_name', 'type', 'user']

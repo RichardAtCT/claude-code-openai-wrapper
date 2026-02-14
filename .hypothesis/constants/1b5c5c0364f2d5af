@@ -1,4 +1,0 @@
-# file: /home/tekron/claude-code-openai-wrapper/src/parameter_validator.py
-# hypothesis_version: 6.148.8
-
-[1.0, 100, 50000, ',', 'acceptEdits', 'allowed_tools', 'bypassPermissions', 'default', 'disallowed_tools', 'frequency_penalty', 'logit_bias', 'max_thinking_tokens', 'max_tokens', 'max_turns', 'messages', 'model', 'n', 'permission_mode', 'plan', 'presence_penalty', 'stop', 'stream', 'suggestions', 'supported_parameters', 'temperature', 'top_p', 'user (for logging)', 'warnings', 'x-claude-max-turns']

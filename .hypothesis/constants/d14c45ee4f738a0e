@@ -1,4 +1,0 @@
-# file: /home/tekron/claude-code-openai-wrapper/src/session_manager.py
-# hypothesis_version: 6.148.8
-
-['active_sessions', 'expired_sessions', 'total_messages']
