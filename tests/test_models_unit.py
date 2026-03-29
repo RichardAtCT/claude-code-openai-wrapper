@@ -10,6 +10,7 @@ import pytest
 from datetime import datetime
 from unittest.mock import patch
 
+from src.constants import CLAUDE_MODELS, DEFAULT_MODEL, FAST_MODEL
 from src.models import (
     ContentPart,
     Message,
@@ -570,3 +571,106 @@ class TestAnthropicModels:
         assert response.role == "assistant"
         assert response.stop_reason == "end_turn"
         assert response.id.startswith("msg_")
+
+
+class TestClaude46ModelSupport:
+    """Tests for FR-11: Claude 4.6 model support in constants.py.
+
+    These tests verify that Claude 4.6 model identifiers are present in
+    CLAUDE_MODELS, that DEFAULT_MODEL has been updated to a 4.6 model,
+    and that FAST_MODEL remains unchanged.
+
+    Requirement: FR-11.1, FR-11.2, FR-11.3
+    """
+
+    def test_claude_models_contains_opus_4_6(self):
+        """FR-11.1: CLAUDE_MODELS includes a claude-opus-4-6 variant.
+
+        Accepts both the alias form 'claude-opus-4-6' and a dated variant
+        such as 'claude-opus-4-6-20260301'.
+        """
+        has_opus_46 = any("opus-4-6" in model for model in CLAUDE_MODELS)
+        assert has_opus_46, (
+            "CLAUDE_MODELS must contain a claude-opus-4-6 entry "
+            "(exact alias or dated variant, e.g. 'claude-opus-4-6-20260301'). "
+            f"Current models: {CLAUDE_MODELS}"
+        )
+
+    def test_claude_models_contains_sonnet_4_6(self):
+        """FR-11.1: CLAUDE_MODELS includes a claude-sonnet-4-6 variant.
+
+        Accepts both the alias form 'claude-sonnet-4-6' and a dated variant
+        such as 'claude-sonnet-4-6-20260301'.
+        """
+        has_sonnet_46 = any("sonnet-4-6" in model for model in CLAUDE_MODELS)
+        assert has_sonnet_46, (
+            "CLAUDE_MODELS must contain a claude-sonnet-4-6 entry "
+            "(exact alias or dated variant, e.g. 'claude-sonnet-4-6-20260301'). "
+            f"Current models: {CLAUDE_MODELS}"
+        )
+
+    def test_default_model_is_4_6_family(self):
+        """FR-11.2: DEFAULT_MODEL resolves to a 4.6 model when env var is not set.
+
+        The default (env-unset) value must contain '4-6' so that clients
+        automatically use the new model generation without additional config.
+        """
+        import os
+
+        # Only meaningful when DEFAULT_MODEL env var is not overridden by caller.
+        # We test the hardcoded fallback, not the os.getenv result, by importing
+        # the raw default from the module source via the already-imported constant.
+        # If the operator has set DEFAULT_MODEL in their environment this test
+        # is skipped so it doesn't false-positive against a deliberate override.
+        env_override = os.environ.get("DEFAULT_MODEL")
+        if env_override is not None:
+            pytest.skip("DEFAULT_MODEL env var is set; skipping hardcoded-default check")
+
+        assert "4-6" in DEFAULT_MODEL, (
+            f"DEFAULT_MODEL should contain '4-6' when no env var is set. " f"Got: '{DEFAULT_MODEL}'"
+        )
+
+    def test_fast_model_is_haiku_4_5(self):
+        """FR-11.2 (stability): FAST_MODEL remains claude-haiku-4-5 after the upgrade.
+
+        The fast/cheap model alias must not silently change — consumers who
+        opt into FAST_MODEL for speed/cost reasons depend on it staying haiku-4-5.
+        """
+        assert (
+            "haiku-4-5" in FAST_MODEL
+        ), f"FAST_MODEL must still be the haiku-4-5 variant. Got: '{FAST_MODEL}'"
+
+    def test_constants_module_docstring_references_4_6_family(self):
+        """FR-11.3: constants.py module-level comments/docstring reference 4.6 models.
+
+        Stale 'latest' comments pointing only at 4.5 must be updated so that
+        developers reading the source are not misled about the current model family.
+        """
+        import inspect
+        import src.constants as constants_module
+
+        source = inspect.getsource(constants_module)
+        assert "4.6" in source or "4-6" in source, (
+            "constants.py source must reference the 4.6 model family in comments "
+            "or docstrings (e.g. '4.6' or '4-6'). Update the CLAUDE_MODELS block comment."
+        )
+
+    def test_claude_models_comment_does_not_label_4_5_as_latest(self):
+        """FR-11.3: Source comments must not label 4.5 as 'Latest' after 4.6 is added.
+
+        This guards against stale 'Latest' markers in the CLAUDE_MODELS block
+        that would mislead developers into thinking 4.5 is still the newest family.
+        """
+        import inspect
+        import src.constants as constants_module
+
+        source = inspect.getsource(constants_module)
+        # A comment like "4.5 Family (Latest" is only acceptable if 4.6 is NOT present.
+        # Once 4.6 is added the 4.5 block must no longer be labelled Latest.
+        has_46 = any("4-6" in m for m in CLAUDE_MODELS)
+        if has_46:
+            # 4.6 is present — 4.5 must not be called "Latest"
+            assert "4.5 Family (Latest" not in source and "4-5 Family (Latest" not in source, (
+                "constants.py still labels the 4.5 family as 'Latest' even though 4.6 "
+                "models are now present. Update the comment to reflect 4.6 as the current latest."
+            )
