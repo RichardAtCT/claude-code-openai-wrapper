@@ -65,6 +65,11 @@ log_level = logging.DEBUG if (DEBUG_MODE or VERBOSE) else logging.INFO
 logging.basicConfig(level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+if DEBUG_MODE:
+    logger.warning(
+        "DEBUG_MODE is enabled — request/response details will be logged. Disable in production."
+    )
+
 # Global variable to store runtime-generated API key
 runtime_api_key = None
 
@@ -264,6 +269,27 @@ app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware)
 
 
+def redact_request_headers(headers: dict) -> dict:
+    """Redact sensitive values from request headers for safe logging."""
+    redacted = dict(headers)
+    for key in list(redacted.keys()):
+        if key.lower() == "authorization":
+            redacted[key] = "[REDACTED]"
+    return redacted
+
+
+def redact_request_body(body: dict) -> dict:
+    """Redact sensitive fields from request body for safe logging."""
+    import copy
+
+    redacted = copy.deepcopy(body)
+    sensitive_fields = {"api_key", "authorization", "token", "secret", "password"}
+    for key in list(redacted.keys()):
+        if key.lower() in sensitive_fields:
+            redacted[key] = "[REDACTED]"
+    return redacted
+
+
 class DebugLoggingMiddleware(BaseHTTPMiddleware):
     """ASGI-compliant middleware for logging request/response details when debug mode is enabled."""
 
@@ -275,11 +301,11 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Log request details
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
         # Log basic request info with request ID for correlation
         logger.debug(f"🔍 [{request_id}] Incoming request: {request.method} {request.url}")
-        logger.debug(f"🔍 [{request_id}] Headers: {dict(request.headers)}")
+        logger.debug(f"🔍 [{request_id}] Headers: {redact_request_headers(dict(request.headers))}")
 
         # For POST requests, try to log body (but don't break if we can't)
         body_logged = False
@@ -295,11 +321,11 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
 
                             parsed_body = json_lib.loads(body.decode())
                             logger.debug(
-                                f"🔍 Request body: {json_lib.dumps(parsed_body, indent=2)}"
+                                f"🔍 Request body: {json_lib.dumps(redact_request_body(parsed_body), indent=2)}"
                             )
                             body_logged = True
-                        except:
-                            logger.debug(f"🔍 Request body (raw): {body.decode()[:500]}...")
+                        except Exception:
+                            logger.debug("🔍 Request body: [non-JSON, redacted]")
                             body_logged = True
             except Exception as e:
                 logger.debug(f"🔍 Could not read request body: {e}")
@@ -312,7 +338,7 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
 
             # Log response details
-            end_time = asyncio.get_event_loop().time()
+            end_time = asyncio.get_running_loop().time()
             duration = (end_time - start_time) * 1000  # Convert to milliseconds
 
             logger.debug(f"🔍 Response: {response.status_code} in {duration:.2f}ms")
@@ -320,7 +346,7 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
             return response
 
         except Exception as e:
-            end_time = asyncio.get_event_loop().time()
+            end_time = asyncio.get_running_loop().time()
             duration = (end_time - start_time) * 1000
 
             logger.debug(f"🔍 Request failed after {duration:.2f}ms: {e}")
@@ -336,11 +362,13 @@ app.add_middleware(DebugLoggingMiddleware)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle request validation errors with detailed debugging information."""
 
-    # Log the validation error details
-    logger.error(f"❌ Request validation failed for {request.method} {request.url}")
-    logger.error(f"❌ Validation errors: {exc.errors()}")
+    # Log validation error without raw input values (may contain credentials)
+    logger.error(f"Request validation failed for {request.method} {request.url}")
+    logger.error(
+        f"Validation errors: {[{k: v for k, v in e.items() if k != 'input'} for e in exc.errors()]}"
+    )
 
-    # Create detailed error response
+    # Create detailed error response — omit raw input values to prevent credential leaks
     error_details = []
     for error in exc.errors():
         location = " -> ".join(str(loc) for loc in error.get("loc", []))
@@ -349,19 +377,24 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
                 "field": location,
                 "message": error.get("msg", "Unknown validation error"),
                 "type": error.get("type", "validation_error"),
-                "input": error.get("input"),
             }
         )
 
-    # If debug mode is enabled, include the raw request body
+    # If debug mode is enabled, include redacted request info (never expose raw body)
     debug_info = {}
     if DEBUG_MODE or VERBOSE:
         try:
             body = await request.body()
             if body:
-                debug_info["raw_request_body"] = body.decode()
-        except:
-            debug_info["raw_request_body"] = "Could not read request body"
+                import json as json_lib
+
+                try:
+                    parsed = json_lib.loads(body.decode())
+                    debug_info["request_body"] = redact_request_body(parsed)
+                except Exception:
+                    debug_info["request_body"] = "[REDACTED — unparseable]"
+        except Exception:
+            debug_info["request_body"] = "[REDACTED — unreadable]"
 
     error_response = {
         "error": {

@@ -284,3 +284,14 @@ def get_claude_code_auth_info() -> Dict[str, Any]:
         "status": auth_manager.auth_status,
         "environment_variables": list(auth_manager.get_claude_code_env_vars().keys()),
     }
+
+
+def redact_key(value: str) -> str:
+    """Redact a credential value for safe logging (FR-4.1, FR-4.2).
+
+    Strings >= 8 chars show first 3 and last 3 characters with masking in between.
+    Strings < 8 chars are fully masked to avoid leaking short secrets.
+    """
+    if len(value) >= 8:
+        return f"{value[:3]}***...***{value[-3:]}"
+    return "***"
