@@ -8,6 +8,9 @@ Tests the fixes for enable_tools=true parameter:
 - DEFAULT_ALLOWED_TOOLS configuration
 """
 
+import tempfile
+from unittest.mock import patch
+
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions
 
@@ -67,11 +70,16 @@ class TestDefaultAllowedTools:
 class TestParseClaudeMessage:
     """Test parse_claude_message correctly handles multi-turn conversations."""
 
-    def test_result_message_priority(self):
-        """Test that ResultMessage.result is prioritized over AssistantMessage."""
+    def _make_cli(self):
+        """Create a ClaudeCodeCLI with sandbox check bypassed for /tmp."""
         from src.claude_cli import ClaudeCodeCLI
 
-        cli = ClaudeCodeCLI(cwd="/tmp")
+        with patch("src.claude_cli.CLAUDE_CWD_ALLOWED_BASE", "/"):
+            return ClaudeCodeCLI(cwd="/tmp")
+
+    def test_result_message_priority(self):
+        """Test that ResultMessage.result is prioritized over AssistantMessage."""
+        cli = self._make_cli()
 
         # Simulate multi-turn conversation messages
         messages = [
@@ -97,9 +105,7 @@ class TestParseClaudeMessage:
 
     def test_fallback_to_last_assistant_message(self):
         """Test fallback to last AssistantMessage when no ResultMessage."""
-        from src.claude_cli import ClaudeCodeCLI
-
-        cli = ClaudeCodeCLI(cwd="/tmp")
+        cli = self._make_cli()
 
         # Simulate messages without ResultMessage
         messages = [
@@ -118,18 +124,14 @@ class TestParseClaudeMessage:
 
     def test_handles_empty_messages(self):
         """Test handling of empty message list."""
-        from src.claude_cli import ClaudeCodeCLI
-
-        cli = ClaudeCodeCLI(cwd="/tmp")
+        cli = self._make_cli()
 
         result = cli.parse_claude_message([])
         assert result is None
 
     def test_handles_dict_content_blocks(self):
         """Test handling of dict-based content blocks (old format)."""
-        from src.claude_cli import ClaudeCodeCLI
-
-        cli = ClaudeCodeCLI(cwd="/tmp")
+        cli = self._make_cli()
 
         messages = [{"content": [{"type": "text", "text": "Hello world"}]}]
 

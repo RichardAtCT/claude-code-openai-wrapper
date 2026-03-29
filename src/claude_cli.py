@@ -7,6 +7,7 @@ from pathlib import Path
 import logging
 
 from claude_agent_sdk import query, ClaudeAgentOptions
+from src.constants import CLAUDE_CWD_ALLOWED_BASE
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ class ClaudeCodeCLI:
         # If cwd is provided (from CLAUDE_CWD env var), use it
         # Otherwise create an isolated temp directory
         if cwd:
-            self.cwd = Path(cwd)
+            self.cwd = Path(cwd).resolve()
             # Check if the directory exists
             if not self.cwd.exists():
                 logger.error(f"ERROR: Specified working directory does not exist: {self.cwd}")
@@ -27,8 +28,13 @@ class ClaudeCodeCLI:
                     "Please create the directory first or unset CLAUDE_CWD to use a temporary directory"
                 )
                 raise ValueError(f"Working directory does not exist: {self.cwd}")
-            else:
-                logger.info(f"Using CLAUDE_CWD: {self.cwd}")
+            # Sandbox check: reject paths outside the allowed base directory
+            allowed_base = Path(CLAUDE_CWD_ALLOWED_BASE).resolve()
+            if not self.cwd.is_relative_to(allowed_base):
+                raise ValueError(
+                    f"Working directory {self.cwd} is outside allowed base {allowed_base}"
+                )
+            logger.info(f"Using CLAUDE_CWD: {self.cwd}")
         else:
             # Create isolated temp directory (cross-platform)
             self.temp_dir = tempfile.mkdtemp(prefix="claude_code_workspace_")

@@ -13,11 +13,6 @@ Usage Examples:
     from src.constants import DEFAULT_ALLOWED_TOOLS
     options = {"allowed_tools": DEFAULT_ALLOWED_TOOLS}
 
-    # Use rate limits in FastAPI
-    from src.constants import RATE_LIMIT_CHAT
-    @limiter.limit(f"{RATE_LIMIT_CHAT}/minute")
-    async def chat_endpoint(): ...
-
 Note:
     - Tool configurations are managed by ToolManager (see tool_manager.py)
     - Model validation uses graceful degradation (warns but allows unknown models)
@@ -25,6 +20,7 @@ Note:
 """
 
 import os
+import tempfile
 
 # Claude Agent SDK Tool Names
 # These are the built-in tools available in the Claude Agent SDK
@@ -66,12 +62,15 @@ DEFAULT_DISALLOWED_TOOLS = [
 ]
 
 # Claude Models
-# Models supported by Claude Agent SDK (as of November 2025)
+# Models supported by Claude Agent SDK (as of March 2026)
 # NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x
 CLAUDE_MODELS = [
-    # Claude 4.5 Family (Latest - Fall 2025) - RECOMMENDED
-    "claude-opus-4-5-20250929",  # Latest Opus 4.5 - Most capable
-    "claude-sonnet-4-5-20250929",  # Recommended - best coding model
+    # Claude 4.6 Family (Latest - 2026) - RECOMMENDED
+    "claude-opus-4-6",  # Latest Opus 4.6 - Most capable
+    "claude-sonnet-4-6",  # Recommended - best coding model
+    # Claude 4.5 Family (Fall 2025)
+    "claude-opus-4-5-20250929",
+    "claude-sonnet-4-5-20250929",
     "claude-haiku-4-5-20251001",  # Fast & cheap
     # Claude 4.1
     "claude-opus-4-1-20250805",  # Upgraded Opus 4
@@ -88,7 +87,7 @@ CLAUDE_MODELS = [
 
 # Default model (recommended for most use cases)
 # Can be overridden via DEFAULT_MODEL environment variable
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-5-20250929")
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6")
 
 # Fast model (for speed/cost optimization)
 FAST_MODEL = "claude-haiku-4-5-20251001"
@@ -109,8 +108,9 @@ DEFAULT_PORT = 8000
 SESSION_CLEANUP_INTERVAL_MINUTES = 5
 SESSION_MAX_AGE_MINUTES = 60
 
-# Rate Limiting (requests per minute)
-RATE_LIMIT_DEFAULT = 60
-RATE_LIMIT_CHAT = 30
-RATE_LIMIT_MODELS = 100
-RATE_LIMIT_HEALTH = 200
+# Security Configuration
+MAX_SESSIONS = int(os.getenv("MAX_SESSIONS", "1000"))
+MAX_SESSION_MESSAGES = int(os.getenv("MAX_SESSION_MESSAGES", "100"))
+_trusted_proxies_raw = os.getenv("TRUSTED_PROXIES", "")
+TRUSTED_PROXIES = [p.strip() for p in _trusted_proxies_raw.split(",") if p.strip()]
+CLAUDE_CWD_ALLOWED_BASE = os.getenv("CLAUDE_CWD_ALLOWED_BASE", tempfile.gettempdir())
