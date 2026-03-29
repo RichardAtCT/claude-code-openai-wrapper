@@ -212,11 +212,19 @@ app = FastAPI(
 )
 
 # Configure CORS
-cors_origins = json.loads(os.getenv("CORS_ORIGINS", '["*"]'))
+try:
+    cors_origins = json.loads(os.getenv("CORS_ORIGINS", '["*"]'))
+    if not isinstance(cors_origins, list):
+        logger.warning("CORS_ORIGINS must be a JSON array, falling back to ['*']")
+        cors_origins = ["*"]
+except (json.JSONDecodeError, TypeError):
+    logger.warning("Invalid CORS_ORIGINS value, falling back to ['*']")
+    cors_origins = ["*"]
+allow_creds = "*" not in cors_origins  # No credentials with wildcard
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
+    allow_credentials=allow_creds,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -950,33 +958,36 @@ async def list_models(
 
 
 @app.post("/v1/compatibility")
-async def check_compatibility(request_body: ChatCompletionRequest):
+@rate_limit_endpoint("general")
+async def check_compatibility(request: Request, request_body: ChatCompletionRequest):
     """Check OpenAI API compatibility for a request."""
     report = CompatibilityReporter.generate_compatibility_report(request_body)
-    return {
-        "compatibility_report": report,
-        "claude_agent_sdk_options": {
-            "supported": [
-                "model",
-                "system_prompt",
-                "max_turns",
-                "allowed_tools",
-                "disallowed_tools",
-                "permission_mode",
-                "max_thinking_tokens",
-                "continue_conversation",
-                "resume",
-                "cwd",
-            ],
-            "custom_headers": [
-                "X-Claude-Max-Turns",
-                "X-Claude-Allowed-Tools",
-                "X-Claude-Disallowed-Tools",
-                "X-Claude-Permission-Mode",
-                "X-Claude-Max-Thinking-Tokens",
-            ],
-        },
-    }
+    return JSONResponse(
+        content={
+            "compatibility_report": report,
+            "claude_agent_sdk_options": {
+                "supported": [
+                    "model",
+                    "system_prompt",
+                    "max_turns",
+                    "allowed_tools",
+                    "disallowed_tools",
+                    "permission_mode",
+                    "max_thinking_tokens",
+                    "continue_conversation",
+                    "resume",
+                    "cwd",
+                ],
+                "custom_headers": [
+                    "X-Claude-Max-Turns",
+                    "X-Claude-Allowed-Tools",
+                    "X-Claude-Disallowed-Tools",
+                    "X-Claude-Permission-Mode",
+                    "X-Claude-Max-Thinking-Tokens",
+                ],
+            },
+        }
+    )
 
 
 @app.get("/health")
@@ -1000,12 +1011,13 @@ async def version_info(request: Request):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def root():
+@rate_limit_endpoint("general")
+async def root(request: Request):
     """Landing page with API documentation."""
     from src import __version__
 
     auth_info = get_claude_code_auth_info()
-    auth_method = auth_info.get("method", "unknown")
+    auth_method = "configured"  # Do not reveal auth method to unauthenticated visitors (FR-7.2)
     auth_valid = auth_info.get("status", {}).get("valid", False)
     status_color = "#22c55e" if auth_valid else "#ef4444"
     status_text = "Connected" if auth_valid else "Not Connected"
@@ -1608,8 +1620,12 @@ async def root():
 
 @app.post("/v1/debug/request")
 @rate_limit_endpoint("debug")
-async def debug_request_validation(request: Request):
+async def debug_request_validation(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
     """Debug endpoint to test request validation and see what's being sent."""
+    await verify_api_key(request, credentials)
     try:
         # Get the raw request body
         body = await request.body()
@@ -1630,7 +1646,10 @@ async def debug_request_validation(request: Request):
         if parsed_body:
             try:
                 chat_request = ChatCompletionRequest(**parsed_body)
-                validation_result = {"valid": True, "validated_data": chat_request.model_dump()}
+                validation_result = {
+                    "valid": True,
+                    "validated_data": redact_request_body(chat_request.model_dump()),
+                }
             except ValidationError as e:
                 validation_result = {
                     "valid": False,
@@ -1647,12 +1666,12 @@ async def debug_request_validation(request: Request):
 
         return {
             "debug_info": {
-                "headers": dict(request.headers),
+                "headers": redact_request_headers(dict(request.headers)),
                 "method": request.method,
                 "url": str(request.url),
-                "raw_body": raw_body,
+                "raw_body": "[REDACTED — use parsed_body]",
                 "json_parse_error": json_error,
-                "parsed_body": parsed_body,
+                "parsed_body": redact_request_body(parsed_body) if parsed_body else parsed_body,
                 "validation_result": validation_result,
                 "debug_mode_enabled": DEBUG_MODE or VERBOSE,
                 "example_valid_request": {
@@ -1667,7 +1686,7 @@ async def debug_request_validation(request: Request):
         return {
             "debug_info": {
                 "error": f"Debug endpoint error: {str(e)}",
-                "headers": dict(request.headers),
+                "headers": redact_request_headers(dict(request.headers)),
                 "method": request.method,
                 "url": str(request.url),
             }
@@ -1678,23 +1697,9 @@ async def debug_request_validation(request: Request):
 @rate_limit_endpoint("auth")
 async def get_auth_status(request: Request):
     """Get Claude Code authentication status."""
-    from src.auth import auth_manager
-
     auth_info = get_claude_code_auth_info()
-    active_api_key = auth_manager.get_api_key()
-
-    return {
-        "claude_code_auth": auth_info,
-        "server_info": {
-            "api_key_required": bool(active_api_key),
-            "api_key_source": (
-                "environment"
-                if os.getenv("API_KEY")
-                else ("runtime" if runtime_api_key else "none")
-            ),
-            "version": "1.0.0",
-        },
-    }
+    auth_valid = auth_info.get("status", {}).get("valid", False)
+    return {"authenticated": auth_valid}
 
 
 @app.get("/v1/sessions/stats")
