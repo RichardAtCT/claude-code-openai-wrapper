@@ -108,8 +108,9 @@ DEFAULT_PORT = 8000
 SESSION_CLEANUP_INTERVAL_MINUTES = 5
 SESSION_MAX_AGE_MINUTES = 60
 
-# Rate Limiting (requests per minute)
-RATE_LIMIT_DEFAULT = 60
-RATE_LIMIT_CHAT = 30
-RATE_LIMIT_MODELS = 100
-RATE_LIMIT_HEALTH = 200
+# Security Configuration
+MAX_SESSIONS = int(os.getenv("MAX_SESSIONS", "1000"))
+MAX_SESSION_MESSAGES = int(os.getenv("MAX_SESSION_MESSAGES", "100"))
+_trusted_proxies_raw = os.getenv("TRUSTED_PROXIES", "")
+TRUSTED_PROXIES = [p.strip() for p in _trusted_proxies_raw.split(",") if p.strip()]
+CLAUDE_CWD_ALLOWED_BASE = os.getenv("CLAUDE_CWD_ALLOWED_BASE", tempfile.gettempdir())

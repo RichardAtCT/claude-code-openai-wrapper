@@ -6,8 +6,13 @@ from dataclasses import dataclass, field
 from threading import Lock
 
 from src.models import Message, SessionInfo
+from src.constants import MAX_SESSIONS, MAX_SESSION_MESSAGES
 
 logger = logging.getLogger(__name__)
+
+
+class SessionLimitExceeded(ValueError):
+    """Raised when the maximum number of concurrent sessions has been reached."""
 
 
 @dataclass
@@ -19,6 +24,7 @@ class Session:
     created_at: datetime = field(default_factory=datetime.utcnow)
     last_accessed: datetime = field(default_factory=datetime.utcnow)
     expires_at: datetime = field(default_factory=lambda: datetime.utcnow() + timedelta(hours=1))
+    max_messages: Optional[int] = None
 
     def touch(self):
         """Update last accessed time and extend expiration."""
@@ -28,6 +34,8 @@ class Session:
     def add_messages(self, messages: List[Message]):
         """Add new messages to the session."""
         self.messages.extend(messages)
+        if self.max_messages is not None and len(self.messages) > self.max_messages:
+            self.messages = self.messages[-self.max_messages :]
         self.touch()
 
     def get_all_messages(self) -> List[Message]:
@@ -52,11 +60,19 @@ class Session:
 class SessionManager:
     """Manages conversation sessions with automatic cleanup."""
 
-    def __init__(self, default_ttl_hours: int = 1, cleanup_interval_minutes: int = 5):
+    def __init__(
+        self,
+        default_ttl_hours: int = 1,
+        cleanup_interval_minutes: int = 5,
+        max_sessions: int = MAX_SESSIONS,
+        max_session_messages: int = MAX_SESSION_MESSAGES,
+    ):
         self.sessions: Dict[str, Session] = {}
         self.lock = Lock()
         self.default_ttl_hours = default_ttl_hours
         self.cleanup_interval_minutes = cleanup_interval_minutes
+        self.max_sessions = max_sessions
+        self.max_session_messages = max_session_messages
         self._cleanup_task = None
 
     def start_cleanup_task(self):
@@ -93,21 +109,45 @@ class SessionManager:
                 del self.sessions[session_id]
                 logger.info(f"Cleaned up expired session: {session_id}")
 
+    def check_session_limit(self, session_id: str) -> None:
+        """Check if a new session can be created without actually creating it.
+
+        Raises SessionLimitExceeded if the limit is reached and the session_id
+        does not already exist (or is expired). Uses len(self.sessions) to match
+        the counting logic in get_or_create_session.
+        """
+        with self.lock:
+            if session_id in self.sessions and not self.sessions[session_id].is_expired():
+                return  # Existing active session — no slot needed
+            # Would need a new slot — check limit (same counting as get_or_create_session)
+            if len(self.sessions) >= self.max_sessions:
+                raise SessionLimitExceeded(
+                    f"Maximum number of sessions ({self.max_sessions}) reached"
+                )
+
     def get_or_create_session(self, session_id: str) -> Session:
         """Get existing session or create a new one."""
         with self.lock:
             if session_id in self.sessions:
                 session = self.sessions[session_id]
                 if session.is_expired():
-                    # Session expired, create new one
+                    # Session expired, create new one — check limit first
                     logger.info(f"Session {session_id} expired, creating new session")
                     del self.sessions[session_id]
-                    session = Session(session_id=session_id)
+                    if len(self.sessions) >= self.max_sessions:
+                        raise SessionLimitExceeded(
+                            f"Maximum number of sessions ({self.max_sessions}) reached"
+                        )
+                    session = Session(session_id=session_id, max_messages=self.max_session_messages)
                     self.sessions[session_id] = session
                 else:
                     session.touch()
             else:
-                session = Session(session_id=session_id)
+                if len(self.sessions) >= self.max_sessions:
+                    raise SessionLimitExceeded(
+                        f"Maximum number of sessions ({self.max_sessions}) reached"
+                    )
+                session = Session(session_id=session_id, max_messages=self.max_session_messages)
                 self.sessions[session_id] = session
                 logger.info(f"Created new session: {session_id}")
 

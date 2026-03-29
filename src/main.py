@@ -43,7 +43,7 @@ from src.claude_cli import ClaudeCodeCLI
 from src.message_adapter import MessageAdapter
 from src.auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
 from src.parameter_validator import ParameterValidator, CompatibilityReporter
-from src.session_manager import session_manager
+from src.session_manager import session_manager, SessionLimitExceeded
 from src.tool_manager import tool_manager
 from src.mcp_client import mcp_client, MCPServerConfig
 from src.rate_limiter import (
@@ -632,6 +632,15 @@ async def generate_streaming_response(
         yield f"data: {final_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
 
+    except SessionLimitExceeded:
+        error_chunk = {
+            "error": {
+                "message": f"Maximum session limit reached ({session_manager.max_sessions}). Try again later or close existing sessions.",
+                "type": "rate_limit_exceeded",
+                "code": "too_many_sessions",
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
     except Exception as e:
         logger.error(f"Streaming error: {e}")
         error_chunk = {"error": {"message": str(e), "type": "streaming_error"}}
@@ -672,15 +681,35 @@ async def chat_completions(
             compatibility_report = CompatibilityReporter.generate_compatibility_report(request_body)
             logger.debug(f"Compatibility report: {compatibility_report}")
 
+        model_recognized = ParameterValidator.is_model_recognized(request_body.model)
+
+        # Pre-check session limit before streaming branch (can't change HTTP status mid-stream)
+        if request_body.session_id:
+            try:
+                session_manager.check_session_limit(request_body.session_id)
+            except SessionLimitExceeded:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "message": f"Maximum session limit reached ({session_manager.max_sessions}). Try again later or close existing sessions.",
+                        "type": "rate_limit_exceeded",
+                        "code": "too_many_sessions",
+                    },
+                    headers={"Retry-After": "60"},
+                )
+
         if request_body.stream:
             # Return streaming response
+            streaming_headers = {
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+            if not model_recognized:
+                streaming_headers["X-Claude-Model-Warning"] = "unrecognized"
             return StreamingResponse(
                 generate_streaming_response(request_body, request_id, claude_headers),
                 media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                },
+                headers=streaming_headers,
             )
         else:
             # Non-streaming response
@@ -784,8 +813,21 @@ async def chat_completions(
                 ),
             )
 
+            response = JSONResponse(content=response_data.model_dump())
+            if not model_recognized:
+                response.headers["X-Claude-Model-Warning"] = "unrecognized"
             return response
 
+    except SessionLimitExceeded:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": f"Maximum session limit reached ({session_manager.max_sessions}). Try again later or close existing sessions.",
+                "type": "rate_limit_exceeded",
+                "code": "too_many_sessions",
+            },
+            headers={"Retry-After": "60"},
+        )
     except HTTPException:
         raise
     except Exception as e:

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 import asyncio
 
-from src.session_manager import Session, SessionManager
+from src.session_manager import Session, SessionManager, SessionLimitExceeded
 from src.models import Message
 
 
@@ -373,3 +373,220 @@ class TestSessionManagerThreadSafety:
         assert len(errors) == 0
         assert len(results) == 10
         assert len(manager.sessions) == 10
+
+
+class TestSessionManagerSessionLimit:
+    """Tests for FR-6.1 — configurable max session count enforcement."""
+
+    @pytest.fixture
+    def manager_limit_3(self):
+        """SessionManager with max_sessions=3 for easy boundary testing."""
+        return SessionManager(default_ttl_hours=1, cleanup_interval_minutes=5, max_sessions=3)
+
+    def test_manager_accepts_max_sessions_parameter(self):
+        """SessionManager can be constructed with a custom max_sessions value."""
+        manager = SessionManager(max_sessions=500)
+        assert manager.max_sessions == 500
+
+    def test_manager_max_sessions_defaults_to_constant(self):
+        """SessionManager uses MAX_SESSIONS constant as default for max_sessions."""
+        from src.constants import MAX_SESSIONS
+
+        manager = SessionManager()
+        assert manager.max_sessions == MAX_SESSIONS
+
+    def test_creating_sessions_up_to_limit_succeeds(self, manager_limit_3):
+        """Creating exactly max_sessions sessions does not raise an exception."""
+        manager_limit_3.get_or_create_session("session-1")
+        manager_limit_3.get_or_create_session("session-2")
+        manager_limit_3.get_or_create_session("session-3")
+        # All three created without exception; dict has exactly 3 entries
+        assert len(manager_limit_3.sessions) == 3
+
+    def test_creating_session_at_limit_raises_session_limit_exceeded(self, manager_limit_3):
+        """Creating a session when the limit is already reached raises SessionLimitExceeded."""
+        manager_limit_3.get_or_create_session("session-1")
+        manager_limit_3.get_or_create_session("session-2")
+        manager_limit_3.get_or_create_session("session-3")
+
+        with pytest.raises(SessionLimitExceeded):
+            manager_limit_3.get_or_create_session("session-4")
+
+    def test_session_limit_exceeded_is_raised_on_new_id_not_existing(self, manager_limit_3):
+        """SessionLimitExceeded is raised for a brand-new session ID, not when re-accessing existing."""
+        manager_limit_3.get_or_create_session("session-1")
+        manager_limit_3.get_or_create_session("session-2")
+        manager_limit_3.get_or_create_session("session-3")
+
+        # Re-accessing an existing session must NOT raise, even when at limit
+        existing = manager_limit_3.get_or_create_session("session-1")
+        assert existing.session_id == "session-1"
+
+    def test_after_expired_session_cleaned_up_new_session_can_be_created(self, manager_limit_3):
+        """Once an expired session is cleaned up, the freed slot allows a new session."""
+        manager_limit_3.get_or_create_session("session-1")
+        session2 = manager_limit_3.get_or_create_session("session-2")
+        manager_limit_3.get_or_create_session("session-3")
+
+        # Expire session-2 so that get_or_create_session will replace it
+        session2.expires_at = datetime.utcnow() - timedelta(hours=1)
+
+        # Trigger cleanup so the slot is released
+        manager_limit_3._cleanup_expired_sessions()
+
+        # Now there are only 2 active sessions; creating a new one must succeed
+        new_session = manager_limit_3.get_or_create_session("session-new")
+        assert new_session.session_id == "session-new"
+
+    def test_session_limit_exceeded_exception_is_value_error_subclass(self):
+        """SessionLimitExceeded is a subclass of ValueError per architecture spec (section 5.4)."""
+        assert issubclass(SessionLimitExceeded, ValueError)
+
+    def test_session_count_does_not_increase_past_limit(self, manager_limit_3):
+        """Session count stays at max_sessions after a failed creation attempt."""
+        manager_limit_3.get_or_create_session("session-1")
+        manager_limit_3.get_or_create_session("session-2")
+        manager_limit_3.get_or_create_session("session-3")
+
+        try:
+            manager_limit_3.get_or_create_session("session-4")
+        except SessionLimitExceeded:
+            pass
+
+        assert len(manager_limit_3.sessions) == 3
+
+
+class TestCheckSessionLimit:
+    """Tests for check_session_limit() — read-only pre-check for streaming path."""
+
+    @pytest.fixture
+    def manager_limit_3(self):
+        return SessionManager(
+            default_ttl_hours=1,
+            cleanup_interval_minutes=5,
+            max_sessions=3,
+        )
+
+    def test_existing_active_session_does_not_raise(self, manager_limit_3):
+        """check_session_limit passes for an existing active session even at limit."""
+        manager_limit_3.get_or_create_session("s1")
+        manager_limit_3.get_or_create_session("s2")
+        manager_limit_3.get_or_create_session("s3")
+        # At limit, but s1 exists and is active — should not raise
+        manager_limit_3.check_session_limit("s1")
+
+    def test_new_session_at_limit_raises(self, manager_limit_3):
+        """check_session_limit raises SessionLimitExceeded for a new session at limit."""
+        manager_limit_3.get_or_create_session("s1")
+        manager_limit_3.get_or_create_session("s2")
+        manager_limit_3.get_or_create_session("s3")
+        with pytest.raises(SessionLimitExceeded):
+            manager_limit_3.check_session_limit("s4")
+
+    def test_expired_session_at_limit_raises(self, manager_limit_3):
+        """check_session_limit raises for an expired session when all slots are full."""
+        manager_limit_3.get_or_create_session("s1")
+        manager_limit_3.get_or_create_session("s2")
+        s3 = manager_limit_3.get_or_create_session("s3")
+        s3.expires_at = datetime.utcnow() - timedelta(hours=1)
+        # s3 is expired but still in dict — slot not freed yet
+        with pytest.raises(SessionLimitExceeded):
+            manager_limit_3.check_session_limit("s3")
+
+    def test_under_limit_does_not_raise(self, manager_limit_3):
+        """check_session_limit passes when under the session limit."""
+        manager_limit_3.get_or_create_session("s1")
+        manager_limit_3.check_session_limit("s2")  # Should not raise
+
+    def test_does_not_create_session(self, manager_limit_3):
+        """check_session_limit does not actually create a session."""
+        manager_limit_3.check_session_limit("s1")
+        assert "s1" not in manager_limit_3.sessions
+
+
+class TestSessionManagerMessageLimit:
+    """Tests for FR-6.2 — configurable max message history per session."""
+
+    @pytest.fixture
+    def manager_msg_limit_5(self):
+        """SessionManager with max_session_messages=5 for easy boundary testing."""
+        return SessionManager(
+            default_ttl_hours=1,
+            cleanup_interval_minutes=5,
+            max_session_messages=5,
+        )
+
+    def _make_messages(self, count: int, prefix: str = "msg") -> list:
+        """Helper: build a list of user Messages with predictable content."""
+        return [Message(role="user", content=f"{prefix}-{i}") for i in range(count)]
+
+    def test_manager_accepts_max_session_messages_parameter(self):
+        """SessionManager can be constructed with a custom max_session_messages value."""
+        manager = SessionManager(max_session_messages=50)
+        assert manager.max_session_messages == 50
+
+    def test_manager_max_session_messages_defaults_to_constant(self):
+        """SessionManager uses MAX_SESSION_MESSAGES constant as default."""
+        from src.constants import MAX_SESSION_MESSAGES
+
+        manager = SessionManager()
+        assert manager.max_session_messages == MAX_SESSION_MESSAGES
+
+    def test_adding_messages_up_to_limit_keeps_all(self, manager_msg_limit_5):
+        """Adding exactly max_session_messages messages keeps all of them."""
+        session = manager_msg_limit_5.get_or_create_session("test-session")
+        messages = self._make_messages(5)
+        session.add_messages(messages)
+
+        assert len(session.messages) == 5
+
+    def test_adding_messages_beyond_limit_trims_to_limit(self, manager_msg_limit_5):
+        """Adding more than max_session_messages messages trims the list to the limit."""
+        session = manager_msg_limit_5.get_or_create_session("test-session")
+        messages = self._make_messages(7)
+        session.add_messages(messages)
+
+        assert len(session.messages) == 5
+
+    def test_trimming_drops_oldest_messages(self, manager_msg_limit_5):
+        """When trimming occurs the oldest messages (first added) are removed."""
+        session = manager_msg_limit_5.get_or_create_session("test-session")
+        messages = self._make_messages(7)  # msg-0 … msg-6
+        session.add_messages(messages)
+
+        # After trimming, only the 5 newest (msg-2 … msg-6) should remain
+        remaining_contents = [m.content for m in session.messages]
+        assert "msg-0" not in remaining_contents
+        assert "msg-1" not in remaining_contents
+
+    def test_trimming_retains_newest_messages(self, manager_msg_limit_5):
+        """When trimming occurs the newest messages are retained."""
+        session = manager_msg_limit_5.get_or_create_session("test-session")
+        messages = self._make_messages(7)  # msg-0 … msg-6
+        session.add_messages(messages)
+
+        remaining_contents = [m.content for m in session.messages]
+        for i in range(2, 7):  # msg-2 through msg-6 must be present
+            assert f"msg-{i}" in remaining_contents
+
+    def test_trimming_across_multiple_add_calls(self, manager_msg_limit_5):
+        """Message limit is enforced across multiple separate add_messages calls."""
+        session = manager_msg_limit_5.get_or_create_session("test-session")
+
+        # Add 3 messages in first call, then 4 more in second call (total 7 > limit of 5)
+        first_batch = self._make_messages(3, prefix="first")
+        second_batch = self._make_messages(4, prefix="second")
+
+        session.add_messages(first_batch)
+        session.add_messages(second_batch)
+
+        assert len(session.messages) == 5
+
+    def test_message_count_after_trimming_equals_limit(self, manager_msg_limit_5):
+        """After any trim, get_all_messages returns exactly max_session_messages messages."""
+        session = manager_msg_limit_5.get_or_create_session("test-session")
+        # Add well beyond the limit to exercise the trim path
+        session.add_messages(self._make_messages(20))
+
+        all_messages = session.get_all_messages()
+        assert len(all_messages) == 5
