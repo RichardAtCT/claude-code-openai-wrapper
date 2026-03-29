@@ -804,7 +804,7 @@ async def chat_completions(
             completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
 
             # Create response
-            response = ChatCompletionResponse(
+            response_data = ChatCompletionResponse(
                 id=request_id,
                 model=request_body.model,
                 choices=[
@@ -920,7 +920,7 @@ async def anthropic_messages(
         completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
 
         # Create Anthropic-format response
-        response = AnthropicMessagesResponse(
+        response_data = AnthropicMessagesResponse(
             model=request_body.model,
             content=[AnthropicTextBlock(text=assistant_content)],
             stop_reason="end_turn",
@@ -930,6 +930,9 @@ async def anthropic_messages(
             ),
         )
 
+        response = JSONResponse(content=response_data.model_dump())
+        if not ParameterValidator.is_model_recognized(request_body.model):
+            response.headers["X-Claude-Model-Warning"] = "unrecognized"
         return response
 
     except HTTPException:
