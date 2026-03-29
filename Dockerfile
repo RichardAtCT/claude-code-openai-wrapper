@@ -27,6 +27,13 @@ RUN poetry install --no-interaction
 # Stage 2: Runtime — minimal image with non-root user
 FROM python:3.12-slim
 
+# Install Node.js (required by Claude Agent SDK bundled CLI)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user
 RUN groupadd --gid 1000 appuser && \
     useradd --uid 1000 --gid appuser --create-home appuser
