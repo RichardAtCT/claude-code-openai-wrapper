@@ -446,6 +446,31 @@ def get_cli_for_model(model_name: Optional[str]):
     return claude_cli
 
 
+def get_prompt_messages(all_messages: List[Message], is_resuming: bool) -> List[Message]:
+    """
+    Get the subset of messages to send as the prompt.
+    If resuming a session, only send messages since the last assistant turn.
+    """
+    if not is_resuming or len(all_messages) <= 1:
+        return all_messages
+
+    # Find the last assistant message and take everything after it
+    last_assistant_idx = -1
+    for i in range(len(all_messages) - 2, -1, -1):
+        if all_messages[i].role == "assistant":
+            last_assistant_idx = i
+            break
+
+    # Extract new messages (usually just the last user message)
+    new_messages = all_messages[last_assistant_idx + 1:]
+    
+    # If for some reason we have no new messages, return at least the last one
+    if not new_messages and all_messages:
+        return [all_messages[-1]]
+        
+    return new_messages
+
+
 async def generate_streaming_response(
     request: ChatCompletionRequest, request_id: str, claude_headers: Optional[Dict[str, Any]] = None
 ) -> AsyncGenerator[str, None]:
@@ -458,9 +483,12 @@ async def generate_streaming_response(
         all_messages, actual_session_id = await session_manager.process_messages(
             request.messages, request.session_id
         )
+        
+        # Only send last message if we are resuming an existing session
+        prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
 
-        # Convert messages to prompt
-        prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+        # Convert messages to prompt (pass model for optimized formatting)
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request.model)
 
         # Add sampling instructions from temperature/top_p if present
         sampling_instructions = request.get_sampling_instructions()
@@ -711,8 +739,11 @@ async def generate_anthropic_streaming_response(
             messages, request.session_id
         )
 
-        # Convert messages to prompt
-        prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+        # Only send new messages if we are resuming an existing session
+        prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
+
+        # Convert messages to prompt (pass model for optimized formatting)
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request.model)
 
         # Add sampling instructions
         sampling_instructions = request.get_sampling_instructions()
@@ -931,12 +962,15 @@ async def chat_completions(
                 request_body.messages, request_body.session_id
             )
 
+            # Only send new messages if we are resuming an existing session
+            prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
+
             logger.info(
-                f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}"
+                f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}, prompt_messages={len(prompt_messages)}"
             )
 
-            # Convert messages to prompt
-            prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+            # Convert messages to prompt (pass model for optimized formatting)
+            prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request_body.model)
 
             # Add sampling instructions from temperature/top_p if present
             sampling_instructions = request_body.get_sampling_instructions()
@@ -1013,8 +1047,8 @@ async def chat_completions(
             if not raw_assistant_content:
                 raise HTTPException(status_code=500, detail="No response from Claude Code")
 
-            # Filter out tool usage and thinking blocks
-            assistant_content = MessageAdapter.filter_content(raw_assistant_content)
+            # Filter out tool usage and thinking blocks, also handle potential echoes
+            assistant_content = MessageAdapter.filter_content(raw_assistant_content, prompt_echo=prompt)
 
             # Add assistant response to session if using session mode
             if actual_session_id:
@@ -1117,8 +1151,11 @@ async def anthropic_messages(
             messages, request_body.session_id
         )
 
-        # Convert to prompt
-        prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+        # Only send new messages if we are resuming an existing session
+        prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
+
+        # Convert to prompt (pass model for optimized formatting)
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request_body.model)
 
         # Add sampling instructions
         sampling_instructions = request_body.get_sampling_instructions()
@@ -1182,7 +1219,8 @@ async def anthropic_messages(
         if not raw_assistant_content:
             raise HTTPException(status_code=500, detail="No response from CLI")
 
-        assistant_content = MessageAdapter.filter_content(raw_assistant_content)
+        # Filter out tool usage and thinking blocks, also handle potential echoes
+        assistant_content = MessageAdapter.filter_content(raw_assistant_content, prompt_echo=prompt)
 
         # Store in session
         if actual_session_id:

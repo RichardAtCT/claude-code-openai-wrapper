@@ -98,6 +98,7 @@ def chat_loop(client, default_model):
 
     messages = []
     current_model = default_model
+    session_id = f"chat-{int(time.time())}"
     
     while True:
         try:
@@ -134,7 +135,8 @@ def chat_loop(client, default_model):
                     stream = client.chat.completions.create(
                         model=current_model,
                         messages=messages,
-                        stream=True
+                        stream=True,
+                        extra_body={"session_id": session_id}
                     )
                     
                     for chunk in stream:
