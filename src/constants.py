@@ -89,6 +89,20 @@ CLAUDE_MODELS = [
     # "claude-3-5-haiku-20241022",
 ]
 
+# Gemini Models
+# Models supported by Gemini CLI (as of March 2026)
+GEMINI_MODELS = [
+    "gemini-3-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "pro",        # Alias for gemini-3-pro-preview
+    "flash",      # Alias for gemini-2.5-flash
+    "flash-lite", # Alias for gemini-2.5-flash-lite
+    "auto",       # Alias for gemini-3-pro-preview (recommended)
+]
+
 # Default model (recommended for most use cases)
 # Can be overridden via DEFAULT_MODEL environment variable
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6")
