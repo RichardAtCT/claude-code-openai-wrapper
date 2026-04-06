@@ -529,6 +529,11 @@ async def generate_streaming_response(
         chunks_buffer = []
         role_sent = False  # Track if we've sent the initial role chunk
         content_sent = False  # Track if we've sent any content
+        
+        # Buffering for echo detection
+        streaming_content_buffer = ""
+        prompt_stripped = False
+        is_gemini = active_cli == gemini_cli
 
         # Call the appropriate CLI within the process semaphore to limit concurrency
         async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
@@ -603,6 +608,23 @@ async def generate_streaming_response(
                             filtered_text = MessageAdapter.filter_content(raw_text)
 
                             if filtered_text and not filtered_text.isspace():
+                                # Echo stripping logic for Gemini
+                                if is_gemini and not prompt_stripped:
+                                    streaming_content_buffer += filtered_text
+                                    if len(streaming_content_buffer) > len(prompt) + 20:
+                                        # We have enough to check for echo
+                                        if streaming_content_buffer.startswith(prompt):
+                                            filtered_text = streaming_content_buffer[len(prompt):].lstrip()
+                                            # Also handle potential Assistant: prefix
+                                            if filtered_text.startswith("Assistant:"):
+                                                filtered_text = filtered_text[len("Assistant:"):].lstrip()
+                                        else:
+                                            filtered_text = streaming_content_buffer
+                                        prompt_stripped = True
+                                    else:
+                                        # Keep buffering
+                                        continue
+                                
                                 # Create streaming chunk
                                 stream_chunk = ChatCompletionStreamResponse(
                                     id=request_id,
@@ -624,6 +646,20 @@ async def generate_streaming_response(
                         filtered_content = MessageAdapter.filter_content(content)
 
                         if filtered_content and not filtered_content.isspace():
+                            # Echo stripping logic for Gemini
+                            if is_gemini and not prompt_stripped:
+                                streaming_content_buffer += filtered_content
+                                if len(streaming_content_buffer) > len(prompt) + 20:
+                                    if streaming_content_buffer.startswith(prompt):
+                                        filtered_content = streaming_content_buffer[len(prompt):].lstrip()
+                                        if filtered_content.startswith("Assistant:"):
+                                            filtered_content = filtered_content[len("Assistant:"):].lstrip()
+                                    else:
+                                        filtered_content = streaming_content_buffer
+                                    prompt_stripped = True
+                                else:
+                                    continue
+
                             # Create streaming chunk
                             stream_chunk = ChatCompletionStreamResponse(
                                 id=request_id,
@@ -638,6 +674,22 @@ async def generate_streaming_response(
                             yield f"data: {stream_chunk.model_dump_json()}\n\n"
                             content_sent = True
 
+        # Handle buffered content if prompt_stripped was never set to True
+        if is_gemini and not prompt_stripped and streaming_content_buffer:
+            final_content = streaming_content_buffer
+            if final_content.startswith(prompt):
+                final_content = final_content[len(prompt):].lstrip()
+                if final_content.startswith("Assistant:"):
+                    final_content = final_content[len("Assistant:"):].lstrip()
+            
+            if final_content:
+                stream_chunk = ChatCompletionStreamResponse(
+                    id=request_id,
+                    model=request.model,
+                    choices=[StreamChoice(index=0, delta={"content": final_content}, finish_reason=None)],
+                )
+                yield f"data: {stream_chunk.model_dump_json()}\n\n"
+                content_sent = True
         # Handle case where no role was sent (send at least role chunk)
         if not role_sent:
             # Send role chunk with empty content if we never got any assistant messages
@@ -655,6 +707,7 @@ async def generate_streaming_response(
 
         # If we sent role but no content, send a minimal response
         if role_sent and not content_sent:
+            logger.warning(f"No content generated for request {request_id} (role_sent={role_sent})")
             fallback_chunk = ChatCompletionStreamResponse(
                 id=request_id,
                 model=request.model,
