@@ -211,6 +211,10 @@ class ChatCompletionRequest(BaseModel):
                 logger.info(
                     f"Mapped max_tokens={max_token_value} to max_thinking_tokens (approximate behavior)"
                 )
+            elif self.model and (self.model.startswith("claude-4") or "4-6" in self.model or "4-5" in self.model):
+                # Default to 4000 for Claude 4 models if not specified
+                options["max_thinking_tokens"] = 4000
+                logger.debug("Using default max_thinking_tokens=4000 for Claude 4 model")
 
         # reasoning_effort → effort
         if self.reasoning_effort is not None:
