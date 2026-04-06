@@ -556,6 +556,9 @@ async def generate_streaming_response(
 
             async for chunk in completion_gen:
                 chunks_buffer.append(chunk)
+                
+                if DEBUG_MODE or VERBOSE:
+                    logger.debug(f"Streaming chunk: type={chunk.get('type')}, subtype={chunk.get('subtype')}, keys={list(chunk.keys())}")
 
                 # Check if we have an assistant message
                 # Handle both Claude and Gemini formats
@@ -609,6 +612,9 @@ async def generate_streaming_response(
                             else:
                                 continue
 
+                            if DEBUG_MODE or VERBOSE:
+                                logger.debug(f"Raw content block: {raw_text[:200]}...")
+
                             # Filter out tool usage and thinking blocks
                             filtered_text = MessageAdapter.filter_content(raw_text)
 
@@ -647,6 +653,9 @@ async def generate_streaming_response(
                                 content_sent = True
 
                     elif isinstance(content, str):
+                        if DEBUG_MODE or VERBOSE:
+                            logger.debug(f"Raw content string: {content[:200]}...")
+                            
                         # Filter out tool usage and thinking blocks
                         filtered_content = MessageAdapter.filter_content(content)
 
@@ -878,6 +887,9 @@ async def generate_anthropic_streaming_response(
 
             async for chunk in completion_gen:
                 chunks_buffer.append(chunk)
+                
+                if DEBUG_MODE or VERBOSE:
+                    logger.debug(f"Anthropic streaming chunk: type={chunk.get('type')}, subtype={chunk.get('subtype')}, keys={list(chunk.keys())}")
 
                 content = None
                 if (chunk.get("type") == "assistant" or chunk.get("type") == "assistant_message") and "message" in chunk:
@@ -906,6 +918,9 @@ async def generate_anthropic_streaming_response(
                             else:
                                 continue
 
+                            if DEBUG_MODE or VERBOSE:
+                                logger.debug(f"Raw anthropic content block: {raw_text[:200]}...")
+
                             filtered_text = MessageAdapter.filter_content(raw_text)
                             if filtered_text and not filtered_text.isspace():
                                 delta_event = AnthropicContentBlockDeltaEvent(
@@ -916,6 +931,9 @@ async def generate_anthropic_streaming_response(
                                 content_sent = True
 
                     elif isinstance(content, str):
+                        if DEBUG_MODE or VERBOSE:
+                            logger.debug(f"Raw anthropic content string: {content[:200]}...")
+
                         filtered_content = MessageAdapter.filter_content(content)
                         if filtered_content and not filtered_content.isspace():
                             delta_event = AnthropicContentBlockDeltaEvent(

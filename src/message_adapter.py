@@ -52,10 +52,11 @@ class MessageAdapter:
         Filter content for unsupported features and tool usage.
         Remove thinking blocks, tool calls, and image references.
         """
-        if not content:
-            return content
-            
+        if content is None:
+            return ""
+
         # Strip exact prompt echoes if provided (common with some CLI tools)
+
         if prompt_echo and content.startswith(prompt_echo):
             content = content[len(prompt_echo):].strip()
             # Also handle cases where Human: prefix is echoed
@@ -63,8 +64,9 @@ class MessageAdapter:
                 content = content[len("Assistant:"):].strip()
 
         # Remove thinking blocks (common when tools are disabled but Claude tries to think)
-        thinking_pattern = r"<thinking>.*?</thinking>"
-        content = re.sub(thinking_pattern, "", content, flags=re.DOTALL)
+        thinking_patterns = [r"<thinking>.*?</thinking>", r"<thought>.*?</thought>"]
+        for pattern in thinking_patterns:
+            content = re.sub(pattern, "", content, flags=re.DOTALL)
 
         # Extract content from attempt_completion blocks (these contain the actual user response)
         attempt_completion_pattern = r"<attempt_completion>(.*?)</attempt_completion>"
@@ -82,23 +84,24 @@ class MessageAdapter:
             if extracted_content:
                 content = extracted_content
         else:
-            # Remove other tool usage blocks (when tools are disabled but Claude tries to use them)
-            tool_patterns = [
-                r"<read_file>.*?</read_file>",
-                r"<write_file>.*?</write_file>",
-                r"<bash>.*?</bash>",
-                r"<search_files>.*?</search_files>",
-                r"<str_replace_editor>.*?</str_replace_editor>",
-                r"<args>.*?</args>",
-                r"<ask_followup_question>.*?</ask_followup_question>",
-                r"<attempt_completion>.*?</attempt_completion>",
-                r"<question>.*?</question>",
-                r"<follow_up>.*?</follow_up>",
-                r"<suggest>.*?</suggest>",
+            # Instead of deleting all tool blocks, replace them with a short placeholder
+            # This prevents the message from being empty and explains what Claude was doing.
+            tool_tags = [
+                "read_file", "write_file", "bash", "search_files", 
+                "str_replace_editor", "args", "ask_followup_question", 
+                "question", "follow_up", "suggest"
             ]
-
-            for pattern in tool_patterns:
-                content = re.sub(pattern, "", content, flags=re.DOTALL)
+            
+            for tag in tool_tags:
+                pattern = f"<{tag}>(.*?)</{tag}>"
+                # If we find a tool tag, replace it with a shorter placeholder but keep some of the content
+                def replace_tool(match):
+                    inner = match.group(1).strip()
+                    # Only show first 50 chars of the tool command/arg to keep it clean
+                    summary = (inner[:47] + "...") if len(inner) > 50 else inner
+                    return f"\n[Tool: {tag} {summary}]\n"
+                
+                content = re.sub(pattern, replace_tool, content, flags=re.DOTALL)
 
         # Pattern to match image references or base64 data
         image_pattern = r"\[Image:.*?\]|data:image/.*?;base64,.*?(?=\s|$)"
