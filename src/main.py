@@ -560,11 +560,16 @@ async def generate_streaming_response(
                 # Check if we have an assistant message
                 # Handle both Claude and Gemini formats
                 content = None
-                if chunk.get("type") == "assistant" and "message" in chunk:
+                if (chunk.get("type") == "assistant" or chunk.get("type") == "assistant_message") and "message" in chunk:
                     # Claude format: {"type": "assistant", "message": {"content": [...]}}
                     message = chunk["message"]
                     if isinstance(message, dict) and "content" in message:
                         content = message["content"]
+                elif chunk.get("type") == "content_block_delta" and "delta" in chunk:
+                    # Claude SDK delta format: {"type": "content_block_delta", "delta": {"text": "..."}}
+                    delta = chunk["delta"]
+                    if isinstance(delta, dict) and "text" in delta:
+                        content = delta["text"]
                 elif "content" in chunk and isinstance(chunk["content"], list):
                     # Claude SDK format: {"content": [TextBlock(...)]}
                     content = chunk["content"]
@@ -875,10 +880,15 @@ async def generate_anthropic_streaming_response(
                 chunks_buffer.append(chunk)
 
                 content = None
-                if chunk.get("type") == "assistant" and "message" in chunk:
+                if (chunk.get("type") == "assistant" or chunk.get("type") == "assistant_message") and "message" in chunk:
                     message = chunk["message"]
                     if isinstance(message, dict) and "content" in message:
                         content = message["content"]
+                elif chunk.get("type") == "content_block_delta" and "delta" in chunk:
+                    # Claude SDK delta format: {"type": "content_block_delta", "delta": {"text": "..."}}
+                    delta = chunk["delta"]
+                    if isinstance(delta, dict) and "text" in delta:
+                        content = delta["text"]
                 elif "content" in chunk and isinstance(chunk["content"], list):
                     content = chunk["content"]
                 elif chunk.get("type") == "message" and "content" in chunk:

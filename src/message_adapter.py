@@ -112,9 +112,10 @@ class MessageAdapter:
         content = re.sub(r"\n\s*\n\s*\n", "\n\n", content)  # Multiple newlines to double
         content = content.strip()
 
-        # If content is now empty or only whitespace, provide a fallback
+        # If content is now empty or only whitespace, and we originally HAD content,
+        # provide a more conversational fallback that indicates we understood but filtered.
         if not content or content.isspace():
-            return "I understand you're testing the system. How can I help you today?"
+            return "I've processed your request. How else can I help you with this project today?"
 
         return content
 
