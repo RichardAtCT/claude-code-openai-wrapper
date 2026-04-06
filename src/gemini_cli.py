@@ -33,26 +33,28 @@ class GeminiCodeCLI:
         # Gemini API Key from environment
         self.gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
-    async def verify_cli(self) -> bool:
-        """Verify Gemini CLI is working and authenticated."""
+    async def verify_cli(self, prompt: str = "Hello") -> bool:
+        """Verify Gemini CLI is working and authenticated by running a test query."""
         try:
-            logger.info("Testing Gemini CLI...")
-            # Run gemini --version to check if it's installed
-            process = await asyncio.create_subprocess_exec(
-                self.gemini_cli_path,
-                "--version",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
-            if process.returncode == 0:
-                logger.info(f"✅ Gemini CLI verified: {stdout.decode().strip()}")
+            logger.info(f"Testing Gemini CLI with a prewarm query: '{prompt}'...")
+            
+            # Use the provided prompt to warm up the CLI and its caches
+            # We use stream-json to verify the full parsing pipeline
+            found_response = False
+            async for event in self.run_completion(prompt, stream=True):
+                if event.get("type") in ["message", "result"]:
+                    found_response = True
+                    # We can stop as soon as we get the first message piece
+                    break
+            
+            if found_response:
+                logger.info("✅ Gemini CLI verified and prewarmed successfully")
                 return True
             else:
-                logger.warning(f"⚠️ Gemini CLI verification failed: {stderr.decode().strip()}")
+                logger.warning("⚠️  Gemini CLI verification returned no message content")
                 return False
         except Exception as e:
-            logger.error(f"Gemini CLI verification failed: {e}")
+            logger.error(f"Gemini CLI verification/prewarm failed: {e}")
             logger.warning("Please ensure Gemini CLI is installed: npm install -g @google/gemini-cli")
             return False
 

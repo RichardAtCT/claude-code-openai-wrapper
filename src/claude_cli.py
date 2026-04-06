@@ -52,15 +52,15 @@ class ClaudeCodeCLI:
         # Store auth environment variables for SDK
         self.claude_env_vars = auth_manager.get_claude_code_env_vars()
 
-    async def verify_cli(self) -> bool:
+    async def verify_cli(self, prompt: str = "Hello") -> bool:
         """Verify Claude Agent SDK is working and authenticated."""
         try:
             # Test SDK with a simple query
-            logger.info("Testing Claude Agent SDK...")
+            logger.info(f"Testing Claude Agent SDK with prewarm query: '{prompt}'...")
 
             messages = []
             async for message in query(
-                prompt="Hello",
+                prompt=prompt,
                 options=ClaudeAgentOptions(
                     max_turns=1,
                     cwd=self.cwd,

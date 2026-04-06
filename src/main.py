@@ -140,10 +140,21 @@ gemini_cli = GeminiCodeCLI(
     timeout=int(os.getenv("MAX_TIMEOUT", "600000")), cwd=os.getenv("CLAUDE_CWD")
 )
 
+# Global semaphore for limiting concurrent CLI processes
+# Default to 3 concurrent processes to avoid resource exhaustion
+MAX_CONCURRENT_PROCESSES = int(os.getenv("MAX_CONCURRENT_PROCESSES", "3"))
+process_semaphore = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Verify Claude Code authentication and CLI on startup."""
+    global process_semaphore
+    
+    # Initialize the semaphore within the event loop
+    process_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)
+    logger.info(f"Initialized process concurrency cap: {MAX_CONCURRENT_PROCESSES}")
+    
     logger.info("Verifying Claude Code authentication and CLI...")
 
     # Validate authentication first
@@ -160,37 +171,49 @@ async def lifespan(app: FastAPI):
     else:
         logger.info(f"✅ Claude Code authentication validated: {auth_info['method']}")
 
-    # Verify Claude Agent SDK with timeout for graceful degradation
+    # Verify both CLI backends in parallel to reduce startup latency
+    # and ensure they are both prewarmed for the first request
+    tasks = []
+    
+    # Prewarm prompt can be customized via environment variable
+    prewarm_prompt = os.getenv("PREWARM_PROMPT", "Hello")
+    
+    # Task for Claude Agent SDK
+    logger.info(f"Prewarming Claude Agent SDK with prompt: '{prewarm_prompt}'...")
+    tasks.append(asyncio.wait_for(claude_cli.verify_cli(prompt=prewarm_prompt), timeout=45.0))
+    
+    # Task for Gemini CLI if configured
+    is_gemini_configured = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_CLI_PATH") == "gemini"
+    if is_gemini_configured:
+        logger.info(f"Prewarming Gemini CLI with prompt: '{prewarm_prompt}'...")
+        tasks.append(asyncio.wait_for(gemini_cli.verify_cli(prompt=prewarm_prompt), timeout=45.0))
+    
     try:
-        logger.info("Testing Claude Agent SDK connection...")
-        # Use asyncio.wait_for to enforce timeout (30 seconds)
-        cli_verified = await asyncio.wait_for(claude_cli.verify_cli(), timeout=30.0)
-
-        if cli_verified:
-            logger.info("✅ Claude Agent SDK verified successfully")
+        # Run both prewarm queries in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Check Claude result (always index 0)
+        claude_result = results[0]
+        if isinstance(claude_result, Exception):
+            logger.error(f"⚠️ Claude prewarm failed: {claude_result}")
+        elif not claude_result:
+            logger.warning("⚠️ Claude prewarm returned False")
         else:
-            logger.warning("⚠️  Claude Agent SDK verification returned False")
-            logger.warning("The server will start, but requests may fail.")
-    except asyncio.TimeoutError:
-        logger.warning("⚠️  Claude Agent SDK verification timed out (30s)")
-        logger.warning("This may indicate network issues or SDK configuration problems.")
-        logger.warning("The server will start, but first request may be slow.")
-    except Exception as e:
-        logger.error(f"⚠️  Claude Agent SDK verification failed: {e}")
-        logger.warning("The server will start, but requests may fail.")
-        logger.warning("Check that Claude Code CLI is properly installed and authenticated.")
-
-    # Verify Gemini CLI if configured
-    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_CLI_PATH") == "gemini":
-        try:
-            logger.info("Testing Gemini CLI connection...")
-            gemini_verified = await asyncio.wait_for(gemini_cli.verify_cli(), timeout=30.0)
-            if gemini_verified:
-                logger.info("✅ Gemini CLI verified successfully")
+            logger.info("✅ Claude prewarm complete")
+            
+        # Check Gemini result if it was requested (index 1)
+        if is_gemini_configured and len(results) > 1:
+            gemini_result = results[1]
+            if isinstance(gemini_result, Exception):
+                logger.error(f"⚠️ Gemini prewarm failed: {gemini_result}")
+            elif not gemini_result:
+                logger.warning("⚠️ Gemini prewarm returned False")
             else:
-                logger.warning("⚠️  Gemini CLI verification returned False")
-        except Exception as e:
-            logger.error(f"⚠️  Gemini CLI verification failed: {e}")
+                logger.info("✅ Gemini prewarm complete")
+                
+    except Exception as e:
+        logger.error(f"⚠️ Error during parallel prewarming: {e}")
+        logger.warning("The server will start, but first requests might be slow.")
 
     # Log debug information if debug mode is enabled
     if DEBUG_MODE or VERBOSE:
@@ -479,112 +502,113 @@ async def generate_streaming_response(
         role_sent = False  # Track if we've sent the initial role chunk
         content_sent = False  # Track if we've sent any content
 
-        # Call the appropriate CLI
-        if active_cli == gemini_cli:
-            completion_gen = gemini_cli.run_completion(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                stream=True,
-                session_id=actual_session_id,
-                gemini_options=options,
-            )
-        else:
-            completion_gen = claude_cli.run_completion(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                stream=True,
-                session_id=actual_session_id,
-                claude_options=options,
-            )
+        # Call the appropriate CLI within the process semaphore to limit concurrency
+        async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+            if active_cli == gemini_cli:
+                completion_gen = gemini_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=True,
+                    session_id=actual_session_id,
+                    gemini_options=options,
+                )
+            else:
+                completion_gen = claude_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=True,
+                    session_id=actual_session_id,
+                    claude_options=options,
+                )
 
-        async for chunk in completion_gen:
-            chunks_buffer.append(chunk)
+            async for chunk in completion_gen:
+                chunks_buffer.append(chunk)
 
-            # Check if we have an assistant message
-            # Handle both Claude and Gemini formats
-            content = None
-            if chunk.get("type") == "assistant" and "message" in chunk:
-                # Claude format: {"type": "assistant", "message": {"content": [...]}}
-                message = chunk["message"]
-                if isinstance(message, dict) and "content" in message:
-                    content = message["content"]
-            elif "content" in chunk and isinstance(chunk["content"], list):
-                # Claude SDK format: {"content": [TextBlock(...)]}
-                content = chunk["content"]
-            elif chunk.get("type") == "message" and "content" in chunk:
-                # Gemini format: {"type": "message", "content": "..."}
-                content = chunk["content"]
-            elif chunk.get("type") == "result" and "content" in chunk:
-                # Gemini final result format
-                content = chunk["content"]
+                # Check if we have an assistant message
+                # Handle both Claude and Gemini formats
+                content = None
+                if chunk.get("type") == "assistant" and "message" in chunk:
+                    # Claude format: {"type": "assistant", "message": {"content": [...]}}
+                    message = chunk["message"]
+                    if isinstance(message, dict) and "content" in message:
+                        content = message["content"]
+                elif "content" in chunk and isinstance(chunk["content"], list):
+                    # Claude SDK format: {"content": [TextBlock(...)]}
+                    content = chunk["content"]
+                elif chunk.get("type") == "message" and "content" in chunk:
+                    # Gemini format: {"type": "message", "content": "..."}
+                    content = chunk["content"]
+                elif chunk.get("type") == "result" and "content" in chunk:
+                    # Gemini final result format
+                    content = chunk["content"]
 
-            if content is not None:
-                # Send initial role chunk if we haven't already
-                if not role_sent:
-                    initial_chunk = ChatCompletionStreamResponse(
-                        id=request_id,
-                        model=request.model,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta={"role": "assistant", "content": ""},
-                                finish_reason=None,
-                            )
-                        ],
-                    )
-                    yield f"data: {initial_chunk.model_dump_json()}\n\n"
-                    role_sent = True
+                if content is not None:
+                    # Send initial role chunk if we haven't already
+                    if not role_sent:
+                        initial_chunk = ChatCompletionStreamResponse(
+                            id=request_id,
+                            model=request.model,
+                            choices=[
+                                StreamChoice(
+                                    index=0,
+                                    delta={"role": "assistant", "content": ""},
+                                    finish_reason=None,
+                                )
+                            ],
+                        )
+                        yield f"data: {initial_chunk.model_dump_json()}\n\n"
+                        role_sent = True
 
-                # Handle content blocks
-                if isinstance(content, list):
-                    for block in content:
-                        # Handle TextBlock objects from Claude Agent SDK
-                        if hasattr(block, "text"):
-                            raw_text = block.text
-                        # Handle dictionary format for backward compatibility
-                        elif isinstance(block, dict) and block.get("type") == "text":
-                            raw_text = block.get("text", "")
-                        else:
-                            continue
+                    # Handle content blocks
+                    if isinstance(content, list):
+                        for block in content:
+                            # Handle TextBlock objects from Claude Agent SDK
+                            if hasattr(block, "text"):
+                                raw_text = block.text
+                            # Handle dictionary format for backward compatibility
+                            elif isinstance(block, dict) and block.get("type") == "text":
+                                raw_text = block.get("text", "")
+                            else:
+                                continue
 
+                            # Filter out tool usage and thinking blocks
+                            filtered_text = MessageAdapter.filter_content(raw_text)
+
+                            if filtered_text and not filtered_text.isspace():
+                                # Create streaming chunk
+                                stream_chunk = ChatCompletionStreamResponse(
+                                    id=request_id,
+                                    model=request.model,
+                                    choices=[
+                                        StreamChoice(
+                                            index=0,
+                                            delta={"content": filtered_text},
+                                            finish_reason=None,
+                                        )
+                                    ],
+                                )
+
+                                yield f"data: {stream_chunk.model_dump_json()}\n\n"
+                                content_sent = True
+
+                    elif isinstance(content, str):
                         # Filter out tool usage and thinking blocks
-                        filtered_text = MessageAdapter.filter_content(raw_text)
+                        filtered_content = MessageAdapter.filter_content(content)
 
-                        if filtered_text and not filtered_text.isspace():
+                        if filtered_content and not filtered_content.isspace():
                             # Create streaming chunk
                             stream_chunk = ChatCompletionStreamResponse(
                                 id=request_id,
                                 model=request.model,
                                 choices=[
                                     StreamChoice(
-                                        index=0,
-                                        delta={"content": filtered_text},
-                                        finish_reason=None,
+                                        index=0, delta={"content": filtered_content}, finish_reason=None
                                     )
                                 ],
                             )
 
                             yield f"data: {stream_chunk.model_dump_json()}\n\n"
                             content_sent = True
-
-                elif isinstance(content, str):
-                    # Filter out tool usage and thinking blocks
-                    filtered_content = MessageAdapter.filter_content(content)
-
-                    if filtered_content and not filtered_content.isspace():
-                        # Create streaming chunk
-                        stream_chunk = ChatCompletionStreamResponse(
-                            id=request_id,
-                            model=request.model,
-                            choices=[
-                                StreamChoice(
-                                    index=0, delta={"content": filtered_content}, finish_reason=None
-                                )
-                            ],
-                        )
-
-                        yield f"data: {stream_chunk.model_dump_json()}\n\n"
-                        content_sent = True
 
         # Handle case where no role was sent (send at least role chunk)
         if not role_sent:
@@ -744,75 +768,76 @@ async def generate_anthropic_streaming_response(
         chunks_buffer = []
         content_sent = False
 
-        # Call the appropriate CLI
-        if active_cli == gemini_cli:
-            completion_gen = gemini_cli.run_completion(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                stream=True,
-                session_id=actual_session_id,
-                gemini_options=options,
-            )
-        else:
-            completion_gen = claude_cli.run_completion(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                stream=True,
-                session_id=actual_session_id,
-                claude_options=options,
-            )
+        # Call the appropriate CLI within the process semaphore to limit concurrency
+        async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+            if active_cli == gemini_cli:
+                completion_gen = gemini_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=True,
+                    session_id=actual_session_id,
+                    gemini_options=options,
+                )
+            else:
+                completion_gen = claude_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=True,
+                    session_id=actual_session_id,
+                    claude_options=options,
+                )
 
-        async for chunk in completion_gen:
-            chunks_buffer.append(chunk)
+            async for chunk in completion_gen:
+                chunks_buffer.append(chunk)
 
-            content = None
-            if chunk.get("type") == "assistant" and "message" in chunk:
-                message = chunk["message"]
-                if isinstance(message, dict) and "content" in message:
-                    content = message["content"]
-            elif "content" in chunk and isinstance(chunk["content"], list):
-                content = chunk["content"]
-            elif chunk.get("type") == "message" and "content" in chunk:
-                content = chunk["content"]
-            elif chunk.get("type") == "result" and "content" in chunk:
-                content = chunk["content"]
+                content = None
+                if chunk.get("type") == "assistant" and "message" in chunk:
+                    message = chunk["message"]
+                    if isinstance(message, dict) and "content" in message:
+                        content = message["content"]
+                elif "content" in chunk and isinstance(chunk["content"], list):
+                    content = chunk["content"]
+                elif chunk.get("type") == "message" and "content" in chunk:
+                    content = chunk["content"]
+                elif chunk.get("type") == "result" and "content" in chunk:
+                    content = chunk["content"]
 
-            if content is not None:
-                if isinstance(content, list):
-                    for block in content:
-                        if hasattr(block, "text"):
-                            raw_text = block.text
-                        elif isinstance(block, dict) and block.get("type") == "text":
-                            raw_text = block.get("text", "")
-                        else:
-                            continue
+                if content is not None:
+                    if isinstance(content, list):
+                        for block in content:
+                            if hasattr(block, "text"):
+                                raw_text = block.text
+                            elif isinstance(block, dict) and block.get("type") == "text":
+                                raw_text = block.get("text", "")
+                            else:
+                                continue
 
-                        filtered_text = MessageAdapter.filter_content(raw_text)
-                        if filtered_text and not filtered_text.isspace():
+                            filtered_text = MessageAdapter.filter_content(raw_text)
+                            if filtered_text and not filtered_text.isspace():
+                                delta_event = AnthropicContentBlockDeltaEvent(
+                                    index=0,
+                                    delta={"type": "text_delta", "text": filtered_text},
+                                )
+                                yield f"event: content_block_delta\ndata: {delta_event.model_dump_json()}\n\n"
+                                content_sent = True
+
+                    elif isinstance(content, str):
+                        filtered_content = MessageAdapter.filter_content(content)
+                        if filtered_content and not filtered_content.isspace():
                             delta_event = AnthropicContentBlockDeltaEvent(
                                 index=0,
-                                delta={"type": "text_delta", "text": filtered_text},
+                                delta={"type": "text_delta", "text": filtered_content},
                             )
                             yield f"event: content_block_delta\ndata: {delta_event.model_dump_json()}\n\n"
                             content_sent = True
 
-                elif isinstance(content, str):
-                    filtered_content = MessageAdapter.filter_content(content)
-                    if filtered_content and not filtered_content.isspace():
-                        delta_event = AnthropicContentBlockDeltaEvent(
-                            index=0,
-                            delta={"type": "text_delta", "text": filtered_content},
-                        )
-                        yield f"event: content_block_delta\ndata: {delta_event.model_dump_json()}\n\n"
-                        content_sent = True
-
-        # If no content was sent, send a minimal response
-        if not content_sent:
-            delta_event = AnthropicContentBlockDeltaEvent(
-                index=0,
-                delta={"type": "text_delta", "text": "I'm unable to provide a response at the moment."},
-            )
-            yield f"event: content_block_delta\ndata: {delta_event.model_dump_json()}\n\n"
+            # If no content was sent, send a minimal response
+            if not content_sent:
+                delta_event = AnthropicContentBlockDeltaEvent(
+                    index=0,
+                    delta={"type": "text_delta", "text": "I'm unable to provide a response at the moment."},
+                )
+                yield f"event: content_block_delta\ndata: {delta_event.model_dump_json()}\n\n"
 
         # Emit content_block_stop
         block_stop = AnthropicContentBlockStopEvent(index=0)
@@ -959,26 +984,28 @@ async def chat_completions(
             # Collect all chunks
             chunks = []
             
-            # Call the appropriate CLI
-            if active_cli == gemini_cli:
-                completion_gen = gemini_cli.run_completion(
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    stream=False,
-                    session_id=actual_session_id,
-                    gemini_options=options,
-                )
-            else:
-                completion_gen = claude_cli.run_completion(
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    stream=False,
-                    session_id=actual_session_id,
-                    claude_options=options,
-                )
+            # Call the appropriate CLI within the process semaphore to limit concurrency
+            # We wrap the entire execution generator to ensure the process cap is respected
+            async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+                if active_cli == gemini_cli:
+                    completion_gen = gemini_cli.run_completion(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        stream=False,
+                        session_id=actual_session_id,
+                        gemini_options=options,
+                    )
+                else:
+                    completion_gen = claude_cli.run_completion(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        stream=False,
+                        session_id=actual_session_id,
+                        claude_options=options,
+                    )
 
-            async for chunk in completion_gen:
-                chunks.append(chunk)
+                async for chunk in completion_gen:
+                    chunks.append(chunk)
 
             # Extract assistant message
             raw_assistant_content = active_cli.parse_message(chunks) if active_cli == gemini_cli else active_cli.parse_claude_message(chunks)
@@ -1127,26 +1154,27 @@ async def anthropic_messages(
         print(f"[/v1/messages] Calling run_completion, enable_tools={request_body.enable_tools}", flush=True)
         chunks = []
         
-        # Call the appropriate CLI
-        if active_cli == gemini_cli:
-            completion_gen = gemini_cli.run_completion(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                stream=False,
-                session_id=actual_session_id,
-                gemini_options=options,
-            )
-        else:
-            completion_gen = claude_cli.run_completion(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                stream=False,
-                session_id=actual_session_id,
-                claude_options=options,
-            )
+        # Call the appropriate CLI within the process semaphore to limit concurrency
+        async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+            if active_cli == gemini_cli:
+                completion_gen = gemini_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=False,
+                    session_id=actual_session_id,
+                    gemini_options=options,
+                )
+            else:
+                completion_gen = claude_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=False,
+                    session_id=actual_session_id,
+                    claude_options=options,
+                )
 
-        async for chunk in completion_gen:
-            chunks.append(chunk)
+            async for chunk in completion_gen:
+                chunks.append(chunk)
 
         # Extract assistant message
         raw_assistant_content = active_cli.parse_message(chunks) if active_cli == gemini_cli else active_cli.parse_claude_message(chunks)
