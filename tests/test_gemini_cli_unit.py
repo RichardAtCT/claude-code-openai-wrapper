@@ -10,22 +10,37 @@ def gemini_cli():
 
 @pytest.mark.asyncio
 async def test_verify_cli_success(gemini_cli):
+    # Mock NDJSON output from gemini CLI for a "Hello" query
+    mock_output = [
+        json.dumps({"type": "init", "session_id": "test-session", "model": "gemini-3"}),
+        json.dumps({"type": "message", "content": "Hello"}),
+        json.dumps({"type": "result", "usage": {"prompt_tokens": 10, "completion_tokens": 5}, "stop_reason": "STOP"}),
+    ]
+    
     with patch("asyncio.create_subprocess_exec") as mock_exec:
         mock_process = MagicMock()
-        mock_process.communicate = AsyncMock(return_value=(b"gemini 1.0.0", b""))
+        # Mock readline to return the NDJSON chunks
+        mock_process.stdout.readline = AsyncMock(side_effect=[line.encode() + b"\n" for line in mock_output] + [b""])
+        mock_process.wait = AsyncMock()
         mock_process.returncode = 0
         mock_exec.return_value = mock_process
         
         result = await gemini_cli.verify_cli()
         assert result is True
+        # Verify it called gemini with the prewarm prompt
         mock_exec.assert_called_once()
+        args, kwargs = mock_exec.call_args
+        assert "--prompt" in args
+        assert "Hello" in args
 
 @pytest.mark.asyncio
 async def test_verify_cli_failure(gemini_cli):
     with patch("asyncio.create_subprocess_exec") as mock_exec:
         mock_process = MagicMock()
-        mock_process.communicate = AsyncMock(return_value=(b"", b"command not found"))
-        mock_process.returncode = 127
+        # Mock immediate exit with error or no output
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock()
+        mock_process.returncode = 1
         mock_exec.return_value = mock_process
         
         result = await gemini_cli.verify_cli()
