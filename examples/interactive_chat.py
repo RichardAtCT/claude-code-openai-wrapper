@@ -21,6 +21,11 @@ from rich.prompt import Prompt
 DEFAULT_PORT = 8000
 API_KEY = os.getenv("API_KEY", "dev-token-123")  # Pre-set key to bypass interactive prompt
 
+
+def new_session_id():
+    """Create a fresh session id for the wrapper."""
+    return f"chat-{int(time.time() * 1000)}"
+
 def find_available_port(start_port):
     import socket
     port = start_port
@@ -98,7 +103,7 @@ def chat_loop(client, default_model):
 
     messages = []
     current_model = default_model
-    session_id = f"chat-{int(time.time())}"
+    session_id = new_session_id()
     
     while True:
         try:
@@ -114,7 +119,12 @@ def chat_loop(client, default_model):
                 parts = user_input.split()
                 if len(parts) > 1:
                     current_model = parts[1]
-                    console.print(f"🔄 Model changed to [bold cyan]{current_model}[/bold cyan]")
+                    messages = []
+                    session_id = new_session_id()
+                    console.print(
+                        f"🔄 Model changed to [bold cyan]{current_model}[/bold cyan] "
+                        "and conversation reset."
+                    )
                 else:
                     console.print("[yellow]Usage: /model <model_name>[/yellow]")
                     console.print("[dim]Example: /model gemini-3-pro-preview[/dim]")
@@ -122,7 +132,8 @@ def chat_loop(client, default_model):
                 
             if user_input == "/clear":
                 messages = []
-                console.print("✨ Conversation history cleared.")
+                session_id = new_session_id()
+                console.print("✨ Conversation history cleared. Started a new session.")
                 continue
 
             messages.append({"role": "user", "content": user_input})

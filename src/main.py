@@ -448,27 +448,12 @@ def get_cli_for_model(model_name: Optional[str]):
 
 def get_prompt_messages(all_messages: List[Message], is_resuming: bool) -> List[Message]:
     """
-    Get the subset of messages to send as the prompt.
-    If resuming a session, only send messages since the last assistant turn.
+    Get the messages to send as the prompt.
+
+    Wrapper-managed `session_id` values are not native Claude/Gemini resume tokens,
+    so session continuity is preserved by replaying the full conversation history.
     """
-    if not is_resuming or len(all_messages) <= 1:
-        return all_messages
-
-    # Find the last assistant message and take everything after it
-    last_assistant_idx = -1
-    for i in range(len(all_messages) - 2, -1, -1):
-        if all_messages[i].role == "assistant":
-            last_assistant_idx = i
-            break
-
-    # Extract new messages (usually just the last user message)
-    new_messages = all_messages[last_assistant_idx + 1:]
-    
-    # If for some reason we have no new messages, return at least the last one
-    if not new_messages and all_messages:
-        return [all_messages[-1]]
-        
-    return new_messages
+    return all_messages
 
 
 async def generate_streaming_response(
@@ -542,7 +527,7 @@ async def generate_streaming_response(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     stream=True,
-                    session_id=actual_session_id,
+                    session_id=None,
                     gemini_options=options,
                 )
             else:
@@ -550,7 +535,7 @@ async def generate_streaming_response(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     stream=True,
-                    session_id=actual_session_id,
+                    session_id=None,
                     claude_options=options,
                 )
 
@@ -873,7 +858,7 @@ async def generate_anthropic_streaming_response(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     stream=True,
-                    session_id=actual_session_id,
+                    session_id=None,
                     gemini_options=options,
                 )
             else:
@@ -881,7 +866,7 @@ async def generate_anthropic_streaming_response(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     stream=True,
-                    session_id=actual_session_id,
+                    session_id=None,
                     claude_options=options,
                 )
 
@@ -1107,7 +1092,7 @@ async def chat_completions(
                         prompt=prompt,
                         system_prompt=system_prompt,
                         stream=False,
-                        session_id=actual_session_id,
+                        session_id=None,
                         gemini_options=options,
                     )
                 else:
@@ -1115,7 +1100,7 @@ async def chat_completions(
                         prompt=prompt,
                         system_prompt=system_prompt,
                         stream=False,
-                        session_id=actual_session_id,
+                        session_id=None,
                         claude_options=options,
                     )
 
@@ -1279,7 +1264,7 @@ async def anthropic_messages(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     stream=False,
-                    session_id=actual_session_id,
+                    session_id=None,
                     gemini_options=options,
                 )
             else:
@@ -1287,7 +1272,7 @@ async def anthropic_messages(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     stream=False,
-                    session_id=actual_session_id,
+                    session_id=None,
                     claude_options=options,
                 )
 
