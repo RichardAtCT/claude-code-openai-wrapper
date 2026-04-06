@@ -7,40 +7,60 @@ class MessageAdapter:
     """Converts between OpenAI message format and Claude Code prompts."""
 
     @staticmethod
-    def messages_to_prompt(messages: List[Message]) -> tuple[str, Optional[str]]:
+    def messages_to_prompt(messages: List[Message], model: Optional[str] = None) -> tuple[str, Optional[str]]:
         """
         Convert OpenAI messages to Claude Code prompt format.
         Returns (prompt, system_prompt)
         """
         system_prompt = None
         conversation_parts = []
+        
+        # Check if it's a Gemini model
+        is_gemini = model and (
+            model.startswith("gemini") 
+            or model in ["pro", "flash", "flash-lite", "auto"]
+        )
 
         for message in messages:
             if message.role == "system":
                 # Use the last system message as the system prompt
                 system_prompt = message.content
             elif message.role == "user":
-                conversation_parts.append(f"Human: {message.content}")
+                if is_gemini:
+                    conversation_parts.append(message.content)
+                else:
+                    conversation_parts.append(f"Human: {message.content}")
             elif message.role == "assistant":
-                conversation_parts.append(f"Assistant: {message.content}")
+                if is_gemini:
+                    conversation_parts.append(message.content)
+                else:
+                    conversation_parts.append(f"Assistant: {message.content}")
 
         # Join conversation parts
         prompt = "\n\n".join(conversation_parts)
 
         # If the last message wasn't from the user, add a prompt for assistant
         if messages and messages[-1].role != "user":
-            prompt += "\n\nHuman: Please continue."
+            if not is_gemini:
+                prompt += "\n\nHuman: Please continue."
 
         return prompt, system_prompt
 
     @staticmethod
-    def filter_content(content: str) -> str:
+    def filter_content(content: str, prompt_echo: Optional[str] = None) -> str:
         """
         Filter content for unsupported features and tool usage.
         Remove thinking blocks, tool calls, and image references.
         """
         if not content:
             return content
+            
+        # Strip exact prompt echoes if provided (common with some CLI tools)
+        if prompt_echo and content.startswith(prompt_echo):
+            content = content[len(prompt_echo):].strip()
+            # Also handle cases where Human: prefix is echoed
+            if content.startswith("Assistant:"):
+                content = content[len("Assistant:"):].strip()
 
         # Remove thinking blocks (common when tools are disabled but Claude tries to think)
         thinking_pattern = r"<thinking>.*?</thinking>"

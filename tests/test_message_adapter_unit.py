@@ -86,6 +86,31 @@ class TestMessagesToPrompt:
         assert prompt == ""
         assert system is None
 
+    def test_gemini_formatting_no_prefixes(self):
+        """Gemini models should not have Human:/Assistant: prefixes."""
+        messages = [
+            Message(role="user", content="Hello"),
+            Message(role="assistant", content="Hi!"),
+            Message(role="user", content="What's up?"),
+        ]
+        prompt, system = MessageAdapter.messages_to_prompt(messages, model="gemini-3-flash-preview")
+
+        assert "Human:" not in prompt
+        assert "Assistant:" not in prompt
+        assert "Hello" in prompt
+        assert "Hi!" in prompt
+        assert "What's up?" in prompt
+
+    def test_gemini_no_continue_added(self):
+        """Gemini models should not have 'Please continue' added."""
+        messages = [
+            Message(role="user", content="Hello"),
+            Message(role="assistant", content="Hi!"),
+        ]
+        prompt, system = MessageAdapter.messages_to_prompt(messages, model="flash")
+
+        assert "Please continue" not in prompt
+
 
 class TestFilterContent:
     """Test MessageAdapter.filter_content()"""
@@ -100,6 +125,20 @@ class TestFilterContent:
         content = "Hello, how can I help you today?"
         result = MessageAdapter.filter_content(content)
         assert result == content
+
+    def test_strips_prompt_echo(self):
+        """Should strip the prompt echo from the beginning of the response."""
+        prompt = "Explain relativity"
+        content = "Explain relativityRelativity is a theory..."
+        result = MessageAdapter.filter_content(content, prompt_echo=prompt)
+        assert result == "Relativity is a theory..."
+
+    def test_strips_assistant_prefix_after_echo(self):
+        """Should strip Assistant: prefix if it remains after echo stripping."""
+        prompt = "Human: Hello"
+        content = "Human: Hello\n\nAssistant: Hi there!"
+        result = MessageAdapter.filter_content(content, prompt_echo=prompt)
+        assert result == "Hi there!"
 
     def test_removes_thinking_blocks(self):
         """Thinking blocks are removed."""
