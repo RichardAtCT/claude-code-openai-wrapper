@@ -1,15 +1,39 @@
 import os
+import functools
 from typing import Optional
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 
 def get_rate_limit_key(request: Request) -> str:
-    """Get the rate limiting key (IP address) from the request."""
-    return get_remote_address(request)
+    """Get the rate limiting key (IP address) from the request.
+
+    When TRUSTED_PROXIES is configured and the direct peer IP is in that list,
+    the rightmost non-trusted IP from X-Forwarded-For is used so that the real
+    client is rate-limited rather than the proxy.  When the peer is not trusted,
+    X-Forwarded-For is ignored entirely to prevent IP-spoofing attacks.
+    """
+    from src.constants import TRUSTED_PROXIES
+
+    client_ip = request.client.host if request.client else "127.0.0.1"
+
+    if not TRUSTED_PROXIES or client_ip not in TRUSTED_PROXIES:
+        return client_ip
+
+    # Peer is a trusted proxy — read X-Forwarded-For
+    xff = request.headers.get("x-forwarded-for", "")
+    if not xff:
+        return client_ip  # fallback: no upstream IP available
+
+    # Return rightmost non-trusted IP (closest to the real client)
+    ips = [ip.strip() for ip in xff.split(",")]
+    for ip in reversed(ips):
+        if ip not in TRUSTED_PROXIES:
+            return ip
+
+    return client_ip  # all IPs in chain are trusted, fallback to peer
 
 
 def create_rate_limiter() -> Optional[Limiter]:
@@ -25,9 +49,7 @@ def create_rate_limiter() -> Optional[Limiter]:
         return None
 
     # Create limiter with IP-based identification
-    limiter = Limiter(
-        key_func=get_rate_limit_key, default_limits=[]  # We'll apply limits per endpoint
-    )
+    limiter = Limiter(key_func=get_rate_limit_key, default_limits=[])
 
     return limiter
 
@@ -81,12 +103,41 @@ def get_rate_limit_for_endpoint(endpoint: str) -> str:
 
 
 def rate_limit_endpoint(endpoint: str):
-    """Decorator factory for applying rate limits to endpoints."""
+    """Decorator factory for applying rate limits to endpoints.
+
+    Wraps the endpoint with slowapi rate limiting and injects X-RateLimit-Limit
+    into the response headers so callers can observe the limit value.
+
+    Clears any previously registered limits for the route before registering new
+    ones so that module reloads (common in tests) do not accumulate duplicate
+    limit entries that would be applied multiplicatively.
+    """
+    rate_limit_str = get_rate_limit_for_endpoint(endpoint)
+    # Parse requests-per-minute from the rate limit string (e.g. "30/minute")
+    limit_value = rate_limit_str.split("/")[0]
 
     def decorator(func):
-        if limiter:
-            return limiter.limit(get_rate_limit_for_endpoint(endpoint))(func)
-        return func
+        if not limiter:
+            # Rate limiting disabled — return the original function unchanged.
+            return func
+
+        # Clear any stale limit registrations for this route that may have
+        # been added by previous module loads (avoids duplicate-counting).
+        func_name = f"{func.__module__}.{func.__name__}"
+        if func_name in limiter._route_limits:
+            limiter._route_limits[func_name] = []
+
+        limited_func = limiter.limit(rate_limit_str)(func)
+
+        @functools.wraps(limited_func)
+        async def wrapper(*args, **kwargs):
+            result = await limited_func(*args, **kwargs)
+            # Inject X-RateLimit-Limit header so tests and clients can observe the limit.
+            if isinstance(result, Response):
+                result.headers["X-RateLimit-Limit"] = limit_value
+            return result
+
+        return wrapper
 
     return decorator
 

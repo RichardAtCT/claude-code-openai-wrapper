@@ -491,6 +491,53 @@ class TestGetApiKey:
                 assert result in ["env-key", "runtime-key"]
 
 
+class TestRedactKey:
+    """Test redact_key() — FR-4.1, FR-4.2: credential redaction for safe logging."""
+
+    def test_redact_key_long_string_shows_first_and_last_three_chars(self):
+        """String of 20 chars returns first 3 + masking + last 3."""
+        from src.auth import redact_key
+
+        result = redact_key("sk-abcdefghijklmnoxyz")
+        assert result == "sk-***...***xyz"
+
+    def test_redact_key_exactly_eight_chars_shows_first_and_last_three(self):
+        """String of exactly 8 chars returns first 3 + masking + last 3."""
+        from src.auth import redact_key
+
+        result = redact_key("abcdefgh")
+        assert result == "abc***...***fgh"
+
+    def test_redact_key_seven_chars_returns_full_mask(self):
+        """String of 7 chars (below threshold) returns '***'."""
+        from src.auth import redact_key
+
+        result = redact_key("abcdefg")
+        assert result == "***"
+
+    def test_redact_key_three_chars_returns_full_mask(self):
+        """String of 3 chars returns '***'."""
+        from src.auth import redact_key
+
+        result = redact_key("abc")
+        assert result == "***"
+
+    def test_redact_key_empty_string_returns_full_mask(self):
+        """Empty string returns '***'."""
+        from src.auth import redact_key
+
+        result = redact_key("")
+        assert result == "***"
+
+    def test_redact_key_api_key_with_hyphens_preserves_prefix_and_suffix(self):
+        """API key containing hyphens is redacted, showing only first 3 and last 3 chars."""
+        from src.auth import redact_key
+
+        # Typical Anthropic API key format: sk-ant-api03-...
+        result = redact_key("sk-ant-api03-validlongkey1234567890")
+        assert result == "sk-***...***890"
+
+
 # Reset module state after tests
 @pytest.fixture(autouse=True)
 def reset_auth_module():

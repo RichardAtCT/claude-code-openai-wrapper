@@ -5,7 +5,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ~/.claude:/root/.claude
+      - ~/.claude:/home/appuser/.claude
       # Optional: Mount a specific workspace directory
       # Uncomment and modify the line below to use a custom workspace
       # - ./workspace:/workspace

@@ -20,6 +20,11 @@ class ParameterValidator:
     VALID_PERMISSION_MODES = {"default", "acceptEdits", "bypassPermissions", "plan"}
 
     @classmethod
+    def is_model_recognized(cls, model: str) -> bool:
+        """Check if a model is in the known supported models list."""
+        return model in cls.SUPPORTED_MODELS
+
+    @classmethod
     def validate_model(cls, model: str) -> bool:
         """Validate that the model is supported by Claude Code SDK."""
         if model not in cls.SUPPORTED_MODELS:

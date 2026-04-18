@@ -43,7 +43,7 @@ from src.claude_cli import ClaudeCodeCLI
 from src.message_adapter import MessageAdapter
 from src.auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
 from src.parameter_validator import ParameterValidator, CompatibilityReporter
-from src.session_manager import session_manager
+from src.session_manager import session_manager, SessionLimitExceeded
 from src.tool_manager import tool_manager
 from src.mcp_client import mcp_client, MCPServerConfig
 from src.rate_limiter import (
@@ -64,6 +64,11 @@ VERBOSE = os.getenv("VERBOSE", "false").lower() in ("true", "1", "yes", "on")
 log_level = logging.DEBUG if (DEBUG_MODE or VERBOSE) else logging.INFO
 logging.basicConfig(level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+if DEBUG_MODE:
+    logger.warning(
+        "DEBUG_MODE is enabled — request/response details will be logged. Disable in production."
+    )
 
 # Global variable to store runtime-generated API key
 runtime_api_key = None
@@ -207,11 +212,19 @@ app = FastAPI(
 )
 
 # Configure CORS
-cors_origins = json.loads(os.getenv("CORS_ORIGINS", '["*"]'))
+try:
+    cors_origins = json.loads(os.getenv("CORS_ORIGINS", '["*"]'))
+    if not isinstance(cors_origins, list):
+        logger.warning("CORS_ORIGINS must be a JSON array, falling back to ['*']")
+        cors_origins = ["*"]
+except (json.JSONDecodeError, TypeError):
+    logger.warning("Invalid CORS_ORIGINS value, falling back to ['*']")
+    cors_origins = ["*"]
+allow_creds = "*" not in cors_origins  # No credentials with wildcard
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
+    allow_credentials=allow_creds,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -264,6 +277,27 @@ app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware)
 
 
+def redact_request_headers(headers: dict) -> dict:
+    """Redact sensitive values from request headers for safe logging."""
+    redacted = dict(headers)
+    for key in list(redacted.keys()):
+        if key.lower() == "authorization":
+            redacted[key] = "[REDACTED]"
+    return redacted
+
+
+def redact_request_body(body: dict) -> dict:
+    """Redact sensitive fields from request body for safe logging."""
+    import copy
+
+    redacted = copy.deepcopy(body)
+    sensitive_fields = {"api_key", "authorization", "token", "secret", "password"}
+    for key in list(redacted.keys()):
+        if key.lower() in sensitive_fields:
+            redacted[key] = "[REDACTED]"
+    return redacted
+
+
 class DebugLoggingMiddleware(BaseHTTPMiddleware):
     """ASGI-compliant middleware for logging request/response details when debug mode is enabled."""
 
@@ -275,11 +309,11 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Log request details
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
         # Log basic request info with request ID for correlation
         logger.debug(f"🔍 [{request_id}] Incoming request: {request.method} {request.url}")
-        logger.debug(f"🔍 [{request_id}] Headers: {dict(request.headers)}")
+        logger.debug(f"🔍 [{request_id}] Headers: {redact_request_headers(dict(request.headers))}")
 
         # For POST requests, try to log body (but don't break if we can't)
         body_logged = False
@@ -295,11 +329,11 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
 
                             parsed_body = json_lib.loads(body.decode())
                             logger.debug(
-                                f"🔍 Request body: {json_lib.dumps(parsed_body, indent=2)}"
+                                f"🔍 Request body: {json_lib.dumps(redact_request_body(parsed_body), indent=2)}"
                             )
                             body_logged = True
-                        except:
-                            logger.debug(f"🔍 Request body (raw): {body.decode()[:500]}...")
+                        except Exception:
+                            logger.debug("🔍 Request body: [non-JSON, redacted]")
                             body_logged = True
             except Exception as e:
                 logger.debug(f"🔍 Could not read request body: {e}")
@@ -312,7 +346,7 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
 
             # Log response details
-            end_time = asyncio.get_event_loop().time()
+            end_time = asyncio.get_running_loop().time()
             duration = (end_time - start_time) * 1000  # Convert to milliseconds
 
             logger.debug(f"🔍 Response: {response.status_code} in {duration:.2f}ms")
@@ -320,7 +354,7 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
             return response
 
         except Exception as e:
-            end_time = asyncio.get_event_loop().time()
+            end_time = asyncio.get_running_loop().time()
             duration = (end_time - start_time) * 1000
 
             logger.debug(f"🔍 Request failed after {duration:.2f}ms: {e}")
@@ -336,11 +370,13 @@ app.add_middleware(DebugLoggingMiddleware)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle request validation errors with detailed debugging information."""
 
-    # Log the validation error details
-    logger.error(f"❌ Request validation failed for {request.method} {request.url}")
-    logger.error(f"❌ Validation errors: {exc.errors()}")
+    # Log validation error without raw input values (may contain credentials)
+    logger.error(f"Request validation failed for {request.method} {request.url}")
+    logger.error(
+        f"Validation errors: {[{k: v for k, v in e.items() if k != 'input'} for e in exc.errors()]}"
+    )
 
-    # Create detailed error response
+    # Create detailed error response — omit raw input values to prevent credential leaks
     error_details = []
     for error in exc.errors():
         location = " -> ".join(str(loc) for loc in error.get("loc", []))
@@ -349,19 +385,24 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
                 "field": location,
                 "message": error.get("msg", "Unknown validation error"),
                 "type": error.get("type", "validation_error"),
-                "input": error.get("input"),
             }
         )
 
-    # If debug mode is enabled, include the raw request body
+    # If debug mode is enabled, include redacted request info (never expose raw body)
     debug_info = {}
     if DEBUG_MODE or VERBOSE:
         try:
             body = await request.body()
             if body:
-                debug_info["raw_request_body"] = body.decode()
-        except:
-            debug_info["raw_request_body"] = "Could not read request body"
+                import json as json_lib
+
+                try:
+                    parsed = json_lib.loads(body.decode())
+                    debug_info["request_body"] = redact_request_body(parsed)
+                except Exception:
+                    debug_info["request_body"] = "[REDACTED — unparseable]"
+        except Exception:
+            debug_info["request_body"] = "[REDACTED — unreadable]"
 
     error_response = {
         "error": {
@@ -599,6 +640,15 @@ async def generate_streaming_response(
         yield f"data: {final_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
 
+    except SessionLimitExceeded:
+        error_chunk = {
+            "error": {
+                "message": f"Maximum session limit reached ({session_manager.max_sessions}). Try again later or close existing sessions.",
+                "type": "rate_limit_exceeded",
+                "code": "too_many_sessions",
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
     except Exception as e:
         logger.error(f"Streaming error: {e}")
         error_chunk = {"error": {"message": str(e), "type": "streaming_error"}}
@@ -639,15 +689,35 @@ async def chat_completions(
             compatibility_report = CompatibilityReporter.generate_compatibility_report(request_body)
             logger.debug(f"Compatibility report: {compatibility_report}")
 
+        model_recognized = ParameterValidator.is_model_recognized(request_body.model)
+
+        # Pre-check session limit before streaming branch (can't change HTTP status mid-stream)
+        if request_body.session_id:
+            try:
+                session_manager.check_session_limit(request_body.session_id)
+            except SessionLimitExceeded:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "message": f"Maximum session limit reached ({session_manager.max_sessions}). Try again later or close existing sessions.",
+                        "type": "rate_limit_exceeded",
+                        "code": "too_many_sessions",
+                    },
+                    headers={"Retry-After": "60"},
+                )
+
         if request_body.stream:
             # Return streaming response
+            streaming_headers = {
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+            if not model_recognized:
+                streaming_headers["X-Claude-Model-Warning"] = "unrecognized"
             return StreamingResponse(
                 generate_streaming_response(request_body, request_id, claude_headers),
                 media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                },
+                headers=streaming_headers,
             )
         else:
             # Non-streaming response
@@ -734,7 +804,7 @@ async def chat_completions(
             completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
 
             # Create response
-            response = ChatCompletionResponse(
+            response_data = ChatCompletionResponse(
                 id=request_id,
                 model=request_body.model,
                 choices=[
@@ -751,8 +821,21 @@ async def chat_completions(
                 ),
             )
 
+            response = JSONResponse(content=response_data.model_dump())
+            if not model_recognized:
+                response.headers["X-Claude-Model-Warning"] = "unrecognized"
             return response
 
+    except SessionLimitExceeded:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": f"Maximum session limit reached ({session_manager.max_sessions}). Try again later or close existing sessions.",
+                "type": "rate_limit_exceeded",
+                "code": "too_many_sessions",
+            },
+            headers={"Retry-After": "60"},
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -837,7 +920,7 @@ async def anthropic_messages(
         completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
 
         # Create Anthropic-format response
-        response = AnthropicMessagesResponse(
+        response_data = AnthropicMessagesResponse(
             model=request_body.model,
             content=[AnthropicTextBlock(text=assistant_content)],
             stop_reason="end_turn",
@@ -847,6 +930,9 @@ async def anthropic_messages(
             ),
         )
 
+        response = JSONResponse(content=response_data.model_dump())
+        if not ParameterValidator.is_model_recognized(request_body.model):
+            response.headers["X-Claude-Model-Warning"] = "unrecognized"
         return response
 
     except HTTPException:
@@ -881,33 +967,36 @@ async def list_models(
 
 
 @app.post("/v1/compatibility")
-async def check_compatibility(request_body: ChatCompletionRequest):
+@rate_limit_endpoint("general")
+async def check_compatibility(request: Request, request_body: ChatCompletionRequest):
     """Check OpenAI API compatibility for a request."""
     report = CompatibilityReporter.generate_compatibility_report(request_body)
-    return {
-        "compatibility_report": report,
-        "claude_agent_sdk_options": {
-            "supported": [
-                "model",
-                "system_prompt",
-                "max_turns",
-                "allowed_tools",
-                "disallowed_tools",
-                "permission_mode",
-                "max_thinking_tokens",
-                "continue_conversation",
-                "resume",
-                "cwd",
-            ],
-            "custom_headers": [
-                "X-Claude-Max-Turns",
-                "X-Claude-Allowed-Tools",
-                "X-Claude-Disallowed-Tools",
-                "X-Claude-Permission-Mode",
-                "X-Claude-Max-Thinking-Tokens",
-            ],
-        },
-    }
+    return JSONResponse(
+        content={
+            "compatibility_report": report,
+            "claude_agent_sdk_options": {
+                "supported": [
+                    "model",
+                    "system_prompt",
+                    "max_turns",
+                    "allowed_tools",
+                    "disallowed_tools",
+                    "permission_mode",
+                    "max_thinking_tokens",
+                    "continue_conversation",
+                    "resume",
+                    "cwd",
+                ],
+                "custom_headers": [
+                    "X-Claude-Max-Turns",
+                    "X-Claude-Allowed-Tools",
+                    "X-Claude-Disallowed-Tools",
+                    "X-Claude-Permission-Mode",
+                    "X-Claude-Max-Thinking-Tokens",
+                ],
+            },
+        }
+    )
 
 
 @app.get("/health")
@@ -931,12 +1020,13 @@ async def version_info(request: Request):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def root():
+@rate_limit_endpoint("general")
+async def root(request: Request):
     """Landing page with API documentation."""
     from src import __version__
 
     auth_info = get_claude_code_auth_info()
-    auth_method = auth_info.get("method", "unknown")
+    auth_method = "configured"  # Do not reveal auth method to unauthenticated visitors (FR-7.2)
     auth_valid = auth_info.get("status", {}).get("valid", False)
     status_color = "#22c55e" if auth_valid else "#ef4444"
     status_text = "Connected" if auth_valid else "Not Connected"
@@ -1539,8 +1629,12 @@ async def root():
 
 @app.post("/v1/debug/request")
 @rate_limit_endpoint("debug")
-async def debug_request_validation(request: Request):
+async def debug_request_validation(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
     """Debug endpoint to test request validation and see what's being sent."""
+    await verify_api_key(request, credentials)
     try:
         # Get the raw request body
         body = await request.body()
@@ -1561,7 +1655,10 @@ async def debug_request_validation(request: Request):
         if parsed_body:
             try:
                 chat_request = ChatCompletionRequest(**parsed_body)
-                validation_result = {"valid": True, "validated_data": chat_request.model_dump()}
+                validation_result = {
+                    "valid": True,
+                    "validated_data": redact_request_body(chat_request.model_dump()),
+                }
             except ValidationError as e:
                 validation_result = {
                     "valid": False,
@@ -1578,12 +1675,12 @@ async def debug_request_validation(request: Request):
 
         return {
             "debug_info": {
-                "headers": dict(request.headers),
+                "headers": redact_request_headers(dict(request.headers)),
                 "method": request.method,
                 "url": str(request.url),
-                "raw_body": raw_body,
+                "raw_body": "[REDACTED — use parsed_body]",
                 "json_parse_error": json_error,
-                "parsed_body": parsed_body,
+                "parsed_body": redact_request_body(parsed_body) if parsed_body else parsed_body,
                 "validation_result": validation_result,
                 "debug_mode_enabled": DEBUG_MODE or VERBOSE,
                 "example_valid_request": {
@@ -1598,7 +1695,7 @@ async def debug_request_validation(request: Request):
         return {
             "debug_info": {
                 "error": f"Debug endpoint error: {str(e)}",
-                "headers": dict(request.headers),
+                "headers": redact_request_headers(dict(request.headers)),
                 "method": request.method,
                 "url": str(request.url),
             }
@@ -1609,23 +1706,9 @@ async def debug_request_validation(request: Request):
 @rate_limit_endpoint("auth")
 async def get_auth_status(request: Request):
     """Get Claude Code authentication status."""
-    from src.auth import auth_manager
-
     auth_info = get_claude_code_auth_info()
-    active_api_key = auth_manager.get_api_key()
-
-    return {
-        "claude_code_auth": auth_info,
-        "server_info": {
-            "api_key_required": bool(active_api_key),
-            "api_key_source": (
-                "environment"
-                if os.getenv("API_KEY")
-                else ("runtime" if runtime_api_key else "none")
-            ),
-            "version": "1.0.0",
-        },
-    }
+    auth_valid = auth_info.get("status", {}).get("valid", False)
+    return {"authenticated": auth_valid}
 
 
 @app.get("/v1/sessions/stats")
