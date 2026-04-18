@@ -19,16 +19,22 @@ class TestGetRateLimitKey:
     """Test get_rate_limit_key()"""
 
     def test_returns_remote_address(self):
-        """Should return the remote address from the request."""
-        with patch("src.rate_limiter.get_remote_address") as mock_get_addr:
-            mock_get_addr.return_value = "192.168.1.100"
-            mock_request = MagicMock(spec=Request)
+        """Should return the direct peer IP from the request when no trusted proxies are set."""
+        import importlib
+        import src.constants
+        import src.rate_limiter
 
-            from src.rate_limiter import get_rate_limit_key
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = MagicMock()
+        mock_request.client.host = "192.168.1.100"
+        mock_request.headers = {}
 
-            result = get_rate_limit_key(mock_request)
-            assert result == "192.168.1.100"
-            mock_get_addr.assert_called_once_with(mock_request)
+        with patch.dict(os.environ, {"TRUSTED_PROXIES": ""}):
+            importlib.reload(src.constants)
+            importlib.reload(src.rate_limiter)
+            result = src.rate_limiter.get_rate_limit_key(mock_request)
+
+        assert result == "192.168.1.100"
 
 
 class TestCreateRateLimiter:
@@ -267,6 +273,213 @@ class TestRateLimitEndpointDecorator:
 
             # Function should work normally
             assert my_endpoint() == "hello"
+
+
+class TestGetRateLimitKeyTrustedProxy:
+    """Test get_rate_limit_key() with trusted proxy support (FR-3.1).
+
+    The function must only trust X-Forwarded-For when the direct peer IP is
+    in TRUSTED_PROXIES.  When TRUSTED_PROXIES is empty or the peer is not
+    trusted, the function must ignore X-Forwarded-For entirely to prevent
+    IP spoofing attacks that would allow bypassing rate limits.
+
+    Architecture reference: Section 5.3 and 7.2.
+
+    Patching strategy: the new implementation will read TRUSTED_PROXIES from
+    src.constants at module import time (from src.constants import
+    TRUSTED_PROXIES).  We therefore reload src.rate_limiter after patching the
+    TRUSTED_PROXIES environment variable so that each test gets a fresh module
+    with the desired proxy list.  Using importlib.reload mirrors the pattern
+    already established in this file for RATE_LIMIT_ENABLED.
+
+    All five tests MUST FAIL against the current implementation because
+    get_rate_limit_key() does not yet consult TRUSTED_PROXIES at all: it
+    delegates unconditionally to get_remote_address() which ignores XFF and
+    always returns request.client.host.  The failures prove the feature is
+    missing and define the contract the implementer must satisfy.
+    """
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_request(client_ip: str, x_forwarded_for: str = None):
+        """Return a mock Request with the given peer IP and optional XFF header.
+
+        Headers are stored as a plain dict.  The new implementation must call
+        request.headers.get("x-forwarded-for") which MagicMock satisfies when
+        headers is a dict-like object (MagicMock.__getitem__ is available, but
+        .get() on a plain dict works too).
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = MagicMock()
+        mock_request.client.host = client_ip
+
+        # Use a real dict so .get() behaves correctly
+        headers = {}
+        if x_forwarded_for is not None:
+            headers["x-forwarded-for"] = x_forwarded_for
+        mock_request.headers = headers
+
+        return mock_request
+
+    @staticmethod
+    def _load_get_rate_limit_key(trusted_proxies_value: str):
+        """Reload src.rate_limiter with TRUSTED_PROXIES set to the given
+        comma-separated string and return the freshly bound get_rate_limit_key.
+
+        This forces the module to re-evaluate TRUSTED_PROXIES from constants
+        (which reads os.environ) so each test exercises an isolated state.
+        """
+        import importlib
+        import src.constants
+        import src.rate_limiter
+
+        with patch.dict(os.environ, {"TRUSTED_PROXIES": trusted_proxies_value}):
+            importlib.reload(src.constants)
+            importlib.reload(src.rate_limiter)
+            # Return a reference captured while the patches are still active
+            return src.rate_limiter.get_rate_limit_key
+
+    # ------------------------------------------------------------------
+    # TC-1: No TRUSTED_PROXIES configured, no X-Forwarded-For header
+    #        → must return the direct peer IP
+    # ------------------------------------------------------------------
+
+    def test_get_rate_limit_key_no_trusted_proxies_no_xff_returns_client_ip(self):
+        """When TRUSTED_PROXIES is empty and no XFF header is present,
+        get_rate_limit_key must return the direct peer IP."""
+        import importlib
+        import src.constants
+        import src.rate_limiter
+
+        mock_request = self._make_request("203.0.113.10")
+
+        with patch.dict(os.environ, {"TRUSTED_PROXIES": ""}):
+            importlib.reload(src.constants)
+            importlib.reload(src.rate_limiter)
+            result = src.rate_limiter.get_rate_limit_key(mock_request)
+
+        assert result == "203.0.113.10"
+
+    # ------------------------------------------------------------------
+    # TC-2: No TRUSTED_PROXIES configured, X-Forwarded-For is present
+    #        → must return the direct peer IP (header MUST be ignored)
+    #
+    # This is the primary security requirement: a client that forges
+    # X-Forwarded-For must NOT be able to impersonate a different IP.
+    # ------------------------------------------------------------------
+
+    def test_get_rate_limit_key_no_trusted_proxies_xff_present_ignores_xff(self):
+        """When TRUSTED_PROXIES is empty, X-Forwarded-For must be ignored
+        regardless of its value.  Trusting it without proxy validation
+        lets any client bypass rate limits by setting a forged header."""
+        import importlib
+        import src.constants
+        import src.rate_limiter
+
+        mock_request = self._make_request(
+            "203.0.113.10",
+            x_forwarded_for="1.2.3.4",
+        )
+
+        with patch.dict(os.environ, {"TRUSTED_PROXIES": ""}):
+            importlib.reload(src.constants)
+            importlib.reload(src.rate_limiter)
+            result = src.rate_limiter.get_rate_limit_key(mock_request)
+
+        # Must be the real direct-connection peer, NOT the attacker-supplied IP
+        assert result == "203.0.113.10", (
+            "get_rate_limit_key must not trust X-Forwarded-For when " "TRUSTED_PROXIES is empty"
+        )
+        assert result != "1.2.3.4"
+
+    # ------------------------------------------------------------------
+    # TC-3: Peer IP is NOT in TRUSTED_PROXIES, XFF is present (spoofed)
+    #        → must return the direct peer IP (header MUST be ignored)
+    # ------------------------------------------------------------------
+
+    def test_get_rate_limit_key_untrusted_peer_xff_spoofed_returns_client_ip(self):
+        """When the peer IP is not in TRUSTED_PROXIES, X-Forwarded-For is
+        attacker-controlled data and must be ignored entirely."""
+        import importlib
+        import src.constants
+        import src.rate_limiter
+
+        mock_request = self._make_request(
+            "198.51.100.99",  # not a trusted proxy
+            x_forwarded_for="1.2.3.4, 10.0.0.1",
+        )
+
+        # 10.0.0.1 is a trusted proxy, but 198.51.100.99 (the peer) is not
+        with patch.dict(os.environ, {"TRUSTED_PROXIES": "10.0.0.1"}):
+            importlib.reload(src.constants)
+            importlib.reload(src.rate_limiter)
+            result = src.rate_limiter.get_rate_limit_key(mock_request)
+
+        # Must return the real untrusted peer, not any value from XFF
+        assert result == "198.51.100.99"
+        assert result not in ("1.2.3.4", "10.0.0.1")
+
+    # ------------------------------------------------------------------
+    # TC-4: Peer IP IS in TRUSTED_PROXIES, XFF chain contains both
+    #        trusted and non-trusted IPs
+    #        → must return the rightmost non-trusted IP
+    #
+    # This is the core "happy path" for reverse-proxy deployments.
+    # ------------------------------------------------------------------
+
+    def test_get_rate_limit_key_trusted_peer_valid_xff_returns_rightmost_non_trusted_ip(self):
+        """When the peer is a trusted proxy and the X-Forwarded-For chain
+        contains non-trusted IPs, the rightmost non-trusted IP is the actual
+        client and must be used for rate limiting.
+
+        XFF chain:  "1.2.3.4, 10.0.0.2"
+        Direct peer: 10.0.0.1 (trusted)
+        Trusted proxies: 10.0.0.1, 10.0.0.2
+
+        Walking from right: 10.0.0.2 is trusted (skip); 1.2.3.4 is not trusted
+        → return 1.2.3.4
+        """
+        import importlib
+        import src.constants
+        import src.rate_limiter
+
+        mock_request = self._make_request(
+            "10.0.0.1",  # trusted proxy (direct peer)
+            x_forwarded_for="1.2.3.4, 10.0.0.2",
+        )
+
+        with patch.dict(os.environ, {"TRUSTED_PROXIES": "10.0.0.1,10.0.0.2"}):
+            importlib.reload(src.constants)
+            importlib.reload(src.rate_limiter)
+            result = src.rate_limiter.get_rate_limit_key(mock_request)
+
+        assert result == "1.2.3.4"
+
+    # ------------------------------------------------------------------
+    # TC-5: Peer IP IS in TRUSTED_PROXIES but no XFF header is present
+    #        → must fall back to the peer IP (no error, no None)
+    # ------------------------------------------------------------------
+
+    def test_get_rate_limit_key_trusted_peer_missing_xff_falls_back_to_peer_ip(self):
+        """When the peer is a trusted proxy but no X-Forwarded-For header
+        exists, there is no upstream IP to extract.  The function must fall
+        back to the peer IP rather than raising an exception or returning
+        None."""
+        import importlib
+        import src.constants
+        import src.rate_limiter
+
+        mock_request = self._make_request("10.0.0.1")  # no XFF header
+
+        with patch.dict(os.environ, {"TRUSTED_PROXIES": "10.0.0.1"}):
+            importlib.reload(src.constants)
+            importlib.reload(src.rate_limiter)
+            result = src.rate_limiter.get_rate_limit_key(mock_request)
+
+        assert result == "10.0.0.1"
 
 
 # Reset module state after tests

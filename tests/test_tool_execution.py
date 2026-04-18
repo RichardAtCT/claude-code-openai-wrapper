@@ -8,6 +8,9 @@ Tests the fixes for enable_tools=true parameter:
 - DEFAULT_ALLOWED_TOOLS configuration
 """
 
+import tempfile
+from unittest.mock import patch
+
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions
 
@@ -67,11 +70,16 @@ class TestDefaultAllowedTools:
 class TestParseClaudeMessage:
     """Test parse_claude_message correctly handles multi-turn conversations."""
 
-    def test_result_message_priority(self):
-        """Test that ResultMessage.result is prioritized over AssistantMessage."""
+    def _make_cli(self):
+        """Create a ClaudeCodeCLI with sandbox check bypassed for /tmp."""
         from src.claude_cli import ClaudeCodeCLI
 
-        cli = ClaudeCodeCLI(cwd="/tmp")
+        with patch("src.claude_cli.CLAUDE_CWD_ALLOWED_BASE", "/"):
+            return ClaudeCodeCLI(cwd="/tmp")
+
+    def test_result_message_priority(self):
+        """Test that ResultMessage.result is prioritized over AssistantMessage."""
+        cli = self._make_cli()
 
         # Simulate multi-turn conversation messages
         messages = [
@@ -97,9 +105,7 @@ class TestParseClaudeMessage:
 
     def test_fallback_to_last_assistant_message(self):
         """Test fallback to last AssistantMessage when no ResultMessage."""
-        from src.claude_cli import ClaudeCodeCLI
-
-        cli = ClaudeCodeCLI(cwd="/tmp")
+        cli = self._make_cli()
 
         # Simulate messages without ResultMessage
         messages = [
@@ -118,18 +124,14 @@ class TestParseClaudeMessage:
 
     def test_handles_empty_messages(self):
         """Test handling of empty message list."""
-        from src.claude_cli import ClaudeCodeCLI
-
-        cli = ClaudeCodeCLI(cwd="/tmp")
+        cli = self._make_cli()
 
         result = cli.parse_claude_message([])
         assert result is None
 
     def test_handles_dict_content_blocks(self):
         """Test handling of dict-based content blocks (old format)."""
-        from src.claude_cli import ClaudeCodeCLI
-
-        cli = ClaudeCodeCLI(cwd="/tmp")
+        cli = self._make_cli()
 
         messages = [{"content": [{"type": "text", "text": "Hello world"}]}]
 
@@ -141,17 +143,20 @@ class TestClaudeCliPermissionMode:
     """Test that ClaudeCodeCLI passes permission_mode correctly."""
 
     def test_run_completion_accepts_permission_mode(self):
-        """Test that run_completion method accepts permission_mode parameter."""
+        """Test that run_completion accepts permission_mode via claude_options dict.
+
+        permission_mode used to be a top-level kwarg but was moved inside a
+        claude_options dict so all SDK-level knobs are forwarded uniformly.
+        """
         from src.claude_cli import ClaudeCodeCLI
         import inspect
 
-        # Check that permission_mode is in the method signature
         sig = inspect.signature(ClaudeCodeCLI.run_completion)
         param_names = list(sig.parameters.keys())
 
         assert (
-            "permission_mode" in param_names
-        ), "run_completion should accept permission_mode parameter"
+            "claude_options" in param_names
+        ), "run_completion should accept claude_options dict (permission_mode now lives inside it)"
 
 
 if __name__ == "__main__":

@@ -90,16 +90,34 @@ class TestMessagesToPrompt:
 class TestFilterContent:
     """Test MessageAdapter.filter_content()"""
 
-    def test_empty_content_returns_empty(self):
-        """Empty content returns empty."""
-        assert MessageAdapter.filter_content("") == ""
-        assert MessageAdapter.filter_content(None) is None
+    def test_empty_content_returns_fallback(self):
+        """Empty content returns fallback message."""
+        result = MessageAdapter.filter_content("")
+        assert "How else can I help you with this project today?" in result
+
+    def test_none_content_returns_empty_string(self):
+        """None content returns empty string."""
+        assert MessageAdapter.filter_content(None) == ""
 
     def test_plain_text_unchanged(self):
         """Plain text content is unchanged."""
         content = "Hello, how can I help you today?"
         result = MessageAdapter.filter_content(content)
         assert result == content
+
+    def test_strips_prompt_echo(self):
+        """Should strip the prompt echo from the beginning of the response."""
+        prompt = "Explain relativity"
+        content = "Explain relativityRelativity is a theory..."
+        result = MessageAdapter.filter_content(content, prompt_echo=prompt)
+        assert result == "Relativity is a theory..."
+
+    def test_strips_assistant_prefix_after_echo(self):
+        """Should strip Assistant: prefix if it remains after echo stripping."""
+        prompt = "Human: Hello"
+        content = "Human: Hello\n\nAssistant: Hi there!"
+        result = MessageAdapter.filter_content(content, prompt_echo=prompt)
+        assert result == "Hi there!"
 
     def test_removes_thinking_blocks(self):
         """Thinking blocks are removed."""
@@ -142,77 +160,78 @@ class TestFilterContent:
 
         assert result == "The extracted result."
 
-    def test_removes_read_file_blocks(self):
-        """read_file blocks are removed."""
-        content = "Response <read_file>path/to/file.txt</read_file> more text"
+    def test_removes_thought_blocks(self):
+        """Thought blocks (alternative thinking tag) are removed."""
+        content = "<thought>Thinking...</thought>Answer."
+        result = MessageAdapter.filter_content(content)
+        assert "<thought>" not in result
+        assert "Thinking" not in result
+        assert result == "Answer."
+
+    def test_replaces_tool_tags_with_placeholders(self):
+        """Tool tags are replaced with placeholders instead of deleted."""
+        content = "Checking files: <read_file>src/main.py</read_file>"
         result = MessageAdapter.filter_content(content)
 
         assert "<read_file>" not in result
-        assert "path/to/file" not in result
+        assert "[Tool: read_file src/main.py]" in result
 
-    def test_removes_write_file_blocks(self):
-        """write_file blocks are removed."""
-        content = "Response <write_file>content</write_file> more text"
-        result = MessageAdapter.filter_content(content)
-
-        assert "<write_file>" not in result
-
-    def test_removes_bash_blocks(self):
-        """bash blocks are removed."""
-        content = "Here's the output: <bash>ls -la</bash> done"
+    def test_replaces_bash_with_placeholder(self):
+        """Bash blocks are replaced with placeholders."""
+        content = "Running command: <bash>ls -la</bash>"
         result = MessageAdapter.filter_content(content)
 
         assert "<bash>" not in result
-        assert "ls -la" not in result
+        assert "[Tool: bash ls -la]" in result
 
-    def test_removes_search_files_blocks(self):
-        """search_files blocks are removed."""
-        content = "<search_files>pattern</search_files>Result"
+    def test_truncates_long_tool_placeholders(self):
+        """Long tool arguments are truncated in the placeholder."""
+        long_arg = "a" * 100
+        content = f"<bash>{long_arg}</bash>"
         result = MessageAdapter.filter_content(content)
 
-        assert "<search_files>" not in result
+        assert len(result) < 100
+        assert "..." in result
 
-    def test_removes_str_replace_editor_blocks(self):
-        """str_replace_editor blocks are removed."""
-        content = "<str_replace_editor>edit</str_replace_editor>Done"
-        result = MessageAdapter.filter_content(content)
-
-        assert "<str_replace_editor>" not in result
-
-    def test_removes_args_blocks(self):
-        """args blocks are removed."""
+    def test_replaces_args_blocks(self):
+        """args blocks are replaced with placeholders."""
         content = "Command <args>--flag value</args> executed"
         result = MessageAdapter.filter_content(content)
 
         assert "<args>" not in result
+        assert "[Tool: args --flag value]" in result
 
-    def test_removes_ask_followup_question_blocks(self):
-        """ask_followup_question blocks are removed."""
+    def test_replaces_ask_followup_question_blocks(self):
+        """ask_followup_question blocks are replaced with placeholders."""
         content = "<ask_followup_question>What do you mean?</ask_followup_question>Ok"
         result = MessageAdapter.filter_content(content)
 
         assert "<ask_followup_question>" not in result
+        assert "[Tool: ask_followup_question What do you mean?]" in result
 
-    def test_removes_question_blocks(self):
-        """question blocks are removed."""
+    def test_replaces_question_blocks(self):
+        """question blocks are replaced with placeholders."""
         content = "<question>Do you want to proceed?</question>Answer"
         result = MessageAdapter.filter_content(content)
 
         assert "<question>" not in result
+        assert "[Tool: question Do you want to proceed?]" in result
 
-    def test_removes_follow_up_blocks(self):
-        """follow_up blocks are removed."""
+    def test_replaces_follow_up_blocks(self):
+        """follow_up blocks are replaced with placeholders."""
         content = "<follow_up>Please clarify</follow_up>Response"
         result = MessageAdapter.filter_content(content)
 
         assert "<follow_up>" not in result
+        assert "[Tool: follow_up Please clarify]" in result
 
-    def test_removes_suggest_blocks(self):
-        """suggest blocks are removed."""
+    def test_replaces_suggest_blocks(self):
+        """suggest blocks are replaced with placeholders."""
         content = "<suggest>try this</suggest>Suggestion"
         result = MessageAdapter.filter_content(content)
 
         assert "<suggest>" not in result
+        assert "[Tool: suggest try this]" in result
 
     def test_replaces_image_references(self):
         """Image references are replaced with placeholder."""
@@ -243,14 +262,14 @@ class TestFilterContent:
         content = "<thinking>Only thinking content</thinking>"
         result = MessageAdapter.filter_content(content)
 
-        assert "How can I help you today?" in result
+        assert "How else can I help you with this project today?" in result
 
     def test_whitespace_only_after_filtering_returns_fallback(self):
         """If content is only whitespace after filtering, returns fallback."""
         content = "<thinking>content</thinking>   \n   \n   "
         result = MessageAdapter.filter_content(content)
 
-        assert "How can I help you today?" in result
+        assert "How else can I help you with this project today?" in result
 
 
 class TestFormatClaudeResponse:

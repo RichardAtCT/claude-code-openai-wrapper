@@ -40,6 +40,7 @@ logs/
 # Testing
 .coverage
 .pytest_cache/
+.hypothesis/
 htmlcov/
 
 # Claude Code
@@ -58,3 +59,4 @@ test_performance_*.py
 test_user_*.py
 test_new_*.py
 test_roocode_compatibility.py
+.worktrees/

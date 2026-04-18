@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
 from threading import Lock
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.constants import CLAUDE_TOOLS, DEFAULT_ALLOWED_TOOLS, DEFAULT_DISALLOWED_TOOLS
 
@@ -56,7 +56,7 @@ TOOL_METADATA: Dict[str, ToolMetadata] = {
             "run_in_background": "Run command in background",
         },
         examples=["Run npm install", "Execute git status", "List directory contents"],
-        is_safe=True,
+        is_safe=False,
         requires_network=False,
     ),
     "Glob": ToolMetadata(
@@ -245,8 +245,8 @@ class ToolConfiguration:
 
     allowed_tools: Optional[List[str]] = None
     disallowed_tools: Optional[List[str]] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def get_effective_tools(self) -> Set[str]:
         """
@@ -280,7 +280,7 @@ class ToolConfiguration:
             self.allowed_tools = allowed_tools
         if disallowed_tools is not None:
             self.disallowed_tools = disallowed_tools
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
 
 class ToolManager:

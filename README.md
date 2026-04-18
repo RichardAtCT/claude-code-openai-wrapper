@@ -4,16 +4,17 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 
 ## Version
 
-**Current Version:** 2.2.0
-- **Interactive Landing Page:** API explorer at root URL with live endpoint testing
-- **Anthropic Messages API:** Native `/v1/messages` endpoint alongside OpenAI format
-- **Explicit Auth Selection:** New `CLAUDE_AUTH_METHOD` env var for auth control
-- **Tool Execution Fix:** `enable_tools: true` now properly enables Claude Code tools
+**Current Version:** 2.3.0
+- **Bug fixes:** `continue_conversation` SDK field corrected; `max_thinking_tokens` now wired through; real token counts from SDK; `finish_reason` mapped from actual `stop_reason`
+- **Concurrent requests:** Auth env vars passed via `options.env` — no more serialising lock
+- **New parameters:** `reasoning_effort`, `response_format`, `max_budget_usd`, `thinking` added to request models
+- **Async session manager:** `threading.Lock` replaced with `asyncio.Lock` for proper async safety
+- **SDK options refactor:** `run_completion` simplified to accept a `claude_options` dict, enabling generic passthrough of any SDK field
 
-**Upgrading from v1.x?**
+**Upgrading from v2.2.0:**
 1. Pull latest code: `git pull origin main`
 2. Update dependencies: `poetry install`
-3. Restart server - that's it!
+3. Restart server — no breaking changes to the OpenAI/Anthropic API surface
 
 **Migration Resources:**
 - [MIGRATION_STATUS.md](./MIGRATION_STATUS.md) - Detailed v2.0.0 migration status
@@ -32,7 +33,9 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - ✅ Model selection support with validation
 - ✅ **Fast by default** - Tools disabled for OpenAI compatibility (5-10x faster)
 - ✅ Optional tool usage (Read, Write, Bash, etc.) when explicitly enabled
-- ✅ **Real-time cost and token tracking** from SDK
+- ✅ **Real token counts** from SDK metadata (no more estimates)
+- ✅ **Accurate `finish_reason`** mapped from SDK `stop_reason`
+- ✅ **Fully concurrent requests** — no serialising lock for auth env vars
 - ✅ **Session continuity** with conversation history across requests
 - ✅ **Session management endpoints** for full session control
 - ✅ Health, auth status, and models endpoints
@@ -50,9 +53,11 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 ### 🛠 **Claude Agent SDK Integration**
 - **Official Claude Agent SDK** integration (v0.1.18) 🆕
 - **Real-time cost tracking** - actual costs from SDK metadata
-- **Accurate token counting** - input/output tokens from SDK
+- **Real token counting** - input/output tokens directly from SDK (no estimation)
+- **Accurate finish_reason** - mapped from SDK `stop_reason` (`end_turn` → `stop`, `max_tokens` → `length`)
 - **Session management** - proper session IDs and continuity
 - **Enhanced error handling** with detailed authentication diagnostics
+- **Fully concurrent** - auth env vars passed via SDK options, no serialising mutex
 - **Modern SDK features** - Latest capabilities and improvements
 
 ### 🔐 **Multi-Provider Authentication**
@@ -66,6 +71,10 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - **System prompt support** via SDK options
 - **Optional tool usage** - Enable Claude Code tools (Read, Write, Bash, etc.) when needed
 - **Fast default mode** - Tools disabled by default for OpenAI API compatibility
+- **`reasoning_effort`** - Map OpenAI `reasoning_effort: "low"|"medium"|"high"` to SDK `effort`
+- **`response_format`** - Pass `{"type": "json_object"}` or JSON Schema for structured outputs
+- **`thinking`** - Explicit thinking config `{"type": "enabled", "budget_tokens": N}` (overrides `max_tokens` mapping)
+- **`max_budget_usd`** - Per-request cost cap in USD
 - **Development mode** with auto-reload (`uvicorn --reload`)
 - **Interactive API key protection** - Optional security with auto-generated tokens
 - **Comprehensive logging** and debugging capabilities
@@ -83,7 +92,7 @@ Get started in under 2 minutes:
 
 ```bash
 # 1. Clone and setup the wrapper
-git clone https://github.com/RichardAtCT/claude-code-openai-wrapper
+git clone https://github.com/gustavokch/claude-code-openai-wrapper
 cd claude-code-openai-wrapper
 poetry install  # Installs SDK with bundled Claude Code CLI
 
@@ -102,7 +111,7 @@ poetry run python test_endpoints.py
 
 ## Prerequisites
 
-1. **Python 3.10+**: Required for the server (supports Python 3.10, 3.11, 3.12, 3.13)
+1. **Python 3.12+**: Required for the server
 
 2. **Poetry**: For dependency management
    ```bash
@@ -127,7 +136,7 @@ poetry run python test_endpoints.py
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/RichardAtCT/claude-code-openai-wrapper
+   git clone https://github.com/gustavokch/claude-code-openai-wrapper
    cd claude-code-openai-wrapper
    ```
 
@@ -467,6 +476,71 @@ for chunk in stream:
         print(chunk.choices[0].delta.content, end="")
 ```
 
+## Advanced Parameters
+
+These extra fields extend the standard OpenAI request body and are passed through to the Claude Agent SDK.
+
+### `reasoning_effort`
+
+Controls the depth of Claude's thinking. Maps to the SDK `effort` field.
+
+```python
+response = client.chat.completions.create(
+    model="claude-sonnet-4-5-20250929",
+    messages=[{"role": "user", "content": "Solve this math problem..."}],
+    extra_body={"reasoning_effort": "high"}  # "low" | "medium" | "high"
+)
+```
+
+### `response_format`
+
+Request structured output. Passed through as SDK `output_format`.
+
+```python
+response = client.chat.completions.create(
+    model="claude-sonnet-4-5-20250929",
+    messages=[{"role": "user", "content": "Return JSON with name and age fields."}],
+    extra_body={"response_format": {"type": "json_object"}}
+)
+```
+
+### `thinking`
+
+Explicit thinking configuration — takes precedence over the `max_tokens → max_thinking_tokens` mapping.
+
+```python
+response = client.chat.completions.create(
+    model="claude-sonnet-4-5-20250929",
+    messages=[{"role": "user", "content": "Hard reasoning task"}],
+    extra_body={"thinking": {"type": "enabled", "budget_tokens": 8000}}
+)
+# Also: {"type": "adaptive"} or {"type": "disabled"}
+```
+
+### `max_budget_usd`
+
+Cap per-request cost in USD. The SDK will stop generation when the budget is reached.
+
+```python
+response = client.chat.completions.create(
+    model="claude-sonnet-4-5-20250929",
+    messages=[{"role": "user", "content": "Long task..."}],
+    extra_body={"max_budget_usd": 0.05}  # stop at $0.05
+)
+```
+
+### `max_tokens` / `max_completion_tokens`
+
+Maps to the SDK's `max_thinking_tokens` (best-effort). For precise control use `thinking` above.
+
+```python
+response = client.chat.completions.create(
+    model="claude-sonnet-4-5-20250929",
+    messages=[{"role": "user", "content": "Brief answer please"}],
+    max_tokens=512
+)
+```
+
 ## Supported Models
 
 All Claude models through November 2025 are supported:
@@ -602,26 +676,32 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 ### 🚫 **Current Limitations**
 - **Images in messages** are converted to text placeholders
 - **Function calling** not supported (tools work automatically based on prompts)
-- **OpenAI parameters** not yet mapped: `temperature`, `top_p`, `max_tokens`, `logit_bias`, `presence_penalty`, `frequency_penalty`
+- **OpenAI parameters** not mapped: `temperature`, `top_p`, `logit_bias`, `presence_penalty`, `frequency_penalty` (ignored with a warning)
 - **Multiple responses** (`n > 1`) not supported
 
-### 🛣 **Planned Enhancements** 
-- [ ] **Tool configuration** - allowed/disallowed tools endpoints  
-- [ ] **OpenAI parameter mapping** - temperature, top_p, max_tokens support
-- [ ] **Enhanced streaming** - better chunk handling
+### 🛣 **Planned Enhancements**
+- [ ] **Token-level streaming** - `include_partial_messages` for finer chunks
 - [ ] **MCP integration** - Model Context Protocol server support
+- [ ] **Temperature/top_p** - native SDK mapping when available
 
-### ✅ **Recent Improvements (v2.2.0)**
-- **Interactive Landing Page**: API explorer with live endpoint testing
-- **Anthropic Messages API**: Native `/v1/messages` endpoint
-- **Explicit Auth Selection**: `CLAUDE_AUTH_METHOD` env var
-- **Tool Execution Fix**: `enable_tools: true` now works correctly
+### ✅ **Recent Improvements (v2.3.0)**
+- **Bug fixes:** `continue_conversation` field corrected; `max_thinking_tokens` now wired through to SDK
+- **Real token counts**: response `usage` comes from SDK metadata, not character estimation
+- **Accurate `finish_reason`**: mapped from SDK `stop_reason` (`max_tokens` → `length`, etc.)
+- **Concurrent requests**: auth env vars via `options.env` — no serialising mutex
+- **New parameters**: `reasoning_effort`, `response_format`, `max_budget_usd`, `thinking`
+- **Async session manager**: `threading.Lock` → `asyncio.Lock` for proper async safety
+
+### ✅ **v2.2.0 Features**
+- Interactive Landing Page: API explorer with live endpoint testing
+- Anthropic Messages API: Native `/v1/messages` endpoint
+- Explicit Auth Selection: `CLAUDE_AUTH_METHOD` env var
+- Tool Execution Fix: `enable_tools: true` now works correctly
 
 ### ✅ **v2.0.0 - v2.1.0 Features**
 - Claude Agent SDK v0.1.18 with bundled CLI
 - Multi-provider auth (CLI, API key, Bedrock, Vertex AI)
 - Session continuity and management
-- Real-time cost and token tracking
 - System prompt support
 
 ## Troubleshooting
@@ -674,13 +754,16 @@ curl http://localhost:8000/v1/auth/status | python -m json.tool
 ### ⚙️ **Development Tools**
 ```bash
 # Install development dependencies
-poetry install --with dev
+poetry install
 
 # Format code
 poetry run black .
 
-# Run full tests (when implemented)
-poetry run pytest tests/
+# Run unit tests (no server required)
+PYTHONPATH=$(pwd) poetry run pytest tests/test_claude_cli_unit.py tests/test_session_manager_unit.py tests/test_models_unit.py -v
+
+# Run full test suite (unit + integration, server must be running for integration tests)
+PYTHONPATH=$(pwd) poetry run pytest tests/ -v
 ```
 
 ### ✅ **Expected Results**

@@ -108,14 +108,15 @@ class TestClaudeCodeCLIParseMessage:
         result = cli.parse_claude_message([])
         assert result is None
 
-    def test_parse_no_matching_messages_returns_none(self, cli_class):
-        """No matching messages returns None."""
+    def test_parse_no_matching_messages_returns_fallback(self, cli_class):
+        """Messages with no extractable assistant text return a conversational fallback."""
         cli = MagicMock()
         cli.parse_claude_message = cli_class.parse_claude_message.__get__(cli, cli_class)
 
         messages = [{"type": "system", "content": "System message"}]
         result = cli.parse_claude_message(messages)
-        assert result is None
+        assert result is not None
+        assert "processed your request" in result
 
     def test_parse_uses_last_text(self, cli_class):
         """When multiple messages, uses the last one with text."""
@@ -375,7 +376,9 @@ class TestClaudeCodeCLIInit:
 
                     cli = ClaudeCodeCLI(cwd=temp_dir)
 
-                    assert cli.cwd == Path(temp_dir)
+                    # cwd is stored after .resolve() for sandbox-safety,
+                    # which on macOS canonicalises /var/... → /private/var/...
+                    assert cli.cwd == Path(temp_dir).resolve()
                     assert cli.temp_dir is None
                     assert cli.timeout == 600.0  # 600000ms / 1000
 
@@ -440,7 +443,7 @@ class TestClaudeCodeCLIInit:
 
                     # Should not raise, just log warning
                     cli = ClaudeCodeCLI(cwd=temp_dir)
-                    assert cli.cwd == Path(temp_dir)
+                    assert cli.cwd == Path(temp_dir).resolve()
 
 
 class TestClaudeCodeCLIVerifyCLI:
@@ -561,7 +564,9 @@ class TestClaudeCodeCLIRunCompletion:
             yield mock_message
 
         with patch("src.claude_cli.query", mock_query):
-            async for _ in cli_instance.run_completion("Hello", model="claude-3-opus"):
+            async for _ in cli_instance.run_completion(
+                "Hello", claude_options={"model": "claude-3-opus"}
+            ):
                 pass
 
             assert captured_options[0].model == "claude-3-opus"
@@ -579,8 +584,7 @@ class TestClaudeCodeCLIRunCompletion:
         with patch("src.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion(
                 "Hello",
-                allowed_tools=["Bash", "Read"],
-                disallowed_tools=["Task"],
+                claude_options={"allowed_tools": ["Bash", "Read"], "disallowed_tools": ["Task"]},
             ):
                 pass
 
@@ -598,7 +602,9 @@ class TestClaudeCodeCLIRunCompletion:
             yield mock_message
 
         with patch("src.claude_cli.query", mock_query):
-            async for _ in cli_instance.run_completion("Hello", permission_mode="acceptEdits"):
+            async for _ in cli_instance.run_completion(
+                "Hello", claude_options={"permission_mode": "acceptEdits"}
+            ):
                 pass
 
             assert captured_options[0].permission_mode == "acceptEdits"
@@ -617,7 +623,7 @@ class TestClaudeCodeCLIRunCompletion:
             async for _ in cli_instance.run_completion("Hello", continue_session=True):
                 pass
 
-            assert captured_options[0].continue_session is True
+            assert captured_options[0].continue_conversation is True
 
     @pytest.mark.asyncio
     async def test_run_completion_resume_session(self, cli_instance):
@@ -723,3 +729,145 @@ class TestClaudeCodeCLICleanupException:
 
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
+
+
+class TestClaudeCodeCLICwdSandbox:
+    """Test ClaudeCodeCLI.__init__() CWD sandboxing against CLAUDE_CWD_ALLOWED_BASE.
+
+    FR-5.1: Canonicalize CLAUDE_CWD with Path.resolve() and reject paths outside
+    the allowed base directory (CLAUDE_CWD_ALLOWED_BASE, default: temp directory).
+
+    Architecture section 7.6 defines the validation flow:
+    1. Resolve cwd with Path(cwd).resolve()
+    2. Resolve allowed base with Path(CLAUDE_CWD_ALLOWED_BASE).resolve()
+    3. Check resolved_cwd.is_relative_to(resolved_base)
+    4. If not: raise ValueError with descriptive message
+    """
+
+    def setup_method(self):
+        """Create a controlled allowed base temp directory for each test."""
+        import shutil
+
+        self._dirs_to_cleanup = []
+        # Create an isolated base directory that is our sandbox root
+        self.allowed_base = tempfile.mkdtemp(prefix="test_sandbox_base_")
+        self._dirs_to_cleanup.append(self.allowed_base)
+
+    def teardown_method(self):
+        """Remove all temp directories created during tests."""
+        import shutil
+
+        for d in self._dirs_to_cleanup:
+            if os.path.exists(d):
+                shutil.rmtree(d)
+
+    def _make_cli(self, cwd=None, **kwargs):
+        """Helper: instantiate ClaudeCodeCLI with mocked auth and patched allowed base."""
+        with patch("src.auth.validate_claude_code_auth") as mock_validate:
+            with patch("src.auth.auth_manager") as mock_auth:
+                mock_validate.return_value = (True, {"method": "anthropic"})
+                mock_auth.get_claude_code_env_vars.return_value = {}
+
+                # Patch CLAUDE_CWD_ALLOWED_BASE inside claude_cli module so the
+                # sandbox check uses our controlled base instead of the real temp dir.
+                with patch("src.claude_cli.CLAUDE_CWD_ALLOWED_BASE", self.allowed_base):
+                    from src.claude_cli import ClaudeCodeCLI
+
+                    return ClaudeCodeCLI(cwd=cwd, **kwargs)
+
+    def test_cwd_outside_allowed_base_raises_value_error(self):
+        """Setting CWD to an absolute path outside the allowed base raises ValueError.
+
+        CLAUDE_CWD=/etc (or any path outside the allowed temp base) must be
+        rejected at startup to prevent directory traversal into sensitive areas.
+        """
+        # Use the system temp dir itself as an 'outside' directory — it is a
+        # real directory that exists but is NOT inside self.allowed_base.
+        outside_dir = tempfile.gettempdir()
+
+        with pytest.raises(ValueError, match="outside allowed base"):
+            self._make_cli(cwd=outside_dir)
+
+    def test_cwd_path_traversal_raises_value_error(self):
+        """A relative path traversal that escapes the allowed base raises ValueError.
+
+        CLAUDE_CWD=../../etc must resolve to an absolute path and then be
+        checked — if it escapes the allowed base the request is rejected.
+        """
+        # Create a subdirectory inside the allowed base and craft a traversal
+        # path that would land outside the allowed base after resolution.
+        subdir = tempfile.mkdtemp(dir=self.allowed_base, prefix="subdir_")
+        self._dirs_to_cleanup.append(subdir)
+
+        # Construct a traversal: subdir/../../.. resolves above allowed_base
+        traversal_path = os.path.join(subdir, "..", "..", "..")
+
+        with pytest.raises(ValueError, match="outside allowed base"):
+            self._make_cli(cwd=traversal_path)
+
+    def test_cwd_inside_allowed_base_succeeds(self):
+        """A CWD that resolves to a path inside the allowed base initializes normally."""
+        valid_cwd = tempfile.mkdtemp(dir=self.allowed_base, prefix="valid_workspace_")
+        self._dirs_to_cleanup.append(valid_cwd)
+
+        # Should not raise
+        cli = self._make_cli(cwd=valid_cwd)
+
+        assert cli.cwd == Path(valid_cwd).resolve()
+        assert cli.temp_dir is None
+
+    def test_cwd_not_provided_uses_temp_dir_inside_allowed_base(self):
+        """When no CWD is provided, the auto-created temp dir is inside allowed base.
+
+        The default temp dir is created under tempfile.gettempdir() which is
+        also the default CLAUDE_CWD_ALLOWED_BASE — so no sandbox violation occurs.
+        """
+        # For this test we use the real system temp dir as the allowed base
+        # (mirroring the production default) so the auto-created temp workspace
+        # is guaranteed to be inside the allowed base.
+        real_temp = tempfile.gettempdir()
+
+        with patch("src.auth.validate_claude_code_auth") as mock_validate:
+            with patch("src.auth.auth_manager") as mock_auth:
+                with patch("atexit.register"):  # Don't register real cleanup
+                    mock_validate.return_value = (True, {"method": "anthropic"})
+                    mock_auth.get_claude_code_env_vars.return_value = {}
+
+                    with patch("src.claude_cli.CLAUDE_CWD_ALLOWED_BASE", real_temp):
+                        from src.claude_cli import ClaudeCodeCLI
+
+                        cli = ClaudeCodeCLI()
+
+                    assert cli.temp_dir is not None
+                    assert "claude_code_workspace_" in cli.temp_dir
+
+                    # Cleanup the auto-created temp dir
+                    if cli.temp_dir and os.path.exists(cli.temp_dir):
+                        import shutil
+
+                        shutil.rmtree(cli.temp_dir)
+
+    def test_cwd_equal_to_allowed_base_itself_succeeds(self):
+        """Setting CWD to exactly the allowed base directory is permitted.
+
+        The allowed base itself satisfies is_relative_to(allowed_base) because
+        a path is considered relative to itself.
+        """
+        # Should not raise — the allowed base is a valid starting point
+        cli = self._make_cli(cwd=self.allowed_base)
+
+        assert cli.cwd == Path(self.allowed_base).resolve()
+        assert cli.temp_dir is None
+
+    def test_cwd_sandbox_error_message_contains_paths(self):
+        """ValueError raised for sandbox violation includes both the resolved CWD
+        and the allowed base in the message so operators can diagnose the problem.
+        """
+        outside_dir = tempfile.gettempdir()
+
+        with pytest.raises(ValueError) as exc_info:
+            self._make_cli(cwd=outside_dir)
+
+        error_message = str(exc_info.value)
+        # The error must be descriptive — operators need to know what was rejected
+        assert "outside allowed base" in error_message

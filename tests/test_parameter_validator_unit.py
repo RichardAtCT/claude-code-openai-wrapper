@@ -362,3 +362,37 @@ class TestCompatibilityReporter:
         """Minimal request with defaults has no unsupported parameters."""
         report = CompatibilityReporter.generate_compatibility_report(minimal_request)
         assert len(report["unsupported_parameters"]) == 0
+
+
+class TestParameterValidatorIsModelRecognized:
+    """Test ParameterValidator.is_model_recognized()
+
+    This method returns True only when the model string is present in
+    SUPPORTED_MODELS (the recognized Claude model list). It is used by the
+    chat endpoint to decide whether to attach an X-Claude-Model-Warning header.
+    """
+
+    def test_is_model_recognized_known_sonnet_46_returns_true(self):
+        """claude-sonnet-4-6 is a known supported model and must return True."""
+        result = ParameterValidator.is_model_recognized("claude-sonnet-4-6")
+        assert result is True
+
+    def test_is_model_recognized_known_sonnet_45_dated_returns_true(self):
+        """claude-sonnet-4-5-20250929 is a known supported model and must return True."""
+        result = ParameterValidator.is_model_recognized("claude-sonnet-4-5-20250929")
+        assert result is True
+
+    def test_is_model_recognized_unknown_openai_model_returns_false(self):
+        """gpt-4-turbo is not a Claude model and must return False."""
+        result = ParameterValidator.is_model_recognized("gpt-4-turbo")
+        assert result is False
+
+    def test_is_model_recognized_empty_string_returns_false(self):
+        """Empty string is not in SUPPORTED_MODELS and must return False."""
+        result = ParameterValidator.is_model_recognized("")
+        assert result is False
+
+    def test_is_model_recognized_typo_model_returns_false(self):
+        """Model string with a suffix typo is not in SUPPORTED_MODELS and must return False."""
+        result = ParameterValidator.is_model_recognized("claude-sonnet-4-6-WRONG")
+        assert result is False

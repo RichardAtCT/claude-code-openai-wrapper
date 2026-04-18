@@ -12,7 +12,7 @@ import pytest
 import requests
 from typing import Dict, Any
 
-from tests.conftest import requires_server
+from tests.conftest import requires_server, MAX_TOKENS
 
 # Test server URL
 BASE_URL = "http://localhost:8000"
@@ -20,26 +20,25 @@ BASE_URL = "http://localhost:8000"
 
 @requires_server
 def test_basic_completion():
-    """Test basic chat completion with OpenAI parameters."""
+    """Test basic chat completion with Anthropic parameters."""
     print("=== Testing Basic Completion ===")
 
     payload = {
         "model": "claude-3-5-sonnet-20241022",
+        "system": "You are a helpful assistant.",
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Say hello in a creative way."},
         ],
-        "temperature": 0.7,  # Will be ignored with warning
-        "max_tokens": 100,  # Will be ignored with warning
-        "stream": False,
+        "temperature": 0.7,
+        "max_tokens": MAX_TOKENS,
     }
 
-    response = requests.post(f"{BASE_URL}/v1/chat/completions", json=payload)
+    response = requests.post(f"{BASE_URL}/v1/messages", json=payload)
 
     if response.status_code == 200:
         print("✅ Request successful")
         result = response.json()
-        print(f"Response: {result['choices'][0]['message']['content'][:100]}...")
+        print(f"Response: {result['content'][0]['text'][:100]}...")
     else:
         print(f"❌ Request failed: {response.status_code}")
         print(response.text)
@@ -104,51 +103,33 @@ def test_compatibility_check():
         print(response.text)
 
 
-@requires_server
-def test_parameter_validation():
-    """Test parameter validation (should fail)."""
-    print("\n=== Testing Parameter Validation ===")
-
-    # Test with n > 1 (should fail)
-    payload = {
-        "model": "claude-3-5-sonnet-20241022",
-        "messages": [{"role": "user", "content": "Hello"}],
-        "n": 3,  # Should fail validation
-    }
-
-    response = requests.post(f"{BASE_URL}/v1/chat/completions", json=payload)
-
-    if response.status_code == 422:
-        print("✅ Validation correctly rejected n > 1")
-        print(response.json())
-    else:
-        print(f"❌ Expected validation error, got: {response.status_code}")
-
-
 def test_streaming_with_parameters():
-    """Test streaming response with unsupported parameters."""
-    print("\n=== Testing Streaming with Unsupported Parameters ===")
+    """Test streaming response with Anthropic SSE format."""
+    print("\n=== Testing Streaming with Parameters ===")
 
     payload = {
         "model": "claude-3-5-sonnet-20241022",
         "messages": [{"role": "user", "content": "Write a short poem about programming"}],
-        "temperature": 0.9,  # Will be warned about
-        "max_tokens": 200,  # Will be warned about
+        "temperature": 0.9,
+        "max_tokens": MAX_TOKENS,
         "stream": True,
     }
 
     try:
-        response = requests.post(f"{BASE_URL}/v1/chat/completions", json=payload, stream=True)
+        response = requests.post(f"{BASE_URL}/v1/messages", json=payload, stream=True)
 
         if response.status_code == 200:
             print("✅ Streaming request successful")
             print("First few chunks:")
             count = 0
+            current_event = None
             for line in response.iter_lines():
                 if line and count < 5:
                     line_str = line.decode("utf-8")
-                    if line_str.startswith("data: ") and not line_str.endswith("[DONE]"):
-                        print(f"  {line_str}")
+                    if line_str.startswith("event: "):
+                        current_event = line_str[7:]
+                    elif line_str.startswith("data: ") and current_event == "content_block_delta":
+                        print(f"  [{current_event}] {line_str}")
                         count += 1
         else:
             print(f"❌ Streaming request failed: {response.status_code}")
@@ -173,7 +154,6 @@ def main():
         test_basic_completion()
         test_with_claude_headers()
         test_compatibility_check()
-        test_parameter_validation()
         test_streaming_with_parameters()
 
         print("\n" + "=" * 50)

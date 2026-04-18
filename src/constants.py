@@ -13,11 +13,6 @@ Usage Examples:
     from src.constants import DEFAULT_ALLOWED_TOOLS
     options = {"allowed_tools": DEFAULT_ALLOWED_TOOLS}
 
-    # Use rate limits in FastAPI
-    from src.constants import RATE_LIMIT_CHAT
-    @limiter.limit(f"{RATE_LIMIT_CHAT}/minute")
-    async def chat_endpoint(): ...
-
 Note:
     - Tool configurations are managed by ToolManager (see tool_manager.py)
     - Model validation uses graceful degradation (warns but allows unknown models)
@@ -25,6 +20,7 @@ Note:
 """
 
 import os
+import tempfile
 
 # Claude Agent SDK Tool Names
 # These are the built-in tools available in the Claude Agent SDK
@@ -58,23 +54,40 @@ DEFAULT_ALLOWED_TOOLS = [
     "Edit",
 ]
 
-# Tools to disallow by default (potentially dangerous or slow)
-DEFAULT_DISALLOWED_TOOLS = [
-    "Task",  # Can spawn sub-agents
-    "WebFetch",  # External network access
-    "WebSearch",  # External network access
-]
+# Tools to disallow when tools are enabled. Default empty; override via env
+# with a comma-separated slug list, e.g.
+#   DISALLOWED_TOOLS=Task,WebFetch,WebSearch
+# Common tools worth considering: Task (spawns sub-agents), WebFetch,
+# WebSearch (external network), Bash (shell execution).
+_disallowed_raw = os.getenv("DISALLOWED_TOOLS", "").strip()
+DEFAULT_DISALLOWED_TOOLS = [t.strip() for t in _disallowed_raw.split(",") if t.strip()]
 
-# Claude Models
-# Models supported by Claude Agent SDK (as of November 2025)
-# NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x
-CLAUDE_MODELS = [
-    # Claude 4.5 Family (Latest - Fall 2025) - RECOMMENDED
-    "claude-opus-4-5-20250929",  # Latest Opus 4.5 - Most capable
-    "claude-sonnet-4-5-20250929",  # Recommended - best coding model
-    "claude-haiku-4-5-20251001",  # Fast & cheap
+# Claude models exposed by /v1/models. Order matters — first entry is what
+# clients (e.g. Open WebUI) pick as the default.
+#
+# NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x.
+#
+# The default list below is curated. If you just need to add or swap models
+# without a fork edit + image rebuild, set CLAUDE_MODELS_OVERRIDE to a
+# comma-separated list of slugs (e.g. in the Helm values):
+#   CLAUDE_MODELS_OVERRIDE=claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5
+#
+# TODO: /v1/models returns this list verbatim instead of proxying
+# ${ANTHROPIC_BASE_URL}/v1/models. Future: proxy with a TTL cache and a
+# filter (OpenRouter returns ~100 models; we want id.startswith("anthropic/")),
+# falling back to this list when upstream is unreachable.
+DEFAULT_CLAUDE_MODELS = [
+    # Claude 4.7 Family (Latest - 2026) - RECOMMENDED
+    "claude-opus-4-7",  # Most capable
+    # Claude 4.6 Family
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",  # Best speed/intelligence balance; best coding model
+    # Claude 4.5 Family (Fall 2025)
+    "claude-opus-4-5-20250929",
+    "claude-sonnet-4-5-20250929",
+    "claude-haiku-4-5-20251001",  # Fastest, near-frontier
     # Claude 4.1
-    "claude-opus-4-1-20250805",  # Upgraded Opus 4
+    "claude-opus-4-1-20250805",
     # Claude 4.0 Family (Original - May 2025)
     "claude-opus-4-20250514",
     "claude-sonnet-4-20250514",
@@ -86,12 +99,18 @@ CLAUDE_MODELS = [
     # "claude-3-5-haiku-20241022",
 ]
 
-# Default model (recommended for most use cases)
-# Can be overridden via DEFAULT_MODEL environment variable
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-5-20250929")
+_models_override = os.getenv("CLAUDE_MODELS_OVERRIDE", "").strip()
+CLAUDE_MODELS = (
+    [m.strip() for m in _models_override.split(",") if m.strip()]
+    if _models_override
+    else DEFAULT_CLAUDE_MODELS
+)
 
-# Fast model (for speed/cost optimization)
-FAST_MODEL = "claude-haiku-4-5-20251001"
+# Default model used when a request omits `model`. Overridable via env.
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6")
+
+# Fast model (for speed/cost optimization). Overridable via env.
+FAST_MODEL = os.getenv("FAST_MODEL", "claude-haiku-4-5-20251001")
 
 # System Prompt Types
 SYSTEM_PROMPT_TYPE_TEXT = "text"
@@ -109,8 +128,9 @@ DEFAULT_PORT = 8000
 SESSION_CLEANUP_INTERVAL_MINUTES = 5
 SESSION_MAX_AGE_MINUTES = 60
 
-# Rate Limiting (requests per minute)
-RATE_LIMIT_DEFAULT = 60
-RATE_LIMIT_CHAT = 30
-RATE_LIMIT_MODELS = 100
-RATE_LIMIT_HEALTH = 200
+# Security Configuration
+MAX_SESSIONS = int(os.getenv("MAX_SESSIONS", "1000"))
+MAX_SESSION_MESSAGES = int(os.getenv("MAX_SESSION_MESSAGES", "100"))
+_trusted_proxies_raw = os.getenv("TRUSTED_PROXIES", "")
+TRUSTED_PROXIES = [p.strip() for p in _trusted_proxies_raw.split(",") if p.strip()]
+CLAUDE_CWD_ALLOWED_BASE = os.getenv("CLAUDE_CWD_ALLOWED_BASE", tempfile.gettempdir())

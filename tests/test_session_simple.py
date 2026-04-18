@@ -10,7 +10,7 @@ import requests
 import json
 import time
 
-from tests.conftest import requires_server
+from tests.conftest import requires_server, MAX_TOKENS
 
 BASE_URL = "http://localhost:8000"
 TEST_SESSION_ID = "test-simple-session"
@@ -23,10 +23,11 @@ def test_session_creation():
 
     # Make a request with a session_id
     response = requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "Hello, remember my name is Alice."}],
+            "max_tokens": MAX_TOKENS,
             "session_id": TEST_SESSION_ID,
         },
     )
@@ -63,10 +64,11 @@ def test_session_continuity():
 
     # Follow up message asking about the name
     response = requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "What's my name?"}],
+            "max_tokens": MAX_TOKENS,
             "session_id": TEST_SESSION_ID,
         },
     )
@@ -76,8 +78,8 @@ def test_session_continuity():
         return False
 
     result = response.json()
-    response_text = result["choices"][0]["message"]["content"].lower()
-    print(f"Response: {result['choices'][0]['message']['content'][:100]}...")
+    response_text = result["content"][0]["text"].lower()
+    print(f"Response: {result['content'][0]['text'][:100]}...")
 
     # Check if response mentions Alice
     if "alice" in response_text:

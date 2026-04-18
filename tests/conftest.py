@@ -5,6 +5,8 @@ Pytest configuration and fixtures for claude-code-openai-wrapper tests.
 import pytest
 import requests
 
+MAX_TOKENS = 4096
+
 
 # Check if server is running for integration tests
 def is_server_running(base_url: str = "http://localhost:8000") -> bool:
