@@ -14,35 +14,22 @@ class MessageAdapter:
         """
         system_prompt = None
         conversation_parts = []
-        
-        # Check if it's a Gemini model
-        is_gemini = model and (
-            model.startswith("gemini") 
-            or model in ["pro", "flash", "flash-lite", "auto"]
-        )
 
         for message in messages:
             if message.role == "system":
                 # Use the last system message as the system prompt
                 system_prompt = message.content
             elif message.role == "user":
-                if is_gemini:
-                    conversation_parts.append(message.content)
-                else:
-                    conversation_parts.append(f"Human: {message.content}")
+                conversation_parts.append(f"Human: {message.content}")
             elif message.role == "assistant":
-                if is_gemini:
-                    conversation_parts.append(message.content)
-                else:
-                    conversation_parts.append(f"Assistant: {message.content}")
+                conversation_parts.append(f"Assistant: {message.content}")
 
         # Join conversation parts
         prompt = "\n\n".join(conversation_parts)
 
         # If the last message wasn't from the user, add a prompt for assistant
         if messages and messages[-1].role != "user":
-            if not is_gemini:
-                prompt += "\n\nHuman: Please continue."
+            prompt += "\n\nHuman: Please continue."
 
         return prompt, system_prompt
 

@@ -105,20 +105,6 @@ CLAUDE_MODELS = (
     else DEFAULT_CLAUDE_MODELS
 )
 
-# Gemini Models
-# Models supported by Gemini CLI (as of March 2026)
-GEMINI_MODELS = [
-    "gemini-3-pro-preview",
-    "gemini-3-flash-preview",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "pro",        # Alias for gemini-3-pro-preview
-    "flash",      # Alias for gemini-2.5-flash
-    "flash-lite", # Alias for gemini-2.5-flash-lite
-    "auto",       # Alias for gemini-3-pro-preview (recommended)
-]
-
 # Default model used when a request omits `model`. Overridable via env.
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6")
 

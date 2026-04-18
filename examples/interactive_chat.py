@@ -92,7 +92,7 @@ def chat_loop(client, default_model):
     """Main interactive chat loop."""
     console = Console()
     console.print(Panel.fit(
-        "[bold green]Welcome to the Claude-Gemini Interactive Chat![/bold green]\n"
+        "[bold green]Welcome to the Claude Interactive Chat![/bold green]\n"
         "Features: Background Server, Streaming, Markdown Rendering\n\n"
         "Commands:\n"
         "  [bold cyan]/model[/bold cyan] - Change the model\n"
@@ -127,7 +127,7 @@ def chat_loop(client, default_model):
                     )
                 else:
                     console.print("[yellow]Usage: /model <model_name>[/yellow]")
-                    console.print("[dim]Example: /model gemini-3-pro-preview[/dim]")
+                    console.print("[dim]Example: /model claude-sonnet-4-6[/dim]")
                 continue
                 
             if user_input == "/clear":

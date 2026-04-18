@@ -66,8 +66,6 @@ class ClaudeCodeAuthManager:
             return "vertex"
         elif os.getenv("ANTHROPIC_API_KEY"):
             return "anthropic"
-        elif os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
-            return "gemini"
         else:
             # If no explicit method, assume Claude Code CLI is already authenticated
             return "claude_cli"
@@ -85,10 +83,8 @@ class ClaudeCodeAuthManager:
             status.update(self._validate_vertex_auth())
         elif method == "claude_cli":
             status.update(self._validate_claude_cli_auth())
-        elif method == "gemini":
-            status.update(self._validate_gemini_auth())
         else:
-            status["errors"].append("No Claude Code or Gemini authentication method configured")
+            status["errors"].append("No Claude Code authentication method configured")
 
         return status
 
@@ -173,22 +169,6 @@ class ClaudeCodeAuthManager:
 
         return {"valid": len(errors) == 0, "errors": errors, "config": config}
 
-    def _validate_gemini_auth(self) -> Dict[str, Any]:
-        """Validate Gemini API key authentication."""
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            return {
-                "valid": False,
-                "errors": ["Neither GEMINI_API_KEY nor GOOGLE_API_KEY environment variable is set"],
-                "config": {},
-            }
-
-        return {
-            "valid": True,
-            "errors": [],
-            "config": {"api_key_present": True, "api_key_length": len(api_key)},
-        }
-
     def _validate_claude_cli_auth(self) -> Dict[str, Any]:
         """Validate that Claude Code CLI is already authenticated."""
         # For CLI authentication, we assume it's valid and let the SDK handle auth
@@ -229,12 +209,6 @@ class ClaudeCodeAuthManager:
                 env_vars["GOOGLE_APPLICATION_CREDENTIALS"] = os.getenv(
                     "GOOGLE_APPLICATION_CREDENTIALS"
                 )
-
-        elif self.auth_method == "gemini":
-            if os.getenv("GEMINI_API_KEY"):
-                env_vars["GEMINI_API_KEY"] = os.getenv("GEMINI_API_KEY")
-            if os.getenv("GOOGLE_API_KEY"):
-                env_vars["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 
         elif self.auth_method == "claude_cli":
             # For CLI auth, don't set any environment variables
