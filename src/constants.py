@@ -65,14 +65,30 @@ DEFAULT_DISALLOWED_TOOLS = [
     "WebSearch",  # External network access
 ]
 
-# Claude Models currently generally available per Anthropic's model docs.
-# Order is used as-is by /v1/models, so the first entry is what clients
-# (e.g. Open WebUI) pick as the default.
-CLAUDE_MODELS = [
+# Claude models exposed by /v1/models. Order matters — first entry is what
+# clients (e.g. Open WebUI) pick as the default.
+#
+# The default list below is curated. If you just need to add or swap models
+# without a fork edit + image rebuild, set CLAUDE_MODELS_OVERRIDE to a
+# comma-separated list of slugs (e.g. in the Helm values):
+#   CLAUDE_MODELS_OVERRIDE=claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5
+#
+# TODO: /v1/models returns this list verbatim instead of proxying
+# ${ANTHROPIC_BASE_URL}/v1/models. Future: proxy with a TTL cache and a
+# filter (OpenRouter returns ~100 models; we want id.startswith("anthropic/")),
+# falling back to this list when upstream is unreachable.
+DEFAULT_CLAUDE_MODELS = [
     "claude-opus-4-7",            # Most capable
     "claude-sonnet-4-6",          # Best speed/intelligence balance
     "claude-haiku-4-5-20251001",  # Fastest, near-frontier
 ]
+
+_models_override = os.getenv("CLAUDE_MODELS_OVERRIDE", "").strip()
+CLAUDE_MODELS = (
+    [m.strip() for m in _models_override.split(",") if m.strip()]
+    if _models_override
+    else DEFAULT_CLAUDE_MODELS
+)
 
 # Default model used when a request omits `model`. Overridable via env.
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6")

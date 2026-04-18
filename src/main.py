@@ -860,7 +860,13 @@ async def anthropic_messages(
 async def list_models(
     request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
-    """List available models."""
+    """List available models.
+
+    Returns src.constants.CLAUDE_MODELS — the curated default, or a
+    CLAUDE_MODELS_OVERRIDE env-var list if set. Not proxied from
+    ${ANTHROPIC_BASE_URL}/v1/models; see the comment above CLAUDE_MODELS
+    in constants.py for why, and the migration path.
+    """
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
 
