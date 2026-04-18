@@ -7,7 +7,7 @@ Run this while the server is running on localhost:8000
 import pytest
 import requests
 
-from tests.conftest import requires_server
+from tests.conftest import requires_server, MAX_TOKENS
 import json
 
 BASE_URL = "http://localhost:8000"
@@ -57,7 +57,7 @@ def test_models():
 
 @requires_server
 def test_chat_completion():
-    print("\nTesting /v1/chat/completions endpoint...")
+    print("\nTesting /v1/messages endpoint...")
     try:
         payload = {
             "model": "claude-3-5-haiku-20241022",  # Use fastest model
@@ -67,11 +67,11 @@ def test_chat_completion():
                     "content": "Say 'Hello, SDK integration working!' and nothing else.",
                 }
             ],
-            "max_tokens": 50,
+            "max_tokens": MAX_TOKENS,
         }
 
         response = requests.post(
-            f"{BASE_URL}/v1/chat/completions",
+            f"{BASE_URL}/v1/messages",
             json=payload,
             headers={"Content-Type": "application/json"},
         )
@@ -80,7 +80,7 @@ def test_chat_completion():
 
         if response.status_code == 200:
             result = response.json()
-            content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+            content = result.get("content", [{}])[0].get("text", "")
             print(f"  Response: {content}")
             print(f"  Usage: {result.get('usage', {})}")
             return True

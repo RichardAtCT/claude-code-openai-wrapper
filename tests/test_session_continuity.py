@@ -8,7 +8,7 @@ import json
 import pytest
 import requests
 
-from tests.conftest import requires_server
+from tests.conftest import requires_server, MAX_TOKENS
 import time
 from typing import Dict, Any
 
@@ -23,17 +23,18 @@ def test_stateless_mode():
     print("🧪 Testing stateless mode...")
 
     response = requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "Hello! My name is Alice."}],
+            "max_tokens": MAX_TOKENS,
         },
     )
 
     if response.status_code == 200:
         result = response.json()
         print(f"✅ Stateless request successful")
-        print(f"   Response: {result['choices'][0]['message']['content'][:100]}...")
+        print(f"   Response: {result['content'][0]['text'][:100]}...")
         return True
     else:
         print(f"❌ Stateless request failed: {response.status_code} - {response.text}")
@@ -48,10 +49,11 @@ def test_session_mode():
     # First message in session
     print("1️⃣ First message in session...")
     response1 = requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "Hello! My name is Bob. Remember this name."}],
+            "max_tokens": MAX_TOKENS,
             "session_id": TEST_SESSION_ID,
         },
     )
@@ -62,15 +64,16 @@ def test_session_mode():
 
     result1 = response1.json()
     print(f"✅ First session message successful")
-    print(f"   Response: {result1['choices'][0]['message']['content'][:100]}...")
+    print(f"   Response: {result1['content'][0]['text'][:100]}...")
 
     # Second message in same session - should remember the name
     print("2️⃣ Second message in same session...")
     response2 = requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "What's my name?"}],
+            "max_tokens": MAX_TOKENS,
             "session_id": TEST_SESSION_ID,
         },
     )
@@ -81,10 +84,10 @@ def test_session_mode():
 
     result2 = response2.json()
     print(f"✅ Second session message successful")
-    print(f"   Response: {result2['choices'][0]['message']['content'][:100]}...")
+    print(f"   Response: {result2['content'][0]['text'][:100]}...")
 
     # Check if the response mentions the name "Bob"
-    response_text = result2["choices"][0]["message"]["content"].lower()
+    response_text = result2["content"][0]["text"].lower()
     if "bob" in response_text:
         print("✅ Session continuity working - Claude remembered the name!")
         return True
@@ -146,7 +149,7 @@ def test_session_streaming():
     stream_session_id = "test-stream-456"
 
     response = requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [
@@ -155,6 +158,7 @@ def test_session_streaming():
                     "content": "Hello! I'm testing streaming. My favorite color is purple.",
                 }
             ],
+            "max_tokens": MAX_TOKENS,
             "session_id": stream_session_id,
             "stream": True,
         },
@@ -165,25 +169,33 @@ def test_session_streaming():
         print(f"❌ Streaming request failed: {response.status_code}")
         return False
 
+    # Consume the stream
+    for line in response.iter_lines():
+        if line:
+            line_str = line.decode("utf-8")
+            if line_str.startswith("event: message_stop"):
+                break
+
     print("✅ Streaming response received")
 
     # Follow up with another message in the same session
     time.sleep(1)  # Give time for the session to be updated
 
     response2 = requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "What's my favorite color?"}],
+            "max_tokens": MAX_TOKENS,
             "session_id": stream_session_id,
         },
     )
 
     if response2.status_code == 200:
         result = response2.json()
-        response_text = result["choices"][0]["message"]["content"].lower()
+        response_text = result["content"][0]["text"].lower()
         print(f"✅ Follow-up message successful")
-        print(f"   Response: {result['choices'][0]['message']['content'][:100]}...")
+        print(f"   Response: {result['content'][0]['text'][:100]}...")
 
         if "purple" in response_text:
             print("✅ Session continuity working with streaming!")

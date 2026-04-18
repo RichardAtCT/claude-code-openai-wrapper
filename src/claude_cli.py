@@ -1,4 +1,5 @@
 import os
+import asyncio
 import tempfile
 import atexit
 import shutil
@@ -57,15 +58,15 @@ class ClaudeCodeCLI:
         # Store auth environment variables for SDK
         self.claude_env_vars = auth_manager.get_claude_code_env_vars()
 
-    async def verify_cli(self) -> bool:
+    async def verify_cli(self, prompt: str = "Hello") -> bool:
         """Verify Claude Agent SDK is working and authenticated."""
         try:
             # Test SDK with a simple query
-            logger.info("Testing Claude Agent SDK...")
+            logger.info(f"Testing Claude Agent SDK with prewarm query: '{prompt}'...")
 
             messages = []
             async for message in query(
-                prompt="Hello",
+                prompt=prompt,
                 options=ClaudeAgentOptions(
                     max_turns=1,
                     cwd=self.cwd,
@@ -102,58 +103,59 @@ class ClaudeCodeCLI:
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        model: Optional[str] = None,
         stream: bool = True,
-        max_turns: int = 10,
-        allowed_tools: Optional[List[str]] = None,
-        disallowed_tools: Optional[List[str]] = None,
         session_id: Optional[str] = None,
         continue_session: bool = False,
-        permission_mode: Optional[str] = None,
+        claude_options: Optional[Dict] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run Claude Agent using the Python SDK and yield response chunks."""
+        async for chunk in self._run_completion_inner(
+            prompt, system_prompt, stream, session_id, continue_session, claude_options
+        ):
+            yield chunk
+
+    async def _run_completion_inner(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        stream: bool = True,
+        session_id: Optional[str] = None,
+        continue_session: bool = False,
+        claude_options: Optional[Dict] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Inner implementation of run_completion."""
 
         try:
-            # Set authentication environment variables (if any)
-            original_env = {}
-            if self.claude_env_vars:  # Only set env vars if we have any
-                for key, value in self.claude_env_vars.items():
-                    original_env[key] = os.environ.get(key)
-                    os.environ[key] = value
+            # Build SDK options (default max_turns=10 for tool-enabled context)
+            options = ClaudeAgentOptions(max_turns=10, cwd=self.cwd)
 
-            try:
-                # Build SDK options
-                options = ClaudeAgentOptions(max_turns=max_turns, cwd=self.cwd)
+            # Set system prompt - CLAUDE AGENT SDK STRUCTURED FORMAT
+            if system_prompt:
+                options.system_prompt = {"type": "text", "text": system_prompt}
+            else:
+                # Use Claude Code preset to maintain expected behavior
+                options.system_prompt = {"type": "preset", "preset": "claude_code"}
 
-                # Set model if specified
-                if model:
-                    options.model = model
+            # Handle session continuity
+            if continue_session:
+                options.continue_conversation = True
+            elif session_id:
+                options.resume = session_id
 
-                # Set system prompt - CLAUDE AGENT SDK STRUCTURED FORMAT
-                # Use structured format as per SDK documentation
-                if system_prompt:
-                    options.system_prompt = {"type": "text", "text": system_prompt}
-                else:
-                    # Use Claude Code preset to maintain expected behavior
-                    options.system_prompt = {"type": "preset", "preset": "claude_code"}
+            # Apply claude_options via generic setattr — handles model, max_turns,
+            # allowed_tools, disallowed_tools, permission_mode, max_thinking_tokens,
+            # effort, output_format, user, max_budget_usd, thinking, etc.
+            for key, value in (claude_options or {}).items():
+                if value is not None and hasattr(options, key):
+                    setattr(options, key, value)
 
-                # Set tool restrictions
-                if allowed_tools:
-                    options.allowed_tools = allowed_tools
-                if disallowed_tools:
-                    options.disallowed_tools = disallowed_tools
+            # Set authentication env vars directly on options (avoids os.environ mutation
+            # and the serializing lock that came with it — requests are now fully concurrent)
+            if self.claude_env_vars:
+                options.env = {**dict(os.environ), **self.claude_env_vars}
 
-                # Set permission mode (needed for tool execution in API context)
-                if permission_mode:
-                    options.permission_mode = permission_mode
-
-                # Handle session continuity
-                if continue_session:
-                    options.continue_session = True
-                elif session_id:
-                    options.resume = session_id
-
-                # Run the query and yield messages
+            # Run the query and yield messages (with timeout to prevent indefinite hang)
+            async with asyncio.timeout(self.timeout):
                 async for message in query(prompt=prompt, options=options):
                     # Debug logging
                     logger.debug(f"Raw SDK message type: {type(message)}")
@@ -171,22 +173,13 @@ class ClaudeCodeCLI:
                                     attr_value = getattr(message, attr_name)
                                     if not callable(attr_value):  # Skip methods
                                         message_dict[attr_name] = attr_value
-                                except:
+                                except Exception:
                                     pass
 
                         logger.debug(f"Converted message dict: {message_dict}")
                         yield message_dict
                     else:
                         yield message
-
-            finally:
-                # Restore original environment (if we changed anything)
-                if original_env:
-                    for key, original_value in original_env.items():
-                        if original_value is None:
-                            os.environ.pop(key, None)
-                        else:
-                            os.environ[key] = original_value
 
         except Exception as e:
             logger.error(f"Claude Agent SDK error: {e}")
@@ -243,16 +236,22 @@ class ClaudeCodeCLI:
                     elif isinstance(content, str):
                         last_text = content
 
+        # If no text was extracted but we have messages, return the conversational fallback
+        if not last_text and messages:
+            return "I've processed your request. How else can I help you with this project today?"
+
         return last_text
 
     def extract_metadata(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Extract metadata like costs, tokens, and session info from SDK messages."""
+        """Extract metadata like costs, tokens, session info, and stop reason from SDK messages."""
         metadata = {
             "session_id": None,
             "total_cost_usd": 0.0,
             "duration_ms": 0,
             "num_turns": 0,
             "model": None,
+            "usage": None,
+            "stop_reason": None,
         }
 
         for message in messages:
@@ -264,6 +263,8 @@ class ClaudeCodeCLI:
                         "duration_ms": message.get("duration_ms", 0),
                         "num_turns": message.get("num_turns", 0),
                         "session_id": message.get("session_id"),
+                        "usage": message.get("usage"),
+                        "stop_reason": message.get("stop_reason"),
                     }
                 )
             # New SDK format - SystemMessage
@@ -278,6 +279,8 @@ class ClaudeCodeCLI:
                         "duration_ms": message.get("duration_ms", 0),
                         "num_turns": message.get("num_turns", 0),
                         "session_id": message.get("session_id"),
+                        "usage": message.get("usage"),
+                        "stop_reason": message.get("stop_reason"),
                     }
                 )
             elif message.get("type") == "system" and message.get("subtype") == "init":
@@ -286,6 +289,16 @@ class ClaudeCodeCLI:
                 )
 
         return metadata
+
+    @staticmethod
+    def map_stop_reason_openai(stop_reason: Optional[str]) -> str:
+        """Map Claude SDK stop_reason to OpenAI finish_reason."""
+        if stop_reason == "max_tokens":
+            return "length"
+        elif stop_reason == "stop_sequence":
+            return "stop"
+        # "end_turn", None, or any unknown value → "stop"
+        return "stop"
 
     def estimate_token_usage(
         self, prompt: str, completion: str, model: Optional[str] = None

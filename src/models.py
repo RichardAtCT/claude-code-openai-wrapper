@@ -79,6 +79,23 @@ class ChatCompletionRequest(BaseModel):
     stream_options: Optional[StreamOptions] = Field(
         default=None, description="Options for streaming responses"
     )
+    # OpenAI reasoning_effort maps to SDK effort
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = Field(
+        default=None, description="Reasoning effort level (maps to SDK effort)"
+    )
+    # OpenAI response_format maps to SDK output_format
+    response_format: Optional[Dict[str, Any]] = Field(
+        default=None, description="Output format specification (e.g. {'type': 'json_object'})"
+    )
+    # Budget cap in USD (SDK extension)
+    max_budget_usd: Optional[float] = Field(
+        default=None, description="Maximum cost budget in USD"
+    )
+    # Explicit thinking configuration (takes precedence over max_tokens → max_thinking_tokens)
+    thinking: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Thinking config e.g. {'type': 'enabled', 'budget_tokens': N}",
+    )
 
     @field_validator("n")
     @classmethod
@@ -104,7 +121,9 @@ class ChatCompletionRequest(BaseModel):
                 f"top_p={self.top_p} will be applied via system prompt (best-effort)"
             )
 
-        if self.max_tokens is not None or self.max_completion_tokens is not None:
+        if self.thinking is None and (
+            self.max_tokens is not None or self.max_completion_tokens is not None
+        ):
             max_val = self.max_completion_tokens or self.max_tokens
             info_messages.append(
                 f"max_tokens={max_val} will be mapped to max_thinking_tokens (best-effort)"
@@ -181,20 +200,38 @@ class ChatCompletionRequest(BaseModel):
         if self.model:
             options["model"] = self.model
 
-        # Map max_tokens to max_thinking_tokens (best effort)
-        max_token_value = self.max_completion_tokens or self.max_tokens
-        if max_token_value is not None:
-            # Claude SDK doesn't have exact token limiting, but we can try max_thinking_tokens
-            # This is approximate and may not work as expected
-            options["max_thinking_tokens"] = max_token_value
-            logger.info(
-                f"Mapped max_tokens={max_token_value} to max_thinking_tokens (approximate behavior)"
-            )
+        # thinking config (explicit, takes precedence over max_tokens mapping)
+        if self.thinking is not None:
+            options["thinking"] = self.thinking
+        else:
+            # Map max_tokens to max_thinking_tokens (best effort, deprecated but still works)
+            max_token_value = self.max_completion_tokens or self.max_tokens
+            if max_token_value is not None:
+                options["max_thinking_tokens"] = max_token_value
+                logger.info(
+                    f"Mapped max_tokens={max_token_value} to max_thinking_tokens (approximate behavior)"
+                )
+            elif self.model and (self.model.startswith("claude-4") or "4-6" in self.model or "4-5" in self.model):
+                # Default to 4000 for Claude 4 models if not specified
+                options["max_thinking_tokens"] = 4000
+                logger.debug("Using default max_thinking_tokens=4000 for Claude 4 model")
 
-        # Use user field for session identification if provided
+        # reasoning_effort → effort
+        if self.reasoning_effort is not None:
+            options["effort"] = self.reasoning_effort
+
+        # response_format → output_format
+        if self.response_format is not None:
+            options["output_format"] = self.response_format
+
+        # Forward user identifier to SDK
         if self.user:
-            # Could be used for analytics/logging or session tracking
+            options["user"] = self.user
             logger.info(f"Request from user: {self.user}")
+
+        # Budget cap
+        if self.max_budget_usd is not None:
+            options["max_budget_usd"] = self.max_budget_usd
 
         return options
 
@@ -443,6 +480,38 @@ class AnthropicMessagesRequest(BaseModel):
     stop_sequences: Optional[List[str]] = None
     stream: Optional[bool] = False
     metadata: Optional[Dict[str, Any]] = None
+    session_id: Optional[str] = Field(default=None)
+    enable_tools: Optional[bool] = Field(default=False)
+
+    def get_sampling_instructions(self) -> Optional[str]:
+        """Generate sampling instructions based on temperature and top_p."""
+        instructions = []
+
+        if self.temperature is not None and self.temperature != 1.0:
+            if self.temperature < 0.3:
+                instructions.append(
+                    "Be highly focused and deterministic in your responses. Choose the most likely and predictable options."
+                )
+            elif self.temperature < 0.7:
+                instructions.append(
+                    "Be somewhat focused and consistent in your responses, preferring reliable and expected solutions."
+                )
+            elif self.temperature > 1.0:
+                instructions.append(
+                    "Be creative and varied in your responses, exploring different approaches and possibilities."
+                )
+
+        if self.top_p is not None and self.top_p < 1.0:
+            if self.top_p < 0.5:
+                instructions.append(
+                    "Focus on the most probable and mainstream solutions, avoiding less likely alternatives."
+                )
+            elif self.top_p < 0.9:
+                instructions.append(
+                    "Prefer well-established and common approaches over unusual ones."
+                )
+
+        return " ".join(instructions) if instructions else None
 
     def to_openai_messages(self) -> List[Message]:
         """Convert Anthropic messages to OpenAI format."""
@@ -477,3 +546,47 @@ class AnthropicMessagesResponse(BaseModel):
     stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence"]] = "end_turn"
     stop_sequence: Optional[str] = None
     usage: AnthropicUsage
+
+
+class AnthropicMessageStartEvent(BaseModel):
+    """Anthropic SSE message_start event."""
+
+    type: Literal["message_start"] = "message_start"
+    message: Dict[str, Any]
+
+
+class AnthropicContentBlockStartEvent(BaseModel):
+    """Anthropic SSE content_block_start event."""
+
+    type: Literal["content_block_start"] = "content_block_start"
+    index: int
+    content_block: Dict[str, Any]
+
+
+class AnthropicContentBlockDeltaEvent(BaseModel):
+    """Anthropic SSE content_block_delta event."""
+
+    type: Literal["content_block_delta"] = "content_block_delta"
+    index: int
+    delta: Dict[str, Any]
+
+
+class AnthropicContentBlockStopEvent(BaseModel):
+    """Anthropic SSE content_block_stop event."""
+
+    type: Literal["content_block_stop"] = "content_block_stop"
+    index: int
+
+
+class AnthropicMessageDeltaEvent(BaseModel):
+    """Anthropic SSE message_delta event (carries stop_reason and usage)."""
+
+    type: Literal["message_delta"] = "message_delta"
+    delta: Dict[str, Any]
+    usage: Dict[str, Any]
+
+
+class AnthropicMessageStopEvent(BaseModel):
+    """Anthropic SSE message_stop event."""
+
+    type: Literal["message_stop"] = "message_stop"

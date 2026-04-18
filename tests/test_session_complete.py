@@ -6,7 +6,7 @@ Comprehensive test for session continuity functionality.
 import pytest
 import requests
 
-from tests.conftest import requires_server
+from tests.conftest import requires_server, MAX_TOKENS
 import json
 import time
 
@@ -33,10 +33,11 @@ def test_session_continuity_comprehensive():
         print(f"\n{i}️⃣ Turn {i}: {turn['user']}")
 
         response = requests.post(
-            f"{BASE_URL}/v1/chat/completions",
+            f"{BASE_URL}/v1/messages",
             json={
                 "model": "claude-3-5-sonnet-20241022",
                 "messages": [{"role": "user", "content": turn["user"]}],
+                "max_tokens": MAX_TOKENS,
                 "session_id": session_id,
             },
         )
@@ -46,7 +47,7 @@ def test_session_continuity_comprehensive():
             return False
 
         result = response.json()
-        response_text = result["choices"][0]["message"]["content"]
+        response_text = result["content"][0]["text"]
         print(f"   Response: {response_text[:100]}...")
 
         # Check if expected information is remembered
@@ -86,25 +87,27 @@ def test_stateless_vs_session():
     # Test stateless (no session_id)
     print("1️⃣ Stateless mode:")
     requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "Remember: my favorite color is blue."}],
+            "max_tokens": MAX_TOKENS,
         },
     )
 
     # Follow up question without session_id
     response1 = requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "What's my favorite color?"}],
+            "max_tokens": MAX_TOKENS,
         },
     )
 
     if response1.status_code == 200:
         result1 = response1.json()
-        stateless_response = result1["choices"][0]["message"]["content"]
+        stateless_response = result1["content"][0]["text"]
         print(f"   Stateless response: {stateless_response[:100]}...")
 
     # Test session mode
@@ -112,26 +115,28 @@ def test_stateless_vs_session():
     session_id = "color-test-session"
 
     requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "Remember: my favorite color is red."}],
+            "max_tokens": MAX_TOKENS,
             "session_id": session_id,
         },
     )
 
     response2 = requests.post(
-        f"{BASE_URL}/v1/chat/completions",
+        f"{BASE_URL}/v1/messages",
         json={
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "What's my favorite color?"}],
+            "max_tokens": MAX_TOKENS,
             "session_id": session_id,
         },
     )
 
     if response2.status_code == 200:
         result2 = response2.json()
-        session_response = result2["choices"][0]["message"]["content"]
+        session_response = result2["content"][0]["text"]
         print(f"   Session response: {session_response[:100]}...")
 
         if "red" in session_response.lower():
@@ -154,10 +159,11 @@ def test_session_endpoints():
 
     for session_id in session_ids:
         requests.post(
-            f"{BASE_URL}/v1/chat/completions",
+            f"{BASE_URL}/v1/messages",
             json={
                 "model": "claude-3-5-sonnet-20241022",
                 "messages": [{"role": "user", "content": f"Test session {session_id}"}],
+                "max_tokens": MAX_TOKENS,
                 "session_id": session_id,
             },
         )

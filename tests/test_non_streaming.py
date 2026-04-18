@@ -8,7 +8,7 @@ import json
 import pytest
 import requests
 
-from tests.conftest import requires_server
+from tests.conftest import requires_server, MAX_TOKENS
 
 # Set debug mode
 os.environ["DEBUG_MODE"] = "true"
@@ -23,14 +23,14 @@ def test_non_streaming():
     request_data = {
         "model": "claude-3-7-sonnet-20250219",
         "messages": [{"role": "user", "content": "What is 2+2?"}],
-        "stream": False,
+        "max_tokens": MAX_TOKENS,
         "temperature": 0.0,
     }
 
     try:
         # Send non-streaming request
         response = requests.post(
-            "http://localhost:8000/v1/chat/completions", json=request_data, timeout=30
+            "http://localhost:8000/v1/messages", json=request_data, timeout=30
         )
 
         print(f"✅ Response status: {response.status_code}")
@@ -43,9 +43,8 @@ def test_non_streaming():
         data = response.json()
 
         # Check response structure
-        if "choices" in data and len(data["choices"]) > 0:
-            message = data["choices"][0]["message"]
-            content = message["content"]
+        if "content" in data and len(data["content"]) > 0:
+            content = data["content"][0]["text"]
 
             print(f"📊 Response content: {content}")
 

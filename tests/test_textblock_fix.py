@@ -19,6 +19,7 @@ def test_textblock_fix():
     request_data = {
         "model": "claude-3-7-sonnet-20250219",
         "messages": [{"role": "user", "content": "Hello! Can you briefly introduce yourself?"}],
+        "max_tokens": 4096,
         "stream": True,
         "temperature": 0.0,
     }
@@ -26,7 +27,7 @@ def test_textblock_fix():
     try:
         # Send streaming request
         response = requests.post(
-            "http://localhost:8000/v1/chat/completions", json=request_data, stream=True, timeout=30
+            "http://localhost:8000/v1/messages", json=request_data, stream=True, timeout=30
         )
 
         print(f"✅ Response status: {response.status_code}")
@@ -35,46 +36,44 @@ def test_textblock_fix():
             print(f"❌ Request failed: {response.text}")
             return False
 
-        # Parse streaming chunks and collect content
+        # Parse Anthropic SSE streaming chunks and collect content
         all_content = ""
-        has_role_chunk = False
+        has_content_block_start = False
         has_content = False
+        current_event = None
 
         for line in response.iter_lines():
             if line:
                 line_str = line.decode("utf-8")
-                if line_str.startswith("data: "):
-                    data_str = line_str[6:]  # Remove "data: " prefix
-
-                    if data_str == "[DONE]":
-                        break
+                if line_str.startswith("event: "):
+                    current_event = line_str[7:]
+                    if current_event == "content_block_start":
+                        has_content_block_start = True
+                        print(f"✅ Found content_block_start event")
+                elif line_str.startswith("data: "):
+                    data_str = line_str[6:]
 
                     try:
                         chunk_data = json.loads(data_str)
 
-                        # Check chunk structure
-                        if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
-                            choice = chunk_data["choices"][0]
-                            delta = choice.get("delta", {})
-
-                            # Check for role chunk
-                            if "role" in delta:
-                                has_role_chunk = True
-                                print(f"✅ Found role chunk")
-
-                            # Check for content chunk
-                            if "content" in delta:
-                                content = delta["content"]
-                                all_content += content
+                        if current_event == "content_block_delta":
+                            delta = chunk_data.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                text = delta.get("text", "")
+                                all_content += text
                                 has_content = True
-                                print(f"✅ Found content: {content[:50]}...")
+                                if len(all_content) <= 50:
+                                    print(f"✅ Found content: {text[:50]}...")
+
+                        elif current_event == "message_stop":
+                            break
 
                     except json.JSONDecodeError as e:
                         print(f"❌ Invalid JSON in chunk: {data_str}")
                         return False
 
         print(f"\n📊 Test Results:")
-        print(f"   Has role chunk: {has_role_chunk}")
+        print(f"   Has content_block_start: {has_content_block_start}")
         print(f"   Has content: {has_content}")
         print(f"   Total content length: {len(all_content)}")
         print(f"   Content preview: {all_content[:200]}...")
