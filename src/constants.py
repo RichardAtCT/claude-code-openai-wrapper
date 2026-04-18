@@ -78,8 +78,8 @@ DEFAULT_DISALLOWED_TOOLS = [
 # filter (OpenRouter returns ~100 models; we want id.startswith("anthropic/")),
 # falling back to this list when upstream is unreachable.
 DEFAULT_CLAUDE_MODELS = [
-    "claude-opus-4-7",            # Most capable
-    "claude-sonnet-4-6",          # Best speed/intelligence balance
+    "claude-opus-4-7",  # Most capable
+    "claude-sonnet-4-6",  # Best speed/intelligence balance
     "claude-haiku-4-5-20251001",  # Fastest, near-frontier
 ]
 
