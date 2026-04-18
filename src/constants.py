@@ -54,12 +54,13 @@ DEFAULT_ALLOWED_TOOLS = [
     "Edit",
 ]
 
-# Tools to disallow by default (potentially dangerous or slow)
-DEFAULT_DISALLOWED_TOOLS = [
-    "Task",  # Can spawn sub-agents
-    "WebFetch",  # External network access
-    "WebSearch",  # External network access
-]
+# Tools to disallow when tools are enabled. Default empty; override via env
+# with a comma-separated slug list, e.g.
+#   DISALLOWED_TOOLS=Task,WebFetch,WebSearch
+# Common tools worth considering: Task (spawns sub-agents), WebFetch,
+# WebSearch (external network), Bash (shell execution).
+_disallowed_raw = os.getenv("DISALLOWED_TOOLS", "").strip()
+DEFAULT_DISALLOWED_TOOLS = [t.strip() for t in _disallowed_raw.split(",") if t.strip()]
 
 # Claude models exposed by /v1/models. Order matters — first entry is what
 # clients (e.g. Open WebUI) pick as the default.
@@ -108,8 +109,8 @@ CLAUDE_MODELS = (
 # Default model used when a request omits `model`. Overridable via env.
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6")
 
-# Fast model (for speed/cost optimization)
-FAST_MODEL = "claude-haiku-4-5-20251001"
+# Fast model (for speed/cost optimization). Overridable via env.
+FAST_MODEL = os.getenv("FAST_MODEL", "claude-haiku-4-5-20251001")
 
 # System Prompt Types
 SYSTEM_PROMPT_TYPE_TEXT = "text"
