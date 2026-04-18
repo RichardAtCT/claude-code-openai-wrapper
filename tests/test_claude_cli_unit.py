@@ -376,7 +376,9 @@ class TestClaudeCodeCLIInit:
 
                     cli = ClaudeCodeCLI(cwd=temp_dir)
 
-                    assert cli.cwd == Path(temp_dir)
+                    # cwd is stored after .resolve() for sandbox-safety,
+                    # which on macOS canonicalises /var/... → /private/var/...
+                    assert cli.cwd == Path(temp_dir).resolve()
                     assert cli.temp_dir is None
                     assert cli.timeout == 600.0  # 600000ms / 1000
 
@@ -441,7 +443,7 @@ class TestClaudeCodeCLIInit:
 
                     # Should not raise, just log warning
                     cli = ClaudeCodeCLI(cwd=temp_dir)
-                    assert cli.cwd == Path(temp_dir)
+                    assert cli.cwd == Path(temp_dir).resolve()
 
 
 class TestClaudeCodeCLIVerifyCLI:

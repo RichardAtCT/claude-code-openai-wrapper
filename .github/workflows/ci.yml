@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -52,14 +52,14 @@ jobs:
         run: poetry run bandit -r src/ -ll -x tests
 
       - name: Dependency vulnerability scan
-        run: poetry run safety check || true
+        run: poetry run safety scan || true
         continue-on-error: true
 
       - name: Run tests
         run: poetry run pytest tests/ -v --cov=src --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.12'
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage.xml

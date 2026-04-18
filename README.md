@@ -111,7 +111,7 @@ poetry run python test_endpoints.py
 
 ## Prerequisites
 
-1. **Python 3.10+**: Required for the server (supports Python 3.10, 3.11, 3.12, 3.13)
+1. **Python 3.12+**: Required for the server
 
 2. **Poetry**: For dependency management
    ```bash
