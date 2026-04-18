@@ -143,17 +143,20 @@ class TestClaudeCliPermissionMode:
     """Test that ClaudeCodeCLI passes permission_mode correctly."""
 
     def test_run_completion_accepts_permission_mode(self):
-        """Test that run_completion method accepts permission_mode parameter."""
+        """Test that run_completion accepts permission_mode via claude_options dict.
+
+        permission_mode used to be a top-level kwarg but was moved inside a
+        claude_options dict so all SDK-level knobs are forwarded uniformly.
+        """
         from src.claude_cli import ClaudeCodeCLI
         import inspect
 
-        # Check that permission_mode is in the method signature
         sig = inspect.signature(ClaudeCodeCLI.run_completion)
         param_names = list(sig.parameters.keys())
 
         assert (
-            "permission_mode" in param_names
-        ), "run_completion should accept permission_mode parameter"
+            "claude_options" in param_names
+        ), "run_completion should accept claude_options dict (permission_mode now lives inside it)"
 
 
 if __name__ == "__main__":

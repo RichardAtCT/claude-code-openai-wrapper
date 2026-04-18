@@ -88,9 +88,7 @@ class ChatCompletionRequest(BaseModel):
         default=None, description="Output format specification (e.g. {'type': 'json_object'})"
     )
     # Budget cap in USD (SDK extension)
-    max_budget_usd: Optional[float] = Field(
-        default=None, description="Maximum cost budget in USD"
-    )
+    max_budget_usd: Optional[float] = Field(default=None, description="Maximum cost budget in USD")
     # Explicit thinking configuration (takes precedence over max_tokens → max_thinking_tokens)
     thinking: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -211,7 +209,9 @@ class ChatCompletionRequest(BaseModel):
                 logger.info(
                     f"Mapped max_tokens={max_token_value} to max_thinking_tokens (approximate behavior)"
                 )
-            elif self.model and (self.model.startswith("claude-4") or "4-6" in self.model or "4-5" in self.model):
+            elif self.model and (
+                self.model.startswith("claude-4") or "4-6" in self.model or "4-5" in self.model
+            ):
                 # Default to 4000 for Claude 4 models if not specified
                 options["max_thinking_tokens"] = 4000
                 logger.debug("Using default max_thinking_tokens=4000 for Claude 4 model")

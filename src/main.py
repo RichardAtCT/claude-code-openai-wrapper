@@ -6,7 +6,7 @@ import secrets
 import string
 import uuid
 from pathlib import Path
-from typing import Optional, AsyncGenerator, Dict, Any
+from typing import List, Optional, AsyncGenerator, Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -156,11 +156,11 @@ _LANDING_TEMPLATE = string.Template(
 async def lifespan(app: FastAPI):
     """Verify Claude Code authentication and CLI on startup."""
     global process_semaphore
-    
+
     # Initialize the semaphore within the event loop
     process_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)
     logger.info(f"Initialized process concurrency cap: {MAX_CONCURRENT_PROCESSES}")
-    
+
     logger.info("Verifying Claude Code authentication and CLI...")
 
     # Validate authentication first
@@ -514,7 +514,7 @@ async def generate_streaming_response(
         content_sent = False  # Track if we've sent any content
 
         # Call the CLI within the process semaphore to limit concurrency
-        async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+        async with process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES):
             completion_gen = claude_cli.run_completion(
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -525,13 +525,17 @@ async def generate_streaming_response(
 
             async for chunk in completion_gen:
                 chunks_buffer.append(chunk)
-                
+
                 if DEBUG_MODE or VERBOSE:
-                    logger.debug(f"Streaming chunk: type={chunk.get('type')}, subtype={chunk.get('subtype')}, keys={list(chunk.keys())}")
+                    logger.debug(
+                        f"Streaming chunk: type={chunk.get('type')}, subtype={chunk.get('subtype')}, keys={list(chunk.keys())}"
+                    )
 
                 # Check if we have an assistant message
                 content = None
-                if (chunk.get("type") == "assistant" or chunk.get("type") == "assistant_message") and "message" in chunk:
+                if (
+                    chunk.get("type") == "assistant" or chunk.get("type") == "assistant_message"
+                ) and "message" in chunk:
                     # Claude format: {"type": "assistant", "message": {"content": [...]}}
                     message = chunk["message"]
                     if isinstance(message, dict) and "content" in message:
@@ -600,7 +604,7 @@ async def generate_streaming_response(
                     elif isinstance(content, str):
                         if DEBUG_MODE or VERBOSE:
                             logger.debug(f"Raw content string: {content[:200]}...")
-                            
+
                         # Filter out tool usage and thinking blocks
                         filtered_content = MessageAdapter.filter_content(content)
 
@@ -611,7 +615,9 @@ async def generate_streaming_response(
                                 model=request.model,
                                 choices=[
                                     StreamChoice(
-                                        index=0, delta={"content": filtered_content}, finish_reason=None
+                                        index=0,
+                                        delta={"content": filtered_content},
+                                        finish_reason=None,
                                     )
                                 ],
                             )
@@ -678,7 +684,9 @@ async def generate_streaming_response(
             else:
                 # Fall back to estimate
                 completion_text = assistant_content or ""
-                token_usage = claude_cli.estimate_token_usage(prompt, completion_text, request.model)
+                token_usage = claude_cli.estimate_token_usage(
+                    prompt, completion_text, request.model
+                )
                 usage_data = Usage(
                     prompt_tokens=token_usage["prompt_tokens"],
                     completion_tokens=token_usage["completion_tokens"],
@@ -785,7 +793,7 @@ async def generate_anthropic_streaming_response(
         content_sent = False
 
         # Call the CLI within the process semaphore to limit concurrency
-        async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+        async with process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES):
             completion_gen = claude_cli.run_completion(
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -798,10 +806,14 @@ async def generate_anthropic_streaming_response(
                 chunks_buffer.append(chunk)
 
                 if DEBUG_MODE or VERBOSE:
-                    logger.debug(f"Anthropic streaming chunk: type={chunk.get('type')}, subtype={chunk.get('subtype')}, keys={list(chunk.keys())}")
+                    logger.debug(
+                        f"Anthropic streaming chunk: type={chunk.get('type')}, subtype={chunk.get('subtype')}, keys={list(chunk.keys())}"
+                    )
 
                 content = None
-                if (chunk.get("type") == "assistant" or chunk.get("type") == "assistant_message") and "message" in chunk:
+                if (
+                    chunk.get("type") == "assistant" or chunk.get("type") == "assistant_message"
+                ) and "message" in chunk:
                     message = chunk["message"]
                     if isinstance(message, dict) and "content" in message:
                         content = message["content"]
@@ -852,7 +864,10 @@ async def generate_anthropic_streaming_response(
             if not content_sent:
                 delta_event = AnthropicContentBlockDeltaEvent(
                     index=0,
-                    delta={"type": "text_delta", "text": "I'm unable to provide a response at the moment."},
+                    delta={
+                        "type": "text_delta",
+                        "text": "I'm unable to provide a response at the moment.",
+                    },
                 )
                 yield f"event: content_block_delta\ndata: {delta_event.model_dump_json()}\n\n"
 
@@ -976,7 +991,9 @@ async def chat_completions(
             )
 
             # Convert messages to prompt (pass model for optimized formatting)
-            prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request_body.model)
+            prompt, system_prompt = MessageAdapter.messages_to_prompt(
+                prompt_messages, request_body.model
+            )
 
             # Add sampling instructions from temperature/top_p if present
             sampling_instructions = request_body.get_sampling_instructions()
@@ -1018,7 +1035,7 @@ async def chat_completions(
             chunks = []
 
             # Call the CLI within the process semaphore to limit concurrency
-            async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+            async with process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES):
                 completion_gen = claude_cli.run_completion(
                     prompt=prompt,
                     system_prompt=system_prompt,
@@ -1037,7 +1054,9 @@ async def chat_completions(
                 raise HTTPException(status_code=500, detail="No response from Claude Code")
 
             # Filter out tool usage and thinking blocks, also handle potential echoes
-            assistant_content = MessageAdapter.filter_content(raw_assistant_content, prompt_echo=prompt)
+            assistant_content = MessageAdapter.filter_content(
+                raw_assistant_content, prompt_echo=prompt
+            )
 
             # Add assistant response to session if using session mode
             if actual_session_id:
@@ -1049,7 +1068,9 @@ async def chat_completions(
             sdk_usage = metadata.get("usage")
             if sdk_usage and isinstance(sdk_usage, dict):
                 prompt_tokens = sdk_usage.get("input_tokens", sdk_usage.get("prompt_tokens", 0))
-                completion_tokens = sdk_usage.get("output_tokens", sdk_usage.get("completion_tokens", 0))
+                completion_tokens = sdk_usage.get(
+                    "output_tokens", sdk_usage.get("completion_tokens", 0)
+                )
             else:
                 prompt_tokens = MessageAdapter.estimate_tokens(prompt)
                 completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
@@ -1156,7 +1177,9 @@ async def anthropic_messages(
         prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
 
         # Convert to prompt (pass model for optimized formatting)
-        prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request_body.model)
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(
+            prompt_messages, request_body.model
+        )
 
         # Add sampling instructions
         sampling_instructions = request_body.get_sampling_instructions()
@@ -1184,10 +1207,13 @@ async def anthropic_messages(
             options["permission_mode"] = "bypassPermissions"
 
         # Run CLI
-        print(f"[/v1/messages] Calling run_completion, enable_tools={request_body.enable_tools}", flush=True)
+        print(
+            f"[/v1/messages] Calling run_completion, enable_tools={request_body.enable_tools}",
+            flush=True,
+        )
         chunks = []
 
-        async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+        async with process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES):
             completion_gen = claude_cli.run_completion(
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -1218,7 +1244,9 @@ async def anthropic_messages(
         sdk_usage = metadata.get("usage")
         if sdk_usage and isinstance(sdk_usage, dict):
             prompt_tokens = sdk_usage.get("input_tokens", sdk_usage.get("prompt_tokens", 0))
-            completion_tokens = sdk_usage.get("output_tokens", sdk_usage.get("completion_tokens", 0))
+            completion_tokens = sdk_usage.get(
+                "output_tokens", sdk_usage.get("completion_tokens", 0)
+            )
         else:
             prompt_tokens = MessageAdapter.estimate_tokens(prompt)
             completion_tokens = MessageAdapter.estimate_tokens(assistant_content)

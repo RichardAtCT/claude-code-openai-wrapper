@@ -7,7 +7,9 @@ class MessageAdapter:
     """Converts between OpenAI message format and Claude Code prompts."""
 
     @staticmethod
-    def messages_to_prompt(messages: List[Message], model: Optional[str] = None) -> tuple[str, Optional[str]]:
+    def messages_to_prompt(
+        messages: List[Message], model: Optional[str] = None
+    ) -> tuple[str, Optional[str]]:
         """
         Convert OpenAI messages to Claude Code prompt format.
         Returns (prompt, system_prompt)
@@ -45,10 +47,10 @@ class MessageAdapter:
         # Strip exact prompt echoes if provided (common with some CLI tools)
 
         if prompt_echo and content.startswith(prompt_echo):
-            content = content[len(prompt_echo):].strip()
+            content = content[len(prompt_echo) :].strip()
             # Also handle cases where Human: prefix is echoed
             if content.startswith("Assistant:"):
-                content = content[len("Assistant:"):].strip()
+                content = content[len("Assistant:") :].strip()
 
         # Remove thinking blocks (common when tools are disabled but Claude tries to think)
         thinking_patterns = [r"<thinking>.*?</thinking>", r"<thought>.*?</thought>"]
@@ -74,20 +76,28 @@ class MessageAdapter:
             # Instead of deleting all tool blocks, replace them with a short placeholder
             # This prevents the message from being empty and explains what Claude was doing.
             tool_tags = [
-                "read_file", "write_file", "bash", "search_files", 
-                "str_replace_editor", "args", "ask_followup_question", 
-                "question", "follow_up", "suggest"
+                "read_file",
+                "write_file",
+                "bash",
+                "search_files",
+                "str_replace_editor",
+                "args",
+                "ask_followup_question",
+                "question",
+                "follow_up",
+                "suggest",
             ]
-            
+
             for tag in tool_tags:
                 pattern = f"<{tag}>(.*?)</{tag}>"
+
                 # If we find a tool tag, replace it with a shorter placeholder but keep some of the content
                 def replace_tool(match):
                     inner = match.group(1).strip()
                     # Only show first 50 chars of the tool command/arg to keep it clean
                     summary = (inner[:47] + "...") if len(inner) > 50 else inner
                     return f"\n[Tool: {tag} {summary}]\n"
-                
+
                 content = re.sub(pattern, replace_tool, content, flags=re.DOTALL)
 
         # Pattern to match image references or base64 data

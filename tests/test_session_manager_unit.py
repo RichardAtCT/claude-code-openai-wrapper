@@ -101,7 +101,9 @@ class TestSession:
 
     def test_is_expired_true_for_past_expiry(self):
         """Session with past expiry is expired."""
-        session = Session(session_id="test-123", expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
+        session = Session(
+            session_id="test-123", expires_at=datetime.now(timezone.utc) - timedelta(hours=1)
+        )
         assert session.is_expired() is True
 
     def test_to_session_info_returns_correct_model(self):
@@ -436,7 +438,9 @@ class TestSessionManagerSessionLimit:
         assert existing.session_id == "session-1"
 
     @pytest.mark.asyncio
-    async def test_after_expired_session_cleaned_up_new_session_can_be_created(self, manager_limit_3):
+    async def test_after_expired_session_cleaned_up_new_session_can_be_created(
+        self, manager_limit_3
+    ):
         """Once an expired session is cleaned up, the freed slot allows a new session."""
         await manager_limit_3.get_or_create_session("session-1")
         session2 = await manager_limit_3.get_or_create_session("session-2")
@@ -552,25 +556,28 @@ class TestSessionManagerMessageLimit:
         manager = SessionManager()
         assert manager.max_session_messages == MAX_SESSION_MESSAGES
 
-    def test_adding_messages_up_to_limit_keeps_all(self, manager_msg_limit_5):
+    @pytest.mark.asyncio
+    async def test_adding_messages_up_to_limit_keeps_all(self, manager_msg_limit_5):
         """Adding exactly max_session_messages messages keeps all of them."""
-        session = manager_msg_limit_5.get_or_create_session("test-session")
+        session = await manager_msg_limit_5.get_or_create_session("test-session")
         messages = self._make_messages(5)
         session.add_messages(messages)
 
         assert len(session.messages) == 5
 
-    def test_adding_messages_beyond_limit_trims_to_limit(self, manager_msg_limit_5):
+    @pytest.mark.asyncio
+    async def test_adding_messages_beyond_limit_trims_to_limit(self, manager_msg_limit_5):
         """Adding more than max_session_messages messages trims the list to the limit."""
-        session = manager_msg_limit_5.get_or_create_session("test-session")
+        session = await manager_msg_limit_5.get_or_create_session("test-session")
         messages = self._make_messages(7)
         session.add_messages(messages)
 
         assert len(session.messages) == 5
 
-    def test_trimming_drops_oldest_messages(self, manager_msg_limit_5):
+    @pytest.mark.asyncio
+    async def test_trimming_drops_oldest_messages(self, manager_msg_limit_5):
         """When trimming occurs the oldest messages (first added) are removed."""
-        session = manager_msg_limit_5.get_or_create_session("test-session")
+        session = await manager_msg_limit_5.get_or_create_session("test-session")
         messages = self._make_messages(7)  # msg-0 … msg-6
         session.add_messages(messages)
 
@@ -579,9 +586,10 @@ class TestSessionManagerMessageLimit:
         assert "msg-0" not in remaining_contents
         assert "msg-1" not in remaining_contents
 
-    def test_trimming_retains_newest_messages(self, manager_msg_limit_5):
+    @pytest.mark.asyncio
+    async def test_trimming_retains_newest_messages(self, manager_msg_limit_5):
         """When trimming occurs the newest messages are retained."""
-        session = manager_msg_limit_5.get_or_create_session("test-session")
+        session = await manager_msg_limit_5.get_or_create_session("test-session")
         messages = self._make_messages(7)  # msg-0 … msg-6
         session.add_messages(messages)
 
@@ -589,9 +597,10 @@ class TestSessionManagerMessageLimit:
         for i in range(2, 7):  # msg-2 through msg-6 must be present
             assert f"msg-{i}" in remaining_contents
 
-    def test_trimming_across_multiple_add_calls(self, manager_msg_limit_5):
+    @pytest.mark.asyncio
+    async def test_trimming_across_multiple_add_calls(self, manager_msg_limit_5):
         """Message limit is enforced across multiple separate add_messages calls."""
-        session = manager_msg_limit_5.get_or_create_session("test-session")
+        session = await manager_msg_limit_5.get_or_create_session("test-session")
 
         # Add 3 messages in first call, then 4 more in second call (total 7 > limit of 5)
         first_batch = self._make_messages(3, prefix="first")
@@ -602,9 +611,10 @@ class TestSessionManagerMessageLimit:
 
         assert len(session.messages) == 5
 
-    def test_message_count_after_trimming_equals_limit(self, manager_msg_limit_5):
+    @pytest.mark.asyncio
+    async def test_message_count_after_trimming_equals_limit(self, manager_msg_limit_5):
         """After any trim, get_all_messages returns exactly max_session_messages messages."""
-        session = manager_msg_limit_5.get_or_create_session("test-session")
+        session = await manager_msg_limit_5.get_or_create_session("test-session")
         # Add well beyond the limit to exercise the trim path
         session.add_messages(self._make_messages(20))
 

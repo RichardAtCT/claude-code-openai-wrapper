@@ -108,14 +108,15 @@ class TestClaudeCodeCLIParseMessage:
         result = cli.parse_claude_message([])
         assert result is None
 
-    def test_parse_no_matching_messages_returns_none(self, cli_class):
-        """No matching messages returns None."""
+    def test_parse_no_matching_messages_returns_fallback(self, cli_class):
+        """Messages with no extractable assistant text return a conversational fallback."""
         cli = MagicMock()
         cli.parse_claude_message = cli_class.parse_claude_message.__get__(cli, cli_class)
 
         messages = [{"type": "system", "content": "System message"}]
         result = cli.parse_claude_message(messages)
-        assert result is None
+        assert result is not None
+        assert "processed your request" in result
 
     def test_parse_uses_last_text(self, cli_class):
         """When multiple messages, uses the last one with text."""

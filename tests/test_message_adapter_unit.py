@@ -86,6 +86,7 @@ class TestMessagesToPrompt:
         assert prompt == ""
         assert system is None
 
+
 class TestFilterContent:
     """Test MessageAdapter.filter_content()"""
 
@@ -171,7 +172,7 @@ class TestFilterContent:
         """Tool tags are replaced with placeholders instead of deleted."""
         content = "Checking files: <read_file>src/main.py</read_file>"
         result = MessageAdapter.filter_content(content)
-        
+
         assert "<read_file>" not in result
         assert "[Tool: read_file src/main.py]" in result
 
@@ -188,7 +189,7 @@ class TestFilterContent:
         long_arg = "a" * 100
         content = f"<bash>{long_arg}</bash>"
         result = MessageAdapter.filter_content(content)
-        
+
         assert len(result) < 100
         assert "..." in result
 

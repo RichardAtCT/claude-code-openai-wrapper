@@ -19,7 +19,6 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 from src.parameter_validator import ParameterValidator
 
-
 # ---------------------------------------------------------------------------
 # Unit tests — ParameterValidator.is_model_recognized()
 # These verify the helper logic that the endpoint should use.
@@ -182,6 +181,11 @@ class TestModelWarningHeaderEndpoint:
         ):
             mock_cli_patch.run_completion = _make_async_generator(_mock_run_completion_chunks())
             mock_cli_patch.parse_claude_message = MagicMock(return_value="Hello from mocked Claude")
+            mock_cli_patch.extract_metadata = MagicMock(return_value={})
+            mock_cli_patch.estimate_token_usage = MagicMock(
+                return_value={"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+            )
+            mock_cli_patch.map_stop_reason_openai = MagicMock(return_value="stop")
 
             response = test_client.post(
                 "/v1/chat/completions",
@@ -214,6 +218,11 @@ class TestModelWarningHeaderEndpoint:
         ):
             mock_cli_patch.run_completion = _make_async_generator(_mock_run_completion_chunks())
             mock_cli_patch.parse_claude_message = MagicMock(return_value="Hello from mocked Claude")
+            mock_cli_patch.extract_metadata = MagicMock(return_value={})
+            mock_cli_patch.estimate_token_usage = MagicMock(
+                return_value={"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+            )
+            mock_cli_patch.map_stop_reason_openai = MagicMock(return_value="stop")
 
             response = test_client.post(
                 "/v1/chat/completions",
@@ -241,6 +250,11 @@ class TestModelWarningHeaderEndpoint:
         ):
             mock_cli_patch.run_completion = _make_async_generator(_mock_run_completion_chunks())
             mock_cli_patch.parse_claude_message = MagicMock(return_value="Hello from mocked Claude")
+            mock_cli_patch.extract_metadata = MagicMock(return_value={})
+            mock_cli_patch.estimate_token_usage = MagicMock(
+                return_value={"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+            )
+            mock_cli_patch.map_stop_reason_openai = MagicMock(return_value="stop")
 
             response = test_client.post(
                 "/v1/chat/completions",

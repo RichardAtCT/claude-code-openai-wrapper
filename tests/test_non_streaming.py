@@ -29,9 +29,7 @@ def test_non_streaming():
 
     try:
         # Send non-streaming request
-        response = requests.post(
-            "http://localhost:8000/v1/messages", json=request_data, timeout=30
-        )
+        response = requests.post("http://localhost:8000/v1/messages", json=request_data, timeout=30)
 
         print(f"✅ Response status: {response.status_code}")
 

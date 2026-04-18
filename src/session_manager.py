@@ -22,7 +22,9 @@ class Session:
     messages: List[Message] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_accessed: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(hours=1))
+    expires_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc) + timedelta(hours=1)
+    )
     max_messages: Optional[int] = None
 
     def touch(self):
