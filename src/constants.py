@@ -1,96 +1,65 @@
 """
 Constants and configuration for Claude Code OpenAI Wrapper.
-
-Single source of truth for tool names, models, and other configuration values.
-
-Usage Examples:
-    # Check if a model is supported
-    from src.constants import CLAUDE_MODELS
-    if model_name in CLAUDE_MODELS:
-        # proceed with request
-
-    # Get default allowed tools
-    from src.constants import DEFAULT_ALLOWED_TOOLS
-    options = {"allowed_tools": DEFAULT_ALLOWED_TOOLS}
-
-    # Use rate limits in FastAPI
-    from src.constants import RATE_LIMIT_CHAT
-    @limiter.limit(f"{RATE_LIMIT_CHAT}/minute")
-    async def chat_endpoint(): ...
-
-Note:
-    - Tool configurations are managed by ToolManager (see tool_manager.py)
-    - Model validation uses graceful degradation (warns but allows unknown models)
-    - Rate limits can be overridden via environment variables
+...
 """
-
 import os
 
 # Claude Agent SDK Tool Names
-# These are the built-in tools available in the Claude Agent SDK
-# See: https://docs.anthropic.com/en/docs/claude-code/sdk
 CLAUDE_TOOLS = [
-    "Task",  # Launch agents for complex tasks
-    "Bash",  # Execute bash commands
-    "Glob",  # File pattern matching
-    "Grep",  # Search file contents
-    "Read",  # Read files
-    "Edit",  # Edit files
-    "Write",  # Write files
-    "NotebookEdit",  # Edit Jupyter notebooks
-    "WebFetch",  # Fetch web content
-    "TodoWrite",  # Manage todo lists
-    "WebSearch",  # Search the web
-    "BashOutput",  # Get bash output
-    "KillShell",  # Kill bash shells
-    "Skill",  # Execute skills
-    "SlashCommand",  # Execute slash commands
-]
-
-# Default tools to allow when tools are enabled
-# Subset of CLAUDE_TOOLS that are safe and commonly used
-DEFAULT_ALLOWED_TOOLS = [
-    "Read",
+    "Task",
+    "Bash",
     "Glob",
     "Grep",
-    "Bash",
-    "Write",
+    "Read",
     "Edit",
+    "Write",
+    "NotebookEdit",
+    "WebFetch",
+    "TodoWrite",
+    "WebSearch",
+    "BashOutput",
+    "KillShell",
+    "Skill",
+    "SlashCommand",
 ]
 
-# Tools to disallow by default (potentially dangerous or slow)
-DEFAULT_DISALLOWED_TOOLS = [
-    "Task",  # Can spawn sub-agents
-    "WebFetch",  # External network access
-    "WebSearch",  # External network access
-]
+DEFAULT_ALLOWED_TOOLS = ["Read", "Glob", "Grep", "Bash", "Write", "Edit"]
+
+DEFAULT_DISALLOWED_TOOLS = ["Task", "WebFetch", "WebSearch"]
 
 # Claude Models
-# Models supported by Claude Agent SDK (as of November 2025)
-# NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x
+# Active models as of May 2026 per https://platform.claude.com/docs/en/about-claude/models/overview
+# NOTE: claude-sonnet-4-20250514 and claude-opus-4-20250514 were retired April 20, 2026.
 CLAUDE_MODELS = [
-    # Claude 4.5 Family (Latest - Fall 2025) - RECOMMENDED
-    "claude-opus-4-5-20250929",  # Latest Opus 4.5 - Most capable
-    "claude-sonnet-4-5-20250929",  # Recommended - best coding model
-    "claude-haiku-4-5-20251001",  # Fast & cheap
+    # Claude 4.7 (Latest Opus - April 2026)
+    "claude-opus-4-7",                   # Most capable; step-change agentic coding improvement
+
+    # Claude 4.6 Family (February 2026) - RECOMMENDED for most use cases
+    "claude-opus-4-6",                   # Max reasoning depth; complex multi-step tasks
+    "claude-sonnet-4-6",                 # Best speed/intelligence balance; daily driver
+
+    # Claude 4.5 Family (Fall 2025)
+    "claude-opus-4-5-20250929",          # Opus 4.5 - deep reasoning, coding, computer use
+    "claude-sonnet-4-5-20250929",        # Sonnet 4.5 - agents, coding, office files
+    "claude-haiku-4-5-20251001",         # Fastest; cost-efficient; near-frontier intelligence
+
     # Claude 4.1
-    "claude-opus-4-1-20250805",  # Upgraded Opus 4
-    # Claude 4.0 Family (Original - May 2025)
-    "claude-opus-4-20250514",
-    "claude-sonnet-4-20250514",
+    "claude-opus-4-1-20250805",          # Opus 4.1 - agentic search, expert coding
+
+    # Claude 4.0 Family - DEPRECATED, retiring June 15, 2026
+    # "claude-opus-4-20250514",          # Retired April 20, 2026
+    # "claude-sonnet-4-20250514",        # Retired April 20, 2026
+
     # Claude 3.x Family - NOT SUPPORTED by Claude Agent SDK
-    # These models work with Anthropic API but NOT with Claude Code
-    # Uncomment only if using direct Anthropic API (not Claude Agent SDK)
     # "claude-3-7-sonnet-20250219",
     # "claude-3-5-sonnet-20241022",
     # "claude-3-5-haiku-20241022",
 ]
 
-# Default model (recommended for most use cases)
-# Can be overridden via DEFAULT_MODEL environment variable
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-5-20250929")
+# Default model — Sonnet 4.6 is preferred by ~70% of devs; Opus-level quality at Sonnet price
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6")
 
-# Fast model (for speed/cost optimization)
+# Fast model for speed/cost optimization
 FAST_MODEL = "claude-haiku-4-5-20251001"
 
 # System Prompt Types
