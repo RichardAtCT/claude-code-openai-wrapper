@@ -171,6 +171,7 @@ async def test_resolve_default_model_sets_constants(monkeypatch):
         ]
 
     monkeypatch.delenv("CLAUDE_MODELS_OVERRIDE", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.setattr(constants, "DEFAULT_MODEL_ENV", None)
     monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
 
@@ -178,6 +179,26 @@ async def test_resolve_default_model_sets_constants(monkeypatch):
 
     assert resolved == "claude-sonnet-4-7"
     assert constants.RESOLVED_DEFAULT_MODEL == "claude-sonnet-4-7"
+
+
+@pytest.mark.asyncio
+async def test_resolve_default_model_skips_without_api_key(monkeypatch, caplog):
+    """No ANTHROPIC_API_KEY -> skip live discovery, log clearly, use fallback."""
+    constants.RESOLVED_DEFAULT_MODEL = None
+
+    async def fake_fetch():
+        raise AssertionError("should not call live API without ANTHROPIC_API_KEY")
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(constants, "DEFAULT_MODEL_ENV", None)
+    monkeypatch.setattr(main, "_fetch_anthropic_models", fake_fetch)
+
+    with caplog.at_level("INFO", logger="src.main"):
+        resolved = await main.resolve_default_model()
+
+    assert resolved is None
+    assert constants.RESOLVED_DEFAULT_MODEL is None
+    assert any("Live model discovery disabled" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio

@@ -228,10 +228,20 @@ def _pick_latest_sonnet(models: List[Dict[str, Any]]) -> Optional[str]:
 async def resolve_default_model() -> Optional[str]:
     """Pick the latest Sonnet from /v1/models and store it as the default.
 
-    Skipped when the operator pinned DEFAULT_MODEL via env var.
+    Skipped when the operator pinned DEFAULT_MODEL via env var, or when no
+    ANTHROPIC_API_KEY is configured (live discovery is the only auth-aware
+    path; Bedrock, Vertex, and Claude CLI subscription users get the static
+    DEFAULT_MODEL_FALLBACK).
     """
     if constants.DEFAULT_MODEL_ENV:
         return constants.DEFAULT_MODEL_ENV
+
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        logger.info(
+            "Live model discovery disabled (no ANTHROPIC_API_KEY); " "using fallback default %s",
+            DEFAULT_MODEL_FALLBACK,
+        )
+        return None
 
     try:
         models = await get_available_models()
