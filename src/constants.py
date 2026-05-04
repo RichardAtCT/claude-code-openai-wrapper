@@ -66,13 +66,20 @@ DEFAULT_DISALLOWED_TOOLS = [
 ]
 
 # Claude Models
-# Models supported by Claude Agent SDK (as of November 2025)
-# NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x
-CLAUDE_MODELS = [
-    # Claude 4.5 Family (Latest - Fall 2025) - RECOMMENDED
-    "claude-opus-4-5-20250929",  # Latest Opus 4.5 - Most capable
-    "claude-sonnet-4-5-20250929",  # Recommended - best coding model
-    "claude-haiku-4-5-20251001",  # Fast & cheap
+# Static fallback models exposed by /v1/models and accepted by validation when
+# the live Anthropic Models API is unavailable or not configured.
+# NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x.
+#
+# Operators can override the advertised model list without rebuilding the image:
+#   CLAUDE_MODELS_OVERRIDE=claude-sonnet-4-6,claude-opus-4-6
+DEFAULT_CLAUDE_MODELS = [
+    # Claude 4.6 Family (Latest) - RECOMMENDED
+    "claude-opus-4-6",  # Most capable
+    "claude-sonnet-4-6",  # Recommended - best coding model
+    # Claude 4.5 Family (Fall 2025)
+    "claude-opus-4-5-20250929",  # Opus 4.5 - deep reasoning and coding
+    "claude-sonnet-4-5-20250929",  # Sonnet 4.5 - agents and coding
+    "claude-haiku-4-5-20251001",  # Fast and cheap
     # Claude 4.1
     "claude-opus-4-1-20250805",  # Upgraded Opus 4
     # Claude 4.0 Family (Original - May 2025)
@@ -86,12 +93,26 @@ CLAUDE_MODELS = [
     # "claude-3-5-haiku-20241022",
 ]
 
+_models_override = os.getenv("CLAUDE_MODELS_OVERRIDE", "").strip()
+CLAUDE_MODELS = (
+    [model.strip() for model in _models_override.split(",") if model.strip()]
+    if _models_override
+    else DEFAULT_CLAUDE_MODELS
+)
+
 # Default model (recommended for most use cases)
 # Can be overridden via DEFAULT_MODEL environment variable
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-5-20250929")
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6")
 
 # Fast model (for speed/cost optimization)
-FAST_MODEL = "claude-haiku-4-5-20251001"
+# Can be overridden via FAST_MODEL environment variable
+FAST_MODEL = os.getenv("FAST_MODEL", "claude-haiku-4-5-20251001")
+
+# Anthropic Models API configuration for dynamically refreshing /v1/models
+ANTHROPIC_MODELS_URL = os.getenv("ANTHROPIC_MODELS_URL", "https://api.anthropic.com/v1/models")
+ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
+MODEL_LIST_CACHE_TTL_SECONDS = int(os.getenv("MODEL_LIST_CACHE_TTL_SECONDS", "3600"))
+MODEL_LIST_REQUEST_TIMEOUT_SECONDS = float(os.getenv("MODEL_LIST_REQUEST_TIMEOUT_SECONDS", "5"))
 
 # System Prompt Types
 SYSTEM_PROMPT_TYPE_TEXT = "text"

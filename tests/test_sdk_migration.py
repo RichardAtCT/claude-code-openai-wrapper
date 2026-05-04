@@ -65,8 +65,9 @@ class TestConstants:
         assert isinstance(CLAUDE_MODELS, list)
         assert len(CLAUDE_MODELS) > 0
 
-        # Check latest models are included
-        assert "claude-sonnet-4-5-20250929" in CLAUDE_MODELS
+        # Check latest fallback models are included
+        assert "claude-sonnet-4-6" in CLAUDE_MODELS
+        assert "claude-opus-4-6" in CLAUDE_MODELS
         assert "claude-haiku-4-5-20251001" in CLAUDE_MODELS
 
     def test_default_model_defined(self):
@@ -74,7 +75,7 @@ class TestConstants:
         from src.constants import DEFAULT_MODEL, CLAUDE_MODELS
 
         assert DEFAULT_MODEL in CLAUDE_MODELS
-        assert DEFAULT_MODEL == "claude-sonnet-4-5-20250929"
+        assert DEFAULT_MODEL == "claude-sonnet-4-6"
 
     def test_fast_model_defined(self):
         """Test that FAST_MODEL is set to fastest model."""
