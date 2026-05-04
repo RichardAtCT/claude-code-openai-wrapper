@@ -5,7 +5,6 @@ Critical tests for Claude Agent SDK migration.
 Tests system prompt formats, message conversion, and basic SDK integration.
 """
 
-import asyncio
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions
 
@@ -60,7 +59,7 @@ class TestConstants:
 
     def test_claude_models_defined(self):
         """Test that CLAUDE_MODELS constant exists and has expected models."""
-        from src.constants import CLAUDE_MODELS, DEFAULT_MODEL, FAST_MODEL
+        from src.constants import CLAUDE_MODELS
 
         assert isinstance(CLAUDE_MODELS, list)
         assert len(CLAUDE_MODELS) > 0

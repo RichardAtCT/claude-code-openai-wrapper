@@ -53,13 +53,18 @@ from src.rate_limiter import (
     rate_limit_exceeded_handler,
     rate_limit_endpoint,
 )
+from datetime import datetime, timezone
+
+from src import constants
 from src.constants import (
     ANTHROPIC_MODELS_URL,
     ANTHROPIC_VERSION,
     CLAUDE_MODELS,
     CLAUDE_TOOLS,
     DEFAULT_ALLOWED_TOOLS,
+    DEFAULT_MODEL_FALLBACK,
     MODEL_LIST_CACHE_TTL_SECONDS,
+    MODEL_LIST_ERROR_TTL_SECONDS,
     MODEL_LIST_REQUEST_TIMEOUT_SECONDS,
 )
 
@@ -82,13 +87,28 @@ runtime_api_key = None
 # the fallback so /v1/models keeps working for Claude CLI, Bedrock, Vertex, local
 # development, and transient Anthropic API outages.
 _model_list_cache: Dict[str, Any] = {"expires_at": 0.0, "models": None}
+# Serializes cache refreshes so concurrent /v1/models requests at TTL expiry
+# don't all stampede the upstream Anthropic API.
+_model_list_lock = asyncio.Lock()
+
+
+def _iso_to_unix(value: Any) -> Optional[int]:
+    """Convert an Anthropic ISO-8601 'created_at' string to a unix timestamp."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
 
 
 def _openai_model_from_anthropic(model_info: Dict[str, Any]) -> Dict[str, Any]:
     """Convert an Anthropic ModelInfo object to OpenAI-compatible model metadata."""
-    model = {
+    created = _iso_to_unix(model_info.get("created_at"))
+    model: Dict[str, Any] = {
         "id": model_info["id"],
         "object": "model",
+        "created": created if created is not None else int(datetime.now(timezone.utc).timestamp()),
         "owned_by": "anthropic",
     }
 
@@ -106,6 +126,14 @@ def _openai_model_from_anthropic(model_info: Dict[str, Any]) -> Dict[str, Any]:
             model[key] = model_info[key]
 
     return model
+
+
+def _fallback_model_payload() -> List[Dict[str, Any]]:
+    now = int(datetime.now(timezone.utc).timestamp())
+    return [
+        {"id": model_id, "object": "model", "created": now, "owned_by": "anthropic"}
+        for model_id in CLAUDE_MODELS
+    ]
 
 
 async def _fetch_anthropic_models() -> Optional[List[Dict[str, Any]]]:
@@ -150,30 +178,78 @@ async def _fetch_anthropic_models() -> Optional[List[Dict[str, Any]]]:
 async def get_available_models() -> List[Dict[str, Any]]:
     """Return live Anthropic models when possible, with cached static fallback."""
     if os.getenv("CLAUDE_MODELS_OVERRIDE", "").strip():
-        return [
-            {"id": model_id, "object": "model", "owned_by": "anthropic"}
-            for model_id in CLAUDE_MODELS
-        ]
+        return _fallback_model_payload()
 
     now = time.time()
     cached_models = _model_list_cache.get("models")
     if cached_models and now < float(_model_list_cache.get("expires_at", 0)):
         return cached_models
 
-    live_models = await _fetch_anthropic_models()
-    if live_models:
-        _model_list_cache.update(
-            {"models": live_models, "expires_at": now + MODEL_LIST_CACHE_TTL_SECONDS}
-        )
-        return live_models
+    async with _model_list_lock:
+        # Recheck inside the lock so the first waiter populates the cache and
+        # subsequent waiters return without re-fetching.
+        now = time.time()
+        cached_models = _model_list_cache.get("models")
+        if cached_models and now < float(_model_list_cache.get("expires_at", 0)):
+            return cached_models
 
-    fallback_models = [
-        {"id": model_id, "object": "model", "owned_by": "anthropic"} for model_id in CLAUDE_MODELS
-    ]
-    _model_list_cache.update(
-        {"models": fallback_models, "expires_at": now + MODEL_LIST_CACHE_TTL_SECONDS}
+        live_models = await _fetch_anthropic_models()
+        if live_models:
+            _model_list_cache.update(
+                {"models": live_models, "expires_at": now + MODEL_LIST_CACHE_TTL_SECONDS}
+            )
+            return live_models
+
+        fallback_models = _fallback_model_payload()
+        # Use a short TTL on failure so transient outages don't suppress live
+        # discovery for the full MODEL_LIST_CACHE_TTL_SECONDS window.
+        _model_list_cache.update(
+            {"models": fallback_models, "expires_at": now + MODEL_LIST_ERROR_TTL_SECONDS}
+        )
+        return fallback_models
+
+
+def _pick_latest_sonnet(models: List[Dict[str, Any]]) -> Optional[str]:
+    """Return the id of the newest Sonnet model in `models`, or None."""
+    sonnets = [m for m in models if isinstance(m.get("id"), str) and "sonnet" in m["id"].lower()]
+    if not sonnets:
+        return None
+    # Prefer Anthropic-provided created_at; fall back to the int `created` we set,
+    # then to id-sort (date-suffixed ids sort correctly newest-last).
+    sonnets.sort(
+        key=lambda m: (
+            _iso_to_unix(m.get("created_at")) or m.get("created") or 0,
+            m["id"],
+        )
     )
-    return fallback_models
+    return sonnets[-1]["id"]
+
+
+async def resolve_default_model() -> Optional[str]:
+    """Pick the latest Sonnet from /v1/models and store it as the default.
+
+    Skipped when the operator pinned DEFAULT_MODEL via env var.
+    """
+    if constants.DEFAULT_MODEL_ENV:
+        return constants.DEFAULT_MODEL_ENV
+
+    try:
+        models = await get_available_models()
+    except Exception as exc:  # noqa: BLE001 - startup should never abort on this
+        logger.warning("Could not resolve default model from /v1/models: %s", exc)
+        return None
+
+    latest = _pick_latest_sonnet(models)
+    if latest:
+        constants.RESOLVED_DEFAULT_MODEL = latest
+        logger.info("Resolved default model from Anthropic Models API: %s", latest)
+        return latest
+
+    logger.info(
+        "No Sonnet model found in /v1/models response; using fallback %s",
+        DEFAULT_MODEL_FALLBACK,
+    )
+    return None
 
 
 def generate_secure_token(length: int = 32) -> str:
@@ -294,6 +370,14 @@ async def lifespan(app: FastAPI):
         logger.debug(
             f"🔧 API Key protection: {'Enabled' if (os.getenv('API_KEY') or runtime_api_key) else 'Disabled'}"
         )
+
+    # Resolve the default model from the live Anthropic Models API so /v1/chat
+    # uses the latest Sonnet without a code change. Best-effort: any failure
+    # leaves the static fallback in place.
+    try:
+        await resolve_default_model()
+    except Exception as e:
+        logger.warning(f"Default model resolution skipped: {e}")
 
     # Start session cleanup task
     session_manager.start_cleanup_task()
