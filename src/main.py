@@ -1205,7 +1205,7 @@ async def responses_endpoint(
         response = {
             "id": request_id,
             "object": "response",
-            "created_at": int(datetime.now().timestamp()),
+            "created": int(datetime.now().timestamp()),
             "model": request_body.model,
             "status": "completed",
             "output": _build_responses_output(assistant_content, output_item_id),
