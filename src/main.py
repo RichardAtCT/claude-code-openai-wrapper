@@ -433,8 +433,10 @@ def _messages_from_responses_input(input_value: Any) -> list[Message]:
         return [Message(role="user", content=_extract_text_from_response_content(input_value))]
     if isinstance(input_value, list):
         # If it looks like a list of messages, convert each item to a Message.
-        if input_value and isinstance(input_value[0], dict) and (
-            "role" in input_value[0] or input_value[0].get("type") == "message"
+        if (
+            input_value
+            and isinstance(input_value[0], dict)
+            and ("role" in input_value[0] or input_value[0].get("type") == "message")
         ):
             messages: list[Message] = []
             for item in input_value:
