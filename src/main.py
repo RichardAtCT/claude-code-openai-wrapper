@@ -456,7 +456,8 @@ def _build_responses_output(text: str, item_id: str) -> list[Dict[str, Any]]:
             "id": item_id,
             "type": "message",
             "role": "assistant",
-            "content": [{"type": "output_text", "text": text}],
+            "status": "completed",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
         }
     ]
 
@@ -716,17 +717,57 @@ async def generate_responses_stream(
 
         output_item_id = f"msg_{uuid.uuid4().hex[:24]}"
         created_ts = int(datetime.now().timestamp())
-        response_created = {
+
+        # Spec: every event carries `type` + monotonic `sequence_number`.
+        # See https://developers.openai.com/api/reference/resources/responses/streaming-events
+        seq = 0
+
+        def _sse(event_name: str, payload: Dict[str, Any]) -> str:
+            nonlocal seq
+            data = {"type": event_name, "sequence_number": seq, **payload}
+            seq += 1
+            return f"event: {event_name}\ndata: {json.dumps(data)}\n\n"
+
+        base_response: Dict[str, Any] = {
             "id": request_id,
             "object": "response",
-            "created": created_ts,
+            "created_at": created_ts,
             "model": request.model,
             "status": "in_progress",
+            "output": [],
         }
-        yield f"event: response.created\ndata: {json.dumps(response_created)}\n\n"
+        yield _sse("response.created", {"response": base_response})
+        yield _sse("response.in_progress", {"response": base_response})
 
         chunks_buffer = []
         assistant_text_parts: list[str] = []
+        item_started = False
+
+        def _emit_item_added() -> str:
+            return _sse(
+                "response.output_item.added",
+                {
+                    "output_index": 0,
+                    "item": {
+                        "id": output_item_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "in_progress",
+                        "content": [],
+                    },
+                },
+            )
+
+        def _emit_part_added() -> str:
+            return _sse(
+                "response.content_part.added",
+                {
+                    "item_id": output_item_id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "part": {"type": "output_text", "text": "", "annotations": []},
+                },
+            )
 
         async for chunk in claude_cli.run_completion(
             prompt=prompt,
@@ -750,42 +791,36 @@ async def generate_responses_stream(
             if content is None:
                 continue
 
+            raw_texts: list[str] = []
             if isinstance(content, list):
                 for block in content:
                     if hasattr(block, "text"):
-                        raw_text = block.text
+                        raw_texts.append(block.text)
                     elif isinstance(block, dict) and block.get("type") == "text":
-                        raw_text = block.get("text", "")
-                    else:
-                        continue
-
-                    filtered_text = MessageAdapter.filter_content(raw_text)
-                    if filtered_text and not filtered_text.isspace():
-                        assistant_text_parts.append(filtered_text)
-                        delta_event = {
-                            "type": "response.output_text.delta",
-                            "delta": filtered_text,
-                            "item_id": output_item_id,
-                            "output_index": 0,
-                            "content_index": 0,
-                        }
-                        yield (
-                            f"event: response.output_text.delta\ndata: {json.dumps(delta_event)}\n\n"
-                        )
+                        raw_texts.append(block.get("text", ""))
             elif isinstance(content, str):
-                filtered_content = MessageAdapter.filter_content(content)
-                if filtered_content and not filtered_content.isspace():
-                    assistant_text_parts.append(filtered_content)
-                    delta_event = {
-                        "type": "response.output_text.delta",
-                        "delta": filtered_content,
+                raw_texts.append(content)
+
+            for raw_text in raw_texts:
+                filtered_text = MessageAdapter.filter_content(raw_text)
+                if not filtered_text or filtered_text.isspace():
+                    continue
+
+                if not item_started:
+                    item_started = True
+                    yield _emit_item_added()
+                    yield _emit_part_added()
+
+                assistant_text_parts.append(filtered_text)
+                yield _sse(
+                    "response.output_text.delta",
+                    {
                         "item_id": output_item_id,
                         "output_index": 0,
                         "content_index": 0,
-                    }
-                    yield (
-                        f"event: response.output_text.delta\ndata: {json.dumps(delta_event)}\n\n"
-                    )
+                        "delta": filtered_text,
+                    },
+                )
 
         assistant_content = "".join(assistant_text_parts).strip()
         if not assistant_content and chunks_buffer:
@@ -803,16 +838,73 @@ async def generate_responses_stream(
             "total_tokens": token_usage["total_tokens"],
         }
 
-        response_completed = {
-            "id": request_id,
-            "object": "response",
-            "created": created_ts,
-            "model": request.model,
+        # If Claude returned text only in a final non-streaming chunk, synthesize
+        # the missing added+delta events so the spec sequence stays intact.
+        if not item_started and assistant_content:
+            item_started = True
+            yield _emit_item_added()
+            yield _emit_part_added()
+            yield _sse(
+                "response.output_text.delta",
+                {
+                    "item_id": output_item_id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": assistant_content,
+                },
+            )
+
+        if item_started:
+            yield _sse(
+                "response.output_text.done",
+                {
+                    "item_id": output_item_id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "text": assistant_content,
+                },
+            )
+            yield _sse(
+                "response.content_part.done",
+                {
+                    "item_id": output_item_id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "part": {
+                        "type": "output_text",
+                        "text": assistant_content,
+                        "annotations": [],
+                    },
+                },
+            )
+            yield _sse(
+                "response.output_item.done",
+                {
+                    "output_index": 0,
+                    "item": {
+                        "id": output_item_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": assistant_content,
+                                "annotations": [],
+                            }
+                        ],
+                    },
+                },
+            )
+
+        final_response = {
+            **base_response,
             "status": "completed",
             "output": _build_responses_output(assistant_content, output_item_id),
+            "output_text": assistant_content,
             "usage": usage,
         }
-        yield f"event: response.completed\ndata: {json.dumps(response_completed)}\n\n"
+        yield _sse("response.completed", {"response": final_response})
         yield "data: [DONE]\n\n"
 
     except Exception as e:
@@ -1006,7 +1098,7 @@ async def responses_endpoint(
         top_p = body.get("top_p", 1.0)
         max_output_tokens = body.get("max_output_tokens") or body.get("max_tokens")
         user = body.get("user")
-        session_id = body.get("session_id")
+        session_id = body.get("session_id") or body.get("previous_response_id")
 
         messages = []
         if "messages" in body:
