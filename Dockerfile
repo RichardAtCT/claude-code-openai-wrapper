@@ -1,6 +1,8 @@
 FROM python:3.12-slim
 
 # Install uv by copying its static binaries from the official image (pinned tag).
+# Keep this version in sync with the `version:` pin in .github/workflows/ci.yml so
+# lockfile resolution behaves identically in CI and Docker builds.
 COPY --from=ghcr.io/astral-sh/uv:0.11.19 /uv /uvx /bin/
 
 # Copy files into the container as the root user by default.
