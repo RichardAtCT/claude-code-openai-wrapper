@@ -195,7 +195,7 @@ def main():
         
     except Exception as e:
         print(f"❌ Error: {e}")
-        print("💡 Make sure the server is running: poetry run python main.py")
+        print("💡 Make sure the server is running: uv run python main.py")
 
 
 if __name__ == "__main__":

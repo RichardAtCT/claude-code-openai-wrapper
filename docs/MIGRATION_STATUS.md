@@ -8,7 +8,7 @@
 1. **Dependency Updates**
    - ✅ Updated `pyproject.toml` from `claude-code-sdk ^0.0.14` to `claude-agent-sdk ^0.1.6`
    - ✅ Updated version to 2.0.0
-   - ✅ Successfully ran `poetry lock` and `poetry install`
+   - ✅ Successfully ran `uv lock` and `uv sync`
    - ✅ Verified claude-agent-sdk 0.1.6 installation
 
 2. **Code Updates**
@@ -93,8 +93,8 @@ For users deploying the migrated wrapper:
 git clone https://github.com/RichardAtCT/claude-code-openai-wrapper
 cd claude-code-openai-wrapper
 git checkout claude/research-api-updates-011CUjNxYatBANZZq6bssaxN
-poetry install
-poetry run uvicorn src.main:app --host 0.0.0.0 --port 8000
+uv sync
+uv run uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### Verification

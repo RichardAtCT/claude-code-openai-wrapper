@@ -2134,7 +2134,7 @@ def find_available_port(start_port: int = 8000, max_attempts: int = 10) -> int:
 
 
 def run_server(port: int = None, host: str = None):
-    """Run the server - used as Poetry script entry point."""
+    """Run the server - used as the `claude-wrapper` script entry point."""
     import uvicorn
 
     # Handle interactive API key protection
@@ -2166,7 +2166,7 @@ def run_server(port: int = None, host: str = None):
             except RuntimeError as port_error:
                 logger.error(f"Could not find available port: {port_error}")
                 print(f"\n❌ Error: {port_error}")
-                print("💡 Try setting a specific port with: PORT=9000 poetry run python main.py")
+                print("💡 Try setting a specific port with: PORT=9000 uv run python main.py")
                 raise
         else:
             raise

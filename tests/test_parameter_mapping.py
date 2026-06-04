@@ -3,7 +3,7 @@
 Test script demonstrating OpenAI to Claude Code SDK parameter mapping.
 
 These are integration tests that require a running server.
-Run with: poetry run pytest tests/test_parameter_mapping.py -v
+Run with: uv run pytest tests/test_parameter_mapping.py -v
 """
 
 import asyncio
@@ -165,7 +165,7 @@ def main():
         # Check if server is running
         response = requests.get(f"{BASE_URL}/health")
         if response.status_code != 200:
-            print("❌ Server is not running. Start it with: poetry run python main.py")
+            print("❌ Server is not running. Start it with: uv run python main.py")
             return
         print("✅ Server is running")
 
@@ -180,7 +180,7 @@ def main():
         print("🎉 All tests completed!")
         print("\nTo see parameter warnings in detail, run the server with:")
         print(
-            "PYTHONPATH=. poetry run python -c \"import logging; logging.basicConfig(level=logging.DEBUG); exec(open('main.py').read())\""
+            "PYTHONPATH=. uv run python -c \"import logging; logging.basicConfig(level=logging.DEBUG); exec(open('main.py').read())\""
         )
 
     except requests.exceptions.ConnectionError:

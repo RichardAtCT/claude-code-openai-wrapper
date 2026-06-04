@@ -201,8 +201,8 @@ async with ClaudeSDKClient(options=options) as client:
 #### Phase 1: Dependency Update
 - [ ] Update `pyproject.toml` with `claude-agent-sdk = "^0.1.6"`
 - [ ] Remove `claude-code-sdk` from dependencies
-- [ ] Run `poetry lock` and `poetry install`
-- [ ] Verify installation: `poetry show claude-agent-sdk`
+- [ ] Run `uv lock` and `uv sync`
+- [ ] Verify installation: `uv pip show claude-agent-sdk`
 
 #### Phase 2: Code Updates
 - [ ] Update imports in `claude_cli.py`
@@ -473,7 +473,7 @@ if self.max_completion_tokens or self.max_tokens:
 
 **If Migration Fails:**
 1. Revert `pyproject.toml` changes
-2. Run `poetry lock && poetry install`
+2. Run `uv lock && uv sync`
 3. Restore original code from git
 
 **Recommended:**
@@ -669,8 +669,8 @@ Files to review/update:
 
 **Migration:**
 ```bash
-poetry lock --no-update
-poetry install
+uv lock
+uv sync
 # Or for Docker:
 docker build --no-cache -t claude-wrapper:v2 .
 ```
@@ -767,14 +767,14 @@ claude-agent-sdk = "^0.1.6"
 
 ```bash
 # Update dependencies
-poetry remove claude-code-sdk
-poetry add claude-agent-sdk@^0.1.6
-poetry lock
-poetry install
+uv remove claude-code-sdk
+uv add "claude-agent-sdk>=0.1.6,<0.2.0"
+uv lock
+uv sync
 
 # Test changes
-poetry run python test_endpoints.py
-poetry run python test_basic.py
+uv run python test_endpoints.py
+uv run python test_basic.py
 
 # Build Docker
 docker build -t claude-wrapper:v2 .
