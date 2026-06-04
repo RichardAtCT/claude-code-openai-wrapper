@@ -165,7 +165,7 @@ def main():
         # Check if server is running
         response = requests.get(f"{BASE_URL}/health")
         if response.status_code != 200:
-            print("❌ Server is not running. Start it with: uv run python main.py")
+            print("❌ Server is not running. Start it with: uv run claude-wrapper")
             return
         print("✅ Server is running")
 
@@ -179,9 +179,7 @@ def main():
         print("\n" + "=" * 50)
         print("🎉 All tests completed!")
         print("\nTo see parameter warnings in detail, run the server with:")
-        print(
-            "PYTHONPATH=. uv run python -c \"import logging; logging.basicConfig(level=logging.DEBUG); exec(open('main.py').read())\""
-        )
+        print("DEBUG_MODE=true uv run claude-wrapper")
 
     except requests.exceptions.ConnectionError:
         print("❌ Cannot connect to server. Make sure it's running on port 8000")

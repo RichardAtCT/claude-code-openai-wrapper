@@ -200,14 +200,14 @@ By default, Claude Code runs in an **isolated temporary directory** to prevent i
 
    ```bash
    # No configuration needed - secure by default
-   uv run python main.py
+   uv run claude-wrapper
    ```
 
 2. **Custom Directory**: Set a specific workspace directory
 
    ```bash
    export CLAUDE_CWD=/path/to/your/project
-   uv run python main.py
+   uv run claude-wrapper
    ```
 
 3. **Via .env file**: Add to your `.env` file
@@ -233,7 +233,7 @@ The server supports **interactive API key protection** for secure remote access:
 
 ```bash
 # Example: Interactive protection enabled
-uv run python main.py
+uv run claude-wrapper
 
 # Output:
 # ============================================================
@@ -313,14 +313,14 @@ RATE_LIMIT_HEALTH_PER_MINUTE=30
    **Production mode:**
 
    ```bash
-   uv run python main.py
+   uv run claude-wrapper
    ```
 
    **Port Options for production mode:**
    - Default: Uses port 8000 (or PORT from .env)
    - If port is in use, automatically finds next available port
-   - Specify custom port: `uv run python main.py 9000`
-   - Set in environment: `PORT=9000 uv run python main.py`
+   - Set in environment: `PORT=9000 uv run claude-wrapper`
+   - Specify custom port via module invocation: `uv run python -m src.main 9000`
 
 ## Docker
 

@@ -2166,7 +2166,7 @@ def run_server(port: int = None, host: str = None):
             except RuntimeError as port_error:
                 logger.error(f"Could not find available port: {port_error}")
                 print(f"\n❌ Error: {port_error}")
-                print("💡 Try setting a specific port with: PORT=9000 uv run python main.py")
+                print("💡 Try setting a specific port with: PORT=9000 uv run claude-wrapper")
                 raise
         else:
             raise
