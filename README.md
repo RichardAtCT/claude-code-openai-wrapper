@@ -358,12 +358,15 @@ docker run -d -p 8000:8000 \
 ```bash
 docker run -d -p 8000:8000 \
   -v ~/.claude:/root/.claude \
-  -v $(pwd):/app \
+  -v $(pwd)/src:/app/src \
   claude-wrapper:latest \
   uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### Docker Compose
+
+The default Compose setup uses the production container command without Uvicorn
+reload.
 
 ```yaml
 version: "3.8"
@@ -381,6 +384,12 @@ services:
 ```
 
 Run: `docker-compose up -d` | Stop: `docker-compose down`
+
+For local development with hot reload, use the dev override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
 
 ### Environment Variables
 

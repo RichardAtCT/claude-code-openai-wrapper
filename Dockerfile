@@ -25,5 +25,6 @@ RUN uv sync --locked --no-dev
 # Expose the port (default 8000)
 EXPOSE 8000
 
-# Run the app with Uvicorn (development mode with reload; switch to --no-reload for prod)
-CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Run the app with Uvicorn. Development reload is opt-in via docker-compose.dev.yml
+# or by overriding the container command locally.
+CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

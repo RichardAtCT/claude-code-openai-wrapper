@@ -1,0 +1,14 @@
+services:
+  claude-wrapper:
+    volumes:
+      - ./src:/app/src
+    command:
+      - uv
+      - run
+      - uvicorn
+      - src.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
