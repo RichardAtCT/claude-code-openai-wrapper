@@ -1,43 +1,55 @@
-[tool.poetry]
+[project]
 name = "claude-code-openai-wrapper"
 version = "2.3.0"
 description = "OpenAI API-compatible wrapper for Claude Code"
-authors = ["Richard Atkinson <richardatk01@gmail.com>"]
+authors = [{ name = "Richard Atkinson", email = "richardatk01@gmail.com" }]
 readme = "README.md"
 license = "MIT"
-packages = [{include = "src"}]
+# Was Poetry `python = "^3.10"`. We keep the lower bound and intentionally drop the
+# caret's implicit `<4.0` upper bound (conventional, and matches the CI matrix below).
+requires-python = ">=3.10"
+# Caret (`^`) constraints from Poetry are translated to the exact equivalent PEP 440
+# ranges so dependency resolution is unchanged by the migration.
+dependencies = [
+    "fastapi>=0.115.0,<0.116.0",
+    "uvicorn[standard]>=0.32.0,<0.33.0",
+    "pydantic>=2.10.0,<3.0.0",
+    "python-dotenv>=1.0.1,<2.0.0",
+    "httpx>=0.27.2,<0.28.0",
+    "sse-starlette>=2.1.3,<3.0.0",
+    "python-multipart>=0.0.18,<0.0.19",  # Poetry `^0.0.18` => only patch bumps allowed
+    "claude-agent-sdk>=0.1.18,<0.2.0",
+    "slowapi>=0.1.9,<0.2.0"
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-fastapi = "^0.115.0"
-uvicorn = {extras = ["standard"], version = "^0.32.0"}
-pydantic = "^2.10.0"
-python-dotenv = "^1.0.1"
-httpx = "^0.27.2"
-sse-starlette = "^2.1.3"
-python-multipart = "^0.0.18"
-claude-agent-sdk = "^0.1.18"
-slowapi = "^0.1.9"
+[project.scripts]
+claude-wrapper = "src.main:run_server"
 
-[tool.poetry.group.dev.dependencies]
-black = "^24.0.0"
-pytest = "^8.0.0"
-pytest-asyncio = "^0.23.0"
-requests = "^2.32.0"
-openai = "^1.0.0"
-pytest-cov = "^7.0.0"
-mypy = "^1.14.0"
-bandit = "^1.8.0"
-safety = "^3.2.0"
-hypothesis = "^6.122.0"
+# Dev dependencies use PEP 735 dependency groups (installed by default by `uv sync`,
+# and managed via `uv add --dev` / `uv remove --dev`).
+[dependency-groups]
+dev = [
+    "black>=24.0.0,<25.0.0",
+    "pytest>=8.0.0,<9.0.0",
+    "pytest-asyncio>=0.23.0,<0.24.0",
+    "requests>=2.32.0,<3.0.0",
+    "openai>=1.0.0,<2.0.0",
+    "pytest-cov>=7.0.0,<8.0.0",
+    "mypy>=1.14.0,<2.0.0",
+    "bandit>=1.8.0,<2.0.0",
+    "safety>=3.2.0,<4.0.0",
+    "hypothesis>=6.122.0,<7.0.0"
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The importable package lives in `src/` and is imported as `src.*` (e.g. `src.main`),
+# so ship the directory as-is rather than treating it as a src-layout root.
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 [tool.black]
 line-length = 100
 target-version = ['py310']
-
-[tool.poetry.scripts]
-claude-wrapper = "src.main:run_server"

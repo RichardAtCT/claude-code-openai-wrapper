@@ -19,5 +19,5 @@ def is_server_running(base_url: str = "http://localhost:8000") -> bool:
 # Marker for tests that require a running server
 requires_server = pytest.mark.skipif(
     not is_server_running(),
-    reason="Server not running at localhost:8000. Start with: poetry run python main.py",
+    reason="Server not running at localhost:8000. Start with: uv run claude-wrapper",
 )

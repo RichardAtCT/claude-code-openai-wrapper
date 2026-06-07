@@ -223,7 +223,7 @@ def main():
         print("✅ Server is healthy")
     except requests.exceptions.RequestException as e:
         print(f"❌ Cannot connect to server: {e}")
-        print("   Make sure the server is running with: poetry run python main.py")
+        print("   Make sure the server is running with: uv run claude-wrapper")
         return
 
     success_count = 0

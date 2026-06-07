@@ -200,7 +200,7 @@ def main():
     """Run all tests."""
     print("Claude Code OpenAI Wrapper - Basic Tests")
     print("=" * 50)
-    print("Make sure the server is running: python main.py")
+    print("Make sure the server is running: uv run claude-wrapper")
     print("=" * 50)
 
     # Show API key status
