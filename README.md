@@ -4,10 +4,11 @@ OpenAI API-compatible wrapper for Claude Code. Drop it in front of any OpenAI cl
 
 ## Version
 
-**Current:** 2.9.11
+**Current:** 2.9.12
 
 Highlights of recent releases (full history in [CHANGELOG.md](./CHANGELOG.md)):
 
+- **2.9.12** - Added `claude-opus-5` (Opus 5, $5/$25 MTok, 1M context / 128K max output) to the model catalogue. `claude-agent-sdk` 0.2.110 -> 0.2.127. Security floors raised: `mcp` >=1.28.1 (closes three high alerts #26-28) and `nltk` >=3.10.0 (closes #24, previously accepted risk - fix now shipped). Deep health probe no longer returns exception messages to clients (CodeQL py/stack-trace-exposure).
 - **2.9.11** - Added `claude-sonnet-5` (new balanced flagship, $3/$15 MTok, 1M context / 128K max output) and `claude-fable-5` (Anthropic's most capable widely released model, $10/$50 MTok) to the model catalogue; `DEFAULT_MODEL_FALLBACK` moved to `claude-sonnet-5`. `claude-agent-sdk` 0.2.93 -> 0.2.110. Security floors raised to close 11 Dependabot alerts: `cryptography` >=48.0.1 (#23), `pyjwt` >=2.13.0 (#14-18), `python-multipart` >=0.0.31 (#19-22), new `joserfc` >=1.6.7 (#25). The nltk alert (#24) has no upstream fix yet and is documented as accepted risk.
 - **2.9.10** - `claude-agent-sdk` 0.2.87 -> 0.2.93. Raised the `starlette` floor to `>=1.0.1` (resolves to 1.3.1) to close `GHSA-86qp-5c8j-p5mr` (Host-header path poisoning, Dependabot #13), which required raising the `fastapi` floor to `>=0.133.1` (resolves to 0.137.0) since fastapi `<=0.132.x` caps starlette below 1.0.
 - **2.9.9** - Added `claude-opus-4-8` (new Opus flagship) to the static model catalogue alongside `claude-opus-4-7`; both carry the 1M context / 128K max output / Opus pricing tier / `claude-sonnet-4-6` overload fallback. Matches the current Anthropic `/v1/models` response. `claude-agent-sdk` already at the latest published `0.2.87`; no SDK bump.

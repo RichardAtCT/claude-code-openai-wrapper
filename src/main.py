@@ -2015,8 +2015,8 @@ async def healthz_deep(request: Request):
         probe_ok = "OK" in normalized
         detail["content_excerpt"] = content[:120]
     except Exception as e:
+        # Exception message may leak paths/config; log it, expose only the class.
         detail["exception"] = type(e).__name__
-        detail["exception_message"] = str(e)
         logger.warning(f"Deep health probe raised: {e}")
 
     _DEEP_HEALTH_WINDOW.append(probe_ok)

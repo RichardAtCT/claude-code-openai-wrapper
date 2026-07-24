@@ -1,3 +1,3 @@
 """Claude Code OpenAI Wrapper - A FastAPI-based OpenAI-compatible API for Claude Code."""
 
-__version__ = "2.9.11"
+__version__ = "2.9.12"

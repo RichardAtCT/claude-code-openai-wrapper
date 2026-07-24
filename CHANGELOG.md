@@ -5,6 +5,39 @@ All notable changes to the Claude Code OpenAI Wrapper project will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.12] - 2026-07-24
+
+### Added
+
+- `claude-opus-5` (Claude Opus 5, GA 2026 - "for complex agentic coding and
+  enterprise work") to the static model catalogue in `src/constants.py`:
+  `_ALL_MODEL_IDS`, `_MODEL_OVERRIDES` (1M context, 64K default / 128K max
+  output), `MODEL_PRICING` (current `$5/$25` per MTok Opus tier), and
+  `MODEL_FALLBACK_MAP` (overload fallback to `claude-sonnet-5`).
+
+### Changed
+
+- Bumped `claude-agent-sdk` from `0.2.110` to `0.2.127`
+  (`pyproject.toml` + `poetry.lock`), the latest published release.
+  The `[otel]` extra is retained.
+- Raised the `mcp` security floor from `>=1.23.0` to `>=1.28.1` to close
+  three high Dependabot alerts: #26 `GHSA-hvrp-rf83-w775` (experimental task
+  handlers allow any client to access and cancel other clients' tasks),
+  #27 `GHSA-jpw9-pfvf-9f58` (HTTP transports serve session requests without
+  verifying the authenticated principal), and #28 `GHSA-vj7q-gjh5-988w`
+  (WebSocket server transport lacks Host/Origin validation).
+- Raised the `nltk` security floor from `>=3.9.3` to `>=3.10.0` to close
+  Dependabot #24 `GHSA-p4gq-832x-fm9v` (URL-encoded path traversal in
+  `nltk.data.load`, high). Previously documented as accepted risk with no
+  upstream fix; 3.10.0 ships the patch.
+
+### Security
+
+- Deep health probe (`/healthz/deep`) no longer returns exception messages in
+  its JSON payload (CodeQL alert #11, `py/stack-trace-exposure` at
+  `src/main.py`). The message is still logged server-side; clients see only
+  the exception class name.
+
 ## [2.9.11] - 2026-07-01
 
 ### Added

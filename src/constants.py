@@ -107,6 +107,11 @@ _MODEL_OVERRIDES = {
         "default_max_output": 64_000,
         "max_output_limit": 128_000,
     },
+    "claude-opus-5": {
+        "context_window": 1_000_000,
+        "default_max_output": 64_000,
+        "max_output_limit": 128_000,
+    },
     "claude-sonnet-5": {
         "context_window": 1_000_000,
         "default_max_output": 64_000,
@@ -139,6 +144,7 @@ _MODEL_OVERRIDES = {
 # NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x.
 _ALL_MODEL_IDS = [
     "claude-fable-5",
+    "claude-opus-5",
     "claude-sonnet-5",
     "claude-opus-4-8",
     "claude-opus-4-7",
@@ -209,6 +215,7 @@ MODEL_PRICING = {
     # pricing of $2/$10 per MTok applies through 2026-08-31 but is not encoded
     # here so the cost tracker reflects steady-state rates.
     "claude-sonnet-5": _PRICING_SONNET,
+    "claude-opus-5": _PRICING_OPUS,
     "claude-opus-4-8": _PRICING_OPUS,
     "claude-opus-4-7": _PRICING_OPUS,
     "claude-opus-4-6": _PRICING_OPUS,
@@ -227,6 +234,7 @@ WEB_SEARCH_COST_USD = 0.01
 # Fallback model mapping: when an Opus model is overloaded, fall back to Sonnet
 # Sourced from Claude Code's FallbackTriggeredError pattern
 MODEL_FALLBACK_MAP = {
+    "claude-opus-5": "claude-sonnet-5",
     "claude-opus-4-8": "claude-sonnet-4-6",
     "claude-opus-4-7": "claude-sonnet-4-6",
     "claude-opus-4-6": "claude-sonnet-4-6",
