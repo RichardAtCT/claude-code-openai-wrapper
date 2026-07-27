@@ -449,6 +449,8 @@ response = client.chat.completions.create(
 
 With `json_object` mode, the wrapper adds system prompt instructions for JSON output, strips preambles like "Here is the JSON:", and uses brace-matching extraction as a fallback. Works streaming and non-streaming. JSON schema is also accepted via `response_format={"type": "json_schema", "json_schema": {...}}`.
 
+In either JSON mode the wrapper moves your system prompt to the front of the user turn. The Claude Agent SDK treats its system prompt slot as a persona, not as binding instructions, so a schema left there gets ignored, with field names coming back renamed and required fields missing. Relocating the text fixes that. It is a move, not a copy, so your token count does not change. Plain text requests are not affected.
+
 ## Limitations
 
 - Images in messages are converted to text placeholders.

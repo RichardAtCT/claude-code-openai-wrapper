@@ -187,6 +187,18 @@ class MessageAdapter:
         "- No markdown, no code fences, no explanation"
     )
 
+    # Wraps a caller's system prompt once it has been moved into the user turn.
+    # See relocate_system_contract for why the move is needed.
+    # Phrasing matters: an earlier "SYSTEM INSTRUCTIONS (authoritative)" header
+    # read as a prompt-injection attempt and the model said so in its reply
+    # instead of obeying. Attributing the text to the caller avoids that.
+    SYSTEM_CONTRACT_TEMPLATE = (
+        "The API caller supplied these instructions for this request. "
+        "Follow them when producing your response.\n\n"
+        "{system_prompt}\n\n"
+        "--- end of caller instructions ---\n\n"
+    )
+
     JSON_SCHEMA_TEMPLATE = (
         "You MUST respond with valid JSON that strictly conforms to the following JSON Schema.\n"
         "Do not wrap the JSON in markdown code fences.\n"
@@ -662,13 +674,16 @@ class MessageAdapter:
         Convert OpenAI messages to Claude Code prompt format.
         Returns (prompt, system_prompt)
         """
-        system_prompt = None
+        system_parts = []
         conversation_parts = []
 
         for message in messages:
             content = message.content or ""
             if message.role == "system":
-                system_prompt = content
+                # Keep every system message. Overwriting silently dropped the
+                # first half of a contract split across two system messages.
+                if content:
+                    system_parts.append(content)
             elif message.role == "user":
                 conversation_parts.append(f"Human: {content}")
             elif message.role == "assistant":
@@ -681,7 +696,34 @@ class MessageAdapter:
         if messages and messages[-1].role != "user":
             prompt += "\n\nHuman: Please continue."
 
-        return prompt, system_prompt
+        return prompt, ("\n\n".join(system_parts) or None)
+
+    @staticmethod
+    def relocate_system_contract(
+        prompt: str, system_prompt: Optional[str]
+    ) -> Tuple[str, Optional[str]]:
+        """Move a caller's system prompt to the head of the user turn.
+
+        The Agent SDK treats options.system_prompt as a persona rather than a
+        binding output contract, so field-level rules placed there are ignored:
+        an ad-detection contract asking for six named keys got back four
+        differently named ones on 5 of 5 runs, and none of the enum values it
+        specified. Moving the same text verbatim into the user turn produced
+        the requested shape on 15 of 15. Callers put their schema in a system
+        message because that is the OpenAI convention, so the wrapper has to
+        put it where this backend actually reads it.
+
+        Returns (prompt, None) so the caller repopulates the system slot with
+        the JSON formatting rules. Leaving it None would load the claude_code
+        preset instead.
+        """
+        if not system_prompt:
+            return prompt, system_prompt
+
+        contract = MessageAdapter.SYSTEM_CONTRACT_TEMPLATE.format(
+            system_prompt=system_prompt
+        )
+        return contract + prompt, None
 
     @staticmethod
     def filter_content(content: str) -> str:

@@ -5,6 +5,43 @@ All notable changes to the Claude Code OpenAI Wrapper project will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.13] - 2026-07-27
+
+### Fixed
+
+- A caller's system prompt was ignored when it carried an output contract.
+  The wrapper maps the OpenAI `system` role onto the Agent SDK's
+  `options.system_prompt`, which that backend treats as a persona rather than
+  as binding instructions, so field-level rules placed there had no effect.
+  A contract asking for six named keys came back with four differently named
+  ones on 5 of 5 runs: `confidence` and `end_text` dropped, `category`
+  renamed to `type`, `reason` to `label`, a bare array in place of the
+  requested top-level object, and none of the enum values it specified. The
+  same text moved verbatim into the user turn returned the requested shape on
+  15 of 15 runs.
+
+  In JSON mode the wrapper now relocates the caller's system prompt to the
+  head of the user turn and keeps the JSON formatting rules in the system
+  slot. The text moves rather than being copied, so token count is unchanged.
+  Callers put their schema in a system message because that is the OpenAI
+  convention, so the wrapper has to put it where this backend reads it.
+
+  Scoped to `json_object` and `json_schema`. Plain text requests are
+  untouched. The same defect affects them, since a persona in a system
+  message is ignored too, but relocating there changes conversational framing
+  for every existing caller, so it is left as a separate decision.
+
+- Multiple system messages in one request no longer collapse to the last one.
+  A contract split across two system messages silently lost the first half.
+  They are now joined with a blank line, matching OpenAI's behaviour.
+
+### Changed
+
+- `test_multiple_system_messages_uses_last` becomes
+  `test_multiple_system_messages_are_joined`. The old test documented the
+  overwrite as intended; nothing in the README or this changelog ever claimed
+  it was, and it loses caller input.
+
 ## [2.9.12] - 2026-07-24
 
 ### Added

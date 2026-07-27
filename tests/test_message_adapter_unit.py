@@ -46,8 +46,8 @@ class TestMessagesToPrompt:
         assert system == "You are a helpful assistant."
         assert "Human: Hello" in prompt
 
-    def test_multiple_system_messages_uses_last(self):
-        """Multiple system messages use the last one."""
+    def test_multiple_system_messages_are_joined(self):
+        """All system messages are kept; the last no longer overwrites."""
         messages = [
             Message(role="system", content="First system message"),
             Message(role="user", content="Hello"),
@@ -55,7 +55,7 @@ class TestMessagesToPrompt:
         ]
         prompt, system = MessageAdapter.messages_to_prompt(messages)
 
-        assert system == "Second system message"
+        assert system == "First system message\n\nSecond system message"
 
     def test_last_message_not_user_adds_continue(self):
         """If last message isn't from user, adds 'Please continue'."""
@@ -85,6 +85,62 @@ class TestMessagesToPrompt:
 
         assert prompt == ""
         assert system is None
+
+
+class TestMultipleSystemMessages:
+    """Every system message has to survive the flattening."""
+
+    def test_both_system_messages_are_kept(self):
+        """The second system message used to overwrite the first."""
+        messages = [
+            Message(role="system", content="Rule one."),
+            Message(role="system", content="Rule two."),
+            Message(role="user", content="Go"),
+        ]
+        prompt, system = MessageAdapter.messages_to_prompt(messages)
+
+        assert "Rule one." in system
+        assert "Rule two." in system
+
+    def test_empty_system_message_is_skipped(self):
+        messages = [
+            Message(role="system", content=""),
+            Message(role="user", content="Go"),
+        ]
+        prompt, system = MessageAdapter.messages_to_prompt(messages)
+
+        assert system is None
+
+
+class TestRelocateSystemContract:
+    """In JSON mode the contract has to move into the user turn."""
+
+    def test_system_prompt_moves_to_head_of_user_turn(self):
+        prompt, system = MessageAdapter.relocate_system_contract(
+            "Human: analyze this", "Return {\"a\": 1}"
+        )
+
+        assert system is None
+        assert prompt.startswith("The API caller supplied these instructions")
+        assert 'Return {"a": 1}' in prompt
+        assert prompt.index("caller supplied") < prompt.index("Human: analyze this")
+
+    def test_delimiter_closes_the_relocated_block(self):
+        prompt, _ = MessageAdapter.relocate_system_contract("Human: hi", "Be terse.")
+
+        assert "--- end of caller instructions ---" in prompt
+        assert prompt.index("Be terse.") < prompt.index("--- end of caller instructions ---")
+
+    def test_no_system_prompt_is_a_passthrough(self):
+        prompt, system = MessageAdapter.relocate_system_contract("Human: hi", None)
+
+        assert prompt == "Human: hi"
+        assert system is None
+
+    def test_empty_system_prompt_is_a_passthrough(self):
+        prompt, system = MessageAdapter.relocate_system_contract("Human: hi", "")
+
+        assert prompt == "Human: hi"
 
 
 class TestFilterContent:

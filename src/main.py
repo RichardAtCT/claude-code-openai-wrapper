@@ -25,6 +25,7 @@ from src.models import (
     ChatCompletionStreamResponse,
     Choice,
     Message,
+    ResponseFormat,
     Usage,
     StreamChoice,
     SessionListResponse,
@@ -951,6 +952,11 @@ def _handle_claude_result_error(
     return _build_sdk_error_response(request_id, model, err)
 
 
+def _wants_json(response_format: Optional[ResponseFormat]) -> bool:
+    """True when the caller asked for machine-parseable output."""
+    return bool(response_format and response_format.type in ("json_object", "json_schema"))
+
+
 def _run_completion_kwargs(
     claude_options: Dict[str, Any], prompt: str, system_prompt: Optional[str], stream: bool
 ) -> Dict[str, Any]:
@@ -986,6 +992,15 @@ async def generate_streaming_response(
         # Convert messages to prompt
         prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
 
+        # In JSON mode the caller's system prompt carries the output contract,
+        # which the Agent SDK ignores in the system slot. Relocate before the
+        # sampling and tool blocks so those still reach the system prompt.
+        if _wants_json(request.response_format) and system_prompt:
+            prompt, system_prompt = MessageAdapter.relocate_system_contract(
+                prompt, system_prompt
+            )
+            logger.info("JSON mode (streaming): relocated caller system prompt into user turn")
+
         # Add sampling instructions from temperature/top_p if present
         sampling_instructions = request.get_sampling_instructions()
         if sampling_instructions:
@@ -1010,10 +1025,7 @@ async def generate_streaming_response(
                 )
 
         # Check for JSON mode
-        json_mode = request.response_format and request.response_format.type in (
-            "json_object",
-            "json_schema",
-        )
+        json_mode = _wants_json(request.response_format)
         if json_mode:
             if (
                 request.response_format.type == "json_schema"
@@ -1565,6 +1577,16 @@ async def chat_completions(
             # Convert messages to prompt
             prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
 
+            # In JSON mode the caller's system prompt carries the output
+            # contract, which the Agent SDK ignores in the system slot.
+            # Relocate before the sampling and tool blocks so those still
+            # reach the system prompt.
+            if _wants_json(request_body.response_format) and system_prompt:
+                prompt, system_prompt = MessageAdapter.relocate_system_contract(
+                    prompt, system_prompt
+                )
+                logger.info("JSON mode: relocated caller system prompt into user turn")
+
             # Add sampling instructions from temperature/top_p if present
             sampling_instructions = request_body.get_sampling_instructions()
             if sampling_instructions:
@@ -1589,10 +1611,7 @@ async def chat_completions(
                     )
 
             # Check for JSON mode
-            json_mode = request_body.response_format and request_body.response_format.type in (
-                "json_object",
-                "json_schema",
-            )
+            json_mode = _wants_json(request_body.response_format)
             if json_mode:
                 if (
                     request_body.response_format.type == "json_schema"
