@@ -230,10 +230,6 @@ class ClaudeCodeCLI:
                     elif isinstance(content, str):
                         last_text = content
 
-        # If no text was extracted but we have messages, return the conversational fallback
-        if not last_text and messages:
-            return "I've processed your request. How else can I help you with this project today?"
-
         return last_text
 
     def extract_metadata(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
