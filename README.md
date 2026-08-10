@@ -5,6 +5,10 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 ## Version
 
 **Current Version:** 2.3.0
+- **Live `/v1/models` discovery:** When `ANTHROPIC_API_KEY` is set, the wrapper fetches Anthropic's live model list (cached) instead of serving the static fallback
+- **Dynamic default Sonnet:** `DEFAULT_MODEL` resolves to the latest Sonnet at startup when `ANTHROPIC_API_KEY` is configured; falls back to `claude-sonnet-4-6` otherwise
+- **Operator overrides:** New `CLAUDE_MODELS_OVERRIDE`, `FAST_MODEL`, and `MODEL_LIST_*` env vars
+- **Updated catalog:** Claude 4.6 family added to the static fallback list
 - **Bug fixes:** `continue_conversation` SDK field corrected; `max_thinking_tokens` now wired through; real token counts from SDK; `finish_reason` mapped from actual `stop_reason`
 - **Concurrent requests:** Auth env vars passed via `options.env` — no more serialising lock
 - **New parameters:** `reasoning_effort`, `response_format`, `max_budget_usd`, `thinking` added to request models
@@ -374,8 +378,14 @@ Run: `docker-compose up -d` | Stop: `docker-compose down`
 | `MAX_TIMEOUT` | Request timeout (seconds) | `300` |
 | `CLAUDE_CWD` | Working directory | temp dir |
 | `CLAUDE_AUTH_METHOD` | Auth method: `cli`, `api_key`, `bedrock`, `vertex` | auto-detect |
-| `ANTHROPIC_API_KEY` | Direct API key | - |
+| `ANTHROPIC_API_KEY` | Direct Anthropic API key. Optional — also unlocks live `/v1/models` discovery and dynamic latest-Sonnet default. Not required when using Bedrock, Vertex, or Claude CLI subscription auth. | - |
 | `API_KEYS` | Comma-separated client API keys | - |
+| `DEFAULT_MODEL` | Override the default model. When unset and `ANTHROPIC_API_KEY` is configured, the wrapper resolves the latest Sonnet at startup; otherwise falls back to `claude-sonnet-4-6`. | auto |
+| `FAST_MODEL` | Speed/cost-optimized model alias. | `claude-haiku-4-5-20251001` |
+| `CLAUDE_MODELS_OVERRIDE` | Comma-separated model IDs to advertise via `/v1/models`. Takes precedence over both live and static lists. | - |
+| `MODEL_LIST_CACHE_TTL_SECONDS` | Cache TTL for live `/v1/models` results. | `3600` |
+| `MODEL_LIST_ERROR_TTL_SECONDS` | Short cache TTL applied when the live fetch fails, so transient outages don't suppress live discovery for the full hour. | `60` |
+| `MODEL_LIST_REQUEST_TIMEOUT_SECONDS` | HTTP timeout for the live model fetch. | `5` |
 
 ### Management
 
@@ -402,7 +412,7 @@ curl http://localhost:8000/v1/models
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "claude-sonnet-4-6",
     "messages": [
       {"role": "user", "content": "What is 2 + 2?"}
     ]
@@ -413,7 +423,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-generated-api-key" \
   -d '{
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "claude-sonnet-4-6",
     "messages": [
       {"role": "user", "content": "Write a Python hello world script"}
     ],
@@ -437,7 +447,7 @@ client = OpenAI(
 
 # Basic chat completion
 response = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-4-6",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What files are in the current directory?"}
@@ -449,7 +459,7 @@ print(response.choices[0].message.content)
 
 # Enable tools when you need them (e.g., to read files)
 response = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-4-6",
     messages=[
         {"role": "user", "content": "What files are in the current directory?"}
     ],
@@ -464,7 +474,7 @@ print(f"Tokens: {response.usage.total_tokens} ({response.usage.prompt_tokens} + 
 
 # Streaming
 stream = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-4-6",
     messages=[
         {"role": "user", "content": "Explain quantum computing"}
     ],
@@ -543,24 +553,23 @@ response = client.chat.completions.create(
 
 ## Supported Models
 
-All Claude models through November 2025 are supported:
+The wrapper exposes Claude's full model catalog. When `ANTHROPIC_API_KEY` is set, `/v1/models` returns Anthropic's live list (cached for 1 hour) and the wrapper picks the latest Sonnet as `DEFAULT_MODEL` at startup. When the key is absent — for example, when running with Bedrock, Vertex, or Claude CLI subscription auth — the static list below is served and `claude-sonnet-4-6` is used as the fallback default. Operators who want a curated list regardless of auth can set `CLAUDE_MODELS_OVERRIDE`.
 
-### Claude 4.5 Family (Latest - Fall 2025)
-- **`claude-opus-4-5-20250929`** 🎯 Most Capable - Latest Opus with enhanced reasoning and capabilities
-- **`claude-sonnet-4-5-20250929`** ⭐ Recommended - Best coding model, superior reasoning and math
-- **`claude-haiku-4-5-20251001`** ⚡ Fast & Cheap - Similar performance to Sonnet 4 at 1/3 cost
+### Claude 4.6 Family (Latest)
+- **`claude-opus-4-6`** 🎯 Most capable
+- **`claude-sonnet-4-6`** ⭐ Recommended — best coding model
+
+### Claude 4.5 Family (Fall 2025)
+- `claude-opus-4-5-20250929` — deep reasoning and coding
+- `claude-sonnet-4-5-20250929` — agents and coding
+- **`claude-haiku-4-5-20251001`** ⚡ Fast & cheap
 
 ### Claude 4.1 & 4.0 Family
-- **`claude-opus-4-1-20250805`** - Upgraded Opus 4 with improved agentic tasks and reasoning
-- `claude-opus-4-20250514` - Original Opus 4 with extended thinking mode
-- `claude-sonnet-4-20250514` - Original Sonnet 4 with hybrid reasoning
+- `claude-opus-4-1-20250805` — upgraded Opus 4
+- `claude-opus-4-20250514` — original Opus 4
+- `claude-sonnet-4-20250514` — original Sonnet 4
 
-### Claude 3.x Family
-- `claude-3-7-sonnet-20250219` - Hybrid model with rapid/thoughtful response modes
-- `claude-3-5-sonnet-20241022` - Previous generation Sonnet
-- `claude-3-5-haiku-20241022` - Previous generation fast model
-
-**Note:** The model parameter is passed to Claude Code via the SDK's model selection.
+**Note:** Claude 3.x models are not supported by the Claude Agent SDK. The model parameter is passed to Claude Code via the SDK's model selection.
 
 ## Session Continuity 🆕
 
@@ -583,7 +592,7 @@ client = openai.OpenAI(
 
 # Start a conversation with session continuity
 response1 = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-4-6",
     messages=[
         {"role": "user", "content": "Hello! My name is Alice and I'm learning Python."}
     ],
@@ -592,7 +601,7 @@ response1 = client.chat.completions.create(
 
 # Continue the conversation - Claude remembers the context
 response2 = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-4-6",
     messages=[
         {"role": "user", "content": "What's my name and what am I learning?"}
     ],
@@ -608,7 +617,7 @@ response2 = client.chat.completions.create(
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "claude-sonnet-4-6",
     "messages": [{"role": "user", "content": "My favourite color is blue."}],
     "session_id": "my-session"
   }'
@@ -617,7 +626,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "claude-sonnet-4-6",
     "messages": [{"role": "user", "content": "What's my favourite color?"}],
     "session_id": "my-session"
   }'
