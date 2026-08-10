@@ -9,6 +9,8 @@ Tests the fixes for enable_tools=true parameter:
 """
 
 import pytest
+import tempfile
+from unittest.mock import patch
 from claude_agent_sdk import ClaudeAgentOptions
 
 
@@ -138,20 +140,55 @@ class TestParseClaudeMessage:
 
 
 class TestClaudeCliPermissionMode:
-    """Test that ClaudeCodeCLI passes permission_mode correctly."""
+    """Test that ClaudeCodeCLI passes permission_mode via the generic claude_options mechanism."""
 
-    def test_run_completion_accepts_permission_mode(self):
-        """Test that run_completion method accepts permission_mode parameter."""
+    @pytest.fixture
+    def cli_instance(self):
+        """Create a CLI instance with mocked auth (no live SDK)."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("src.auth.validate_claude_code_auth") as mock_validate:
+                with patch("src.auth.auth_manager") as mock_auth:
+                    mock_validate.return_value = (True, {"method": "anthropic"})
+                    mock_auth.get_claude_code_env_vars.return_value = {}
+
+                    from src.claude_cli import ClaudeCodeCLI
+
+                    cli = ClaudeCodeCLI(cwd=temp_dir)
+                    yield cli
+
+    def test_run_completion_accepts_claude_options(self):
+        """run_completion exposes a generic claude_options dict, not an explicit permission_mode param."""
         from src.claude_cli import ClaudeCodeCLI
         import inspect
 
-        # Check that permission_mode is in the method signature
         sig = inspect.signature(ClaudeCodeCLI.run_completion)
-        param_names = list(sig.parameters.keys())
 
-        assert (
-            "permission_mode" in param_names
-        ), "run_completion should accept permission_mode parameter"
+        assert "claude_options" in sig.parameters, (
+            "run_completion should accept a generic claude_options dict"
+        )
+        # permission_mode must flow THROUGH claude_options (the deliberate fork design),
+        # not as a dedicated parameter.
+        assert "permission_mode" not in sig.parameters, (
+            "permission_mode must flow through claude_options, not as an explicit param"
+        )
+
+    @pytest.mark.asyncio
+    async def test_permission_mode_flows_to_claude_agent_options(self, cli_instance):
+        """permission_mode supplied via claude_options reaches ClaudeAgentOptions."""
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield {"type": "assistant"}
+
+        with patch("src.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion(
+                "Hello", claude_options={"permission_mode": "acceptEdits"}
+            ):
+                pass
+
+        assert len(captured_options) == 1
+        assert captured_options[0].permission_mode == "acceptEdits"
 
 
 if __name__ == "__main__":
