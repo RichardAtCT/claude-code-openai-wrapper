@@ -37,6 +37,14 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+pythonpath = ["."]
+filterwarnings = [
+    # anyio on Python 3.14: 'return' inside a 'finally' block (dependency-internal).
+    "ignore:'return' inside a 'finally' block:SyntaxWarning",
+    # asyncio event-loop deprecations surfaced by the test runner / deps on 3.14.
+    "ignore:.*asyncio.*:DeprecationWarning",
+    "ignore:.*get_event_loop.*:DeprecationWarning",
+]
 
 [tool.black]
 line-length = 100
