@@ -185,6 +185,24 @@ class TestClaudeCliPermissionMode:
         assert len(captured_options) == 1
         assert captured_options[0].permission_mode == "acceptEdits"
 
+    @pytest.mark.asyncio
+    async def test_cli_path_reaches_claude_agent_options(self, cli_instance):
+        """The wrapper pins the SDK to the configured local Claude Code binary."""
+        from src.constants import CLAUDE_CLI_PATH
+
+        captured_options = []
+
+        async def mock_query(prompt, options):
+            captured_options.append(options)
+            yield {"type": "assistant"}
+
+        with patch("src.claude_cli.query", mock_query):
+            async for _ in cli_instance.run_completion("Hello"):
+                pass
+
+        assert len(captured_options) == 1
+        assert captured_options[0].cli_path == CLAUDE_CLI_PATH
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

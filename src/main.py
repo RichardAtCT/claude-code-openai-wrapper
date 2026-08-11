@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import asyncio
 import logging
 import secrets
@@ -109,7 +110,10 @@ def _iso_to_unix(value: Any) -> Optional[int]:
         return None
     try:
         return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
-    except ValueError:
+    except (ValueError, OverflowError, OSError):
+        # ValueError: malformed input; OverflowError/OSError: out of platform
+        # time_t range (32-bit / Windows). Returning None keeps the live fetch
+        # from discarding the whole page on one bad date.
         return None
 
 
@@ -163,10 +167,15 @@ async def _fetch_anthropic_models() -> Optional[List[Dict[str, Any]]]:
 
     params: Dict[str, Any] = {"limit": 1000}
     models: List[Dict[str, Any]] = []
+    # Upper bound on pagination so a misbehaving upstream (proxy/gateway that
+    # keeps reporting has_more=true with a stagnant last_id) cannot hold the
+    # cache lock indefinitely and hang startup or /v1/models. 1000/page * 100
+    # = 100k model cap, far beyond any real catalog.
+    max_pages = 100
 
     try:
         async with httpx.AsyncClient(timeout=MODEL_LIST_REQUEST_TIMEOUT_SECONDS) as client:
-            while True:
+            for _page in range(max_pages):
                 response = await client.get(ANTHROPIC_MODELS_URL, headers=headers, params=params)
                 response.raise_for_status()
                 payload = response.json()
@@ -179,6 +188,10 @@ async def _fetch_anthropic_models() -> Optional[List[Dict[str, Any]]]:
                 if not payload.get("has_more") or not payload.get("last_id"):
                     break
                 params["after_id"] = payload["last_id"]
+            else:
+                logger.warning(
+                    "Anthropic models pagination hit the %d-page cap; truncating", max_pages
+                )
     except Exception as exc:  # noqa: BLE001 - endpoint should degrade gracefully
         logger.warning("Failed to fetch Anthropic model list, using fallback: %s", exc)
         return None
@@ -237,16 +250,27 @@ def _append_passthrough(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return augmented
 
 
+def _version_key(model_id: str):
+    """Tuple of integers embedded in the id, for ordering version-suffixed names.
+
+    Lexicographic id comparison mis-orders multi-digit versions
+    (e.g. "claude-sonnet-4-9" > "claude-sonnet-4-10"); this key treats the
+    numeric runs as integers so 4-10 ranks above 4-9.
+    """
+    return tuple(int(x) for x in re.findall(r"\d+", model_id))
+
+
 def _pick_latest_sonnet(models: List[Dict[str, Any]]) -> Optional[str]:
     """Return the id of the newest Sonnet model in `models`, or None."""
     sonnets = [m for m in models if isinstance(m.get("id"), str) and "sonnet" in m["id"].lower()]
     if not sonnets:
         return None
     # Prefer Anthropic-provided created_at; fall back to the int `created` we set,
-    # then to id-sort (date-suffixed ids sort correctly newest-last).
+    # then to a numeric version-key (so 4-10 > 4-9), then the raw id.
     sonnets.sort(
         key=lambda m: (
             _iso_to_unix(m.get("created_at")) or m.get("created") or 0,
+            _version_key(m["id"]),
             m["id"],
         )
     )

@@ -14,6 +14,7 @@ from claude_agent_sdk import (
     ResultMessage,
     SystemMessage,
 )
+from src.constants import CLAUDE_CLI_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,7 @@ class ClaudeCodeCLI:
                 options=ClaudeAgentOptions(
                     max_turns=1,
                     cwd=self.cwd,
+                    cli_path=CLAUDE_CLI_PATH,
                     system_prompt={"type": "preset", "preset": "claude_code"},
                 ),
             ):
@@ -173,7 +175,7 @@ class ClaudeCodeCLI:
 
         try:
             # Build SDK options (default max_turns=10 for tool-enabled context)
-            options = ClaudeAgentOptions(max_turns=10, cwd=self.cwd)
+            options = ClaudeAgentOptions(max_turns=10, cwd=self.cwd, cli_path=CLAUDE_CLI_PATH)
 
             # Set system prompt - CLAUDE AGENT SDK STRUCTURED FORMAT
             if system_prompt:
@@ -224,9 +226,17 @@ class ClaudeCodeCLI:
         Prioritizes ResultMessage.result for multi-turn conversations,
         falls back to last AssistantMessage content.
         """
-        # First, check for ResultMessage with 'result' field (multi-turn completion)
+        # First, check for ResultMessage with 'result' field (multi-turn completion).
+        # Skip error results (is_error=True) so upstream API errors such as
+        # 429/500/529 are not returned to the client as if they were a normal
+        # assistant reply — the SDK documents subtype="success" with is_error=True
+        # for these failing API calls.
         for message in messages:
-            if message.get("subtype") == "success" and "result" in message:
+            if (
+                message.get("subtype") == "success"
+                and not message.get("is_error")
+                and "result" in message
+            ):
                 return message["result"]
 
         # Collect all text from AssistantMessages (take the last one with text)

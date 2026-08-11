@@ -6,7 +6,9 @@ from src.main import _append_passthrough, get_cli_for_model, claude_cli, gemini_
 
 def test_glm_model_listed():
     assert "glm-5.2" in GLM_MODELS
+    assert "glm-5.2[1m]" in GLM_MODELS
     assert "glm-5.2" in PASSTHROUGH_MODELS
+    assert "glm-5.2[1m]" in PASSTHROUGH_MODELS
 
 
 def test_append_passthrough_adds_glm():

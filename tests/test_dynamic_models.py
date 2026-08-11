@@ -9,7 +9,7 @@ from src import constants, main
 
 @pytest.mark.asyncio
 async def test_get_available_models_uses_anthropic_models_api(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    monkeypatch.setattr(main, "_model_list_cache", {"expires_at": 0.0, "models": None})
 
     async def fake_fetch():
         return [
@@ -32,7 +32,7 @@ async def test_get_available_models_uses_anthropic_models_api(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_available_models_falls_back_to_constants(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    monkeypatch.setattr(main, "_model_list_cache", {"expires_at": 0.0, "models": None})
 
     async def fake_fetch():
         return None
@@ -47,7 +47,7 @@ async def test_get_available_models_falls_back_to_constants(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_model_override_skips_live_fetch(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    monkeypatch.setattr(main, "_model_list_cache", {"expires_at": 0.0, "models": None})
 
     async def fake_fetch():
         raise AssertionError("override should not call live Anthropic API")
@@ -93,7 +93,7 @@ def test_fallback_objects_include_created_field():
 @pytest.mark.asyncio
 async def test_concurrent_calls_only_fetch_once(monkeypatch):
     """Lock + double-check should prevent thundering-herd on cache expiry."""
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    monkeypatch.setattr(main, "_model_list_cache", {"expires_at": 0.0, "models": None})
     call_count = 0
 
     async def fake_fetch():
@@ -114,7 +114,7 @@ async def test_concurrent_calls_only_fetch_once(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_fetch_uses_short_error_ttl(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
+    monkeypatch.setattr(main, "_model_list_cache", {"expires_at": 0.0, "models": None})
 
     async def fake_fetch():
         return None
@@ -151,8 +151,8 @@ def test_pick_latest_sonnet_returns_none_when_no_sonnet():
 
 @pytest.mark.asyncio
 async def test_resolve_default_model_sets_constants(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
-    constants.RESOLVED_DEFAULT_MODEL = None
+    monkeypatch.setattr(main, "_model_list_cache", {"expires_at": 0.0, "models": None})
+    monkeypatch.setattr(constants, "RESOLVED_DEFAULT_MODEL", None)
 
     async def fake_fetch():
         return [
@@ -184,7 +184,7 @@ async def test_resolve_default_model_sets_constants(monkeypatch):
 @pytest.mark.asyncio
 async def test_resolve_default_model_skips_without_api_key(monkeypatch, caplog):
     """No ANTHROPIC_API_KEY -> skip live discovery, log clearly, use fallback."""
-    constants.RESOLVED_DEFAULT_MODEL = None
+    monkeypatch.setattr(constants, "RESOLVED_DEFAULT_MODEL", None)
 
     async def fake_fetch():
         raise AssertionError("should not call live API without ANTHROPIC_API_KEY")
@@ -203,8 +203,8 @@ async def test_resolve_default_model_skips_without_api_key(monkeypatch, caplog):
 
 @pytest.mark.asyncio
 async def test_resolve_default_model_honors_env_override(monkeypatch):
-    main._model_list_cache = {"expires_at": 0.0, "models": None}
-    constants.RESOLVED_DEFAULT_MODEL = None
+    monkeypatch.setattr(main, "_model_list_cache", {"expires_at": 0.0, "models": None})
+    monkeypatch.setattr(constants, "RESOLVED_DEFAULT_MODEL", None)
 
     async def fake_fetch():
         raise AssertionError("env override should short-circuit fetch")
