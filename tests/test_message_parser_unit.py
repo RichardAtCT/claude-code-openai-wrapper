@@ -35,6 +35,9 @@ def test_result_message_fields_preserved():
     assert d["num_turns"] == 2
     assert d["is_error"] is False
     assert d["stop_reason"] == "end_turn"
+    assert d["duration_ms"] == 100
+    assert d["usage"]["input_tokens"] == 10
+    assert d["usage"]["output_tokens"] == 5
 
 
 def test_system_message_init_data_preserved():

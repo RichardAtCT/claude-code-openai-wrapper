@@ -520,7 +520,7 @@ Explicit thinking configuration — takes precedence over the `max_tokens → ma
 
 ```python
 response = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-4-6",
     messages=[{"role": "user", "content": "Hard reasoning task"}],
     extra_body={"thinking": {"type": "enabled", "budget_tokens": 8000}}
 )

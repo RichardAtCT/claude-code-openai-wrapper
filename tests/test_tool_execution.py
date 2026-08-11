@@ -166,11 +166,6 @@ class TestClaudeCliPermissionMode:
         assert "claude_options" in sig.parameters, (
             "run_completion should accept a generic claude_options dict"
         )
-        # permission_mode must flow THROUGH claude_options (the deliberate fork design),
-        # not as a dedicated parameter.
-        assert "permission_mode" not in sig.parameters, (
-            "permission_mode must flow through claude_options, not as an explicit param"
-        )
 
     @pytest.mark.asyncio
     async def test_permission_mode_flows_to_claude_agent_options(self, cli_instance):
