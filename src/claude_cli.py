@@ -7,9 +7,67 @@ from typing import AsyncGenerator, Dict, Any, Optional, List
 from pathlib import Path
 import logging
 
-from claude_agent_sdk import query, ClaudeAgentOptions
+from claude_agent_sdk import (
+    query,
+    ClaudeAgentOptions,
+    AssistantMessage,
+    ResultMessage,
+    SystemMessage,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _message_to_dict(message: Any) -> Dict[str, Any]:
+    """Normalize an SDK message into the dict shape the downstream parser expects.
+
+    Uses typed isinstance checks against the SDK 0.2.x message classes so a
+    field rename does not silently break extraction. Dicts pass through
+    unchanged (e.g. injected error results). Unknown message types fall back to
+    copying public, non-callable attributes.
+    """
+    if isinstance(message, dict):
+        return message
+
+    if isinstance(message, ResultMessage):
+        return {
+            "type": "result",
+            "subtype": message.subtype,
+            "result": message.result,
+            "total_cost_usd": message.total_cost_usd,
+            "duration_ms": message.duration_ms,
+            "num_turns": message.num_turns,
+            "session_id": message.session_id,
+            "usage": message.usage,
+            "stop_reason": message.stop_reason,
+            "is_error": message.is_error,
+        }
+
+    if isinstance(message, SystemMessage):
+        return {
+            "type": "system",
+            "subtype": message.subtype,
+            "data": message.data,
+        }
+
+    if isinstance(message, AssistantMessage):
+        return {
+            "type": "assistant",
+            "content": list(message.content or []),
+        }
+
+    # Generic fallback for any other SDK message type (UserMessage, etc.).
+    message_dict: Dict[str, Any] = {}
+    for attr_name in dir(message):
+        if attr_name.startswith("_"):
+            continue
+        try:
+            value = getattr(message, attr_name)
+        except Exception:
+            continue
+        if not callable(value):
+            message_dict[attr_name] = value
+    return message_dict or {"type": "unknown"}
 
 
 class ClaudeCodeCLI:
@@ -154,26 +212,7 @@ class ClaudeCodeCLI:
                     # Debug logging
                     logger.debug(f"Raw SDK message type: {type(message)}")
                     logger.debug(f"Raw SDK message: {message}")
-
-                    # Convert message object to dict if needed
-                    if hasattr(message, "__dict__") and not isinstance(message, dict):
-                        # Convert object to dict for consistent handling
-                        message_dict = {}
-
-                        # Get all attributes from the object
-                        for attr_name in dir(message):
-                            if not attr_name.startswith("_"):  # Skip private attributes
-                                try:
-                                    attr_value = getattr(message, attr_name)
-                                    if not callable(attr_value):  # Skip methods
-                                        message_dict[attr_name] = attr_value
-                                except Exception:
-                                    pass
-
-                        logger.debug(f"Converted message dict: {message_dict}")
-                        yield message_dict
-                    else:
-                        yield message
+                    yield _message_to_dict(message)
 
         except Exception as e:
             logger.error(f"Claude Agent SDK error: {e}")
