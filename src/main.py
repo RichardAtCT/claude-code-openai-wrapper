@@ -72,9 +72,11 @@ from src.constants import (
     DEFAULT_ALLOWED_TOOLS,
     DEFAULT_MODEL,
     DEFAULT_MODEL_FALLBACK,
+    GLM_MODELS,
     MODEL_LIST_CACHE_TTL_SECONDS,
     MODEL_LIST_ERROR_TTL_SECONDS,
     MODEL_LIST_REQUEST_TIMEOUT_SECONDS,
+    PASSTHROUGH_MODELS,
 )
 
 # Load environment variables
@@ -216,6 +218,23 @@ async def get_available_models() -> List[Dict[str, Any]]:
             {"models": fallback_models, "expires_at": now + MODEL_LIST_ERROR_TTL_SECONDS}
         )
         return fallback_models
+
+
+def _append_passthrough(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Append non-Anthropic passthrough models (GLM, Gemini) to a model list.
+
+    These models are served through Claude Code or the Gemini proxy and are
+    never returned by Anthropic's live Models API, so they are merged in here
+    at the /v1/models edge. Already-present ids are not duplicated.
+    """
+    existing_ids = {m.get("id") for m in models}
+    augmented = list(models)
+    for model_id in PASSTHROUGH_MODELS:
+        if model_id not in existing_ids:
+            augmented.append(
+                {"id": model_id, "object": "model", "created": 0, "owned_by": "passthrough"}
+            )
+    return augmented
 
 
 def _pick_latest_sonnet(models: List[Dict[str, Any]]) -> Optional[str]:
@@ -1534,7 +1553,7 @@ async def list_models(
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
 
-    return {"object": "list", "data": await get_available_models()}
+    return {"object": "list", "data": _append_passthrough(await get_available_models())}
 
 
 @app.post("/v1/compatibility")

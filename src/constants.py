@@ -115,6 +115,18 @@ GEMINI_MODELS = [
     "auto",       # Alias for gemini-3-pro-preview (recommended)
 ]
 
+# GLM Models
+# Served through Claude Code via a custom ANTHROPIC_BASE_URL proxy. The wrapper
+# only forwards the model name; it never calls a GLM endpoint directly.
+GLM_MODELS = [
+    "glm-5.2",
+]
+
+# Non-Anthropic models advertised in /v1/models in addition to the live list.
+# They never appear in Anthropic's live Models API response, so they are
+# appended at the /v1/models edge (see _append_passthrough in main.py).
+PASSTHROUGH_MODELS = GLM_MODELS + GEMINI_MODELS
+
 # Default model (recommended for most use cases)
 # DEFAULT_MODEL_ENV is the explicit operator override; when unset, the wrapper
 # resolves the latest Sonnet from Anthropic's live Models API at startup and
