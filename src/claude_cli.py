@@ -127,13 +127,7 @@ class ClaudeCodeCLI:
             ):
                 messages.append(message)
                 # Break early on first response to speed up verification
-                # Handle both dict and object types
-                msg_type = (
-                    getattr(message, "type", None)
-                    if hasattr(message, "type")
-                    else message.get("type") if isinstance(message, dict) else None
-                )
-                if msg_type == "assistant":
+                if isinstance(message, AssistantMessage):
                     break
 
             if messages:
