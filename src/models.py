@@ -7,12 +7,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# Import DEFAULT_MODEL to avoid circular imports
+# Resolve the default model lazily (avoids circular imports). If the operator
+# set DEFAULT_MODEL via env var, honor it; otherwise prefer the live-resolved
+# latest Sonnet (set at startup by main.resolve_default_model), falling back
+# to the static constant when resolution hasn't happened yet.
 def get_default_model():
-    """Get default model from constants to avoid circular imports."""
-    from src.constants import DEFAULT_MODEL
+    from src import constants
 
-    return DEFAULT_MODEL
+    if constants.DEFAULT_MODEL_ENV:
+        return constants.DEFAULT_MODEL_ENV
+    return constants.RESOLVED_DEFAULT_MODEL or constants.DEFAULT_MODEL_FALLBACK
 
 
 class ContentPart(BaseModel):

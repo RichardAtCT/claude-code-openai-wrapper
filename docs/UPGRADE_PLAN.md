@@ -1,8 +1,9 @@
 # Claude Code OpenAI Wrapper - Upgrade Plan
 
+**Status:** SDK upgraded to claude-agent-sdk >=0.2.134 (resolved to 0.2.135); CLI remains 2.1.226
 **Date:** 2025-11-02
 **Current Version:** claude-code-sdk 0.0.14
-**Target Version:** claude-agent-sdk 0.1.6
+**Target Version:** claude-agent-sdk >=0.2.134
 
 ## Executive Summary
 
@@ -28,7 +29,7 @@ This document outlines a comprehensive plan to upgrade the Claude Code OpenAI Wr
 
 ### 1.2 Target State
 
-**Target SDK:** `claude-agent-sdk` version 0.1.6
+**Target SDK:** `claude-agent-sdk` >=0.2.134 (resolved to 0.2.135)
 - **Released:** October 31, 2025
 - **Python Requirements:** Python >=3.10
 - **Additional Requirements:**
@@ -56,7 +57,7 @@ pip install claude-agent-sdk
 claude-code-sdk = "^0.0.14"
 
 # After:
-claude-agent-sdk = "^0.1.6"
+claude-agent-sdk = ">=0.2.134,<0.3"
 ```
 
 #### 1.3.2 Import Statement Changes
@@ -199,7 +200,7 @@ async with ClaudeSDKClient(options=options) as client:
 ### 1.4 Migration Implementation Plan
 
 #### Phase 1: Dependency Update
-- [ ] Update `pyproject.toml` with `claude-agent-sdk = "^0.1.6"`
+- [ ] Update `pyproject.toml` with `claude-agent-sdk = ">=0.2.134,<0.3"`
 - [ ] Remove `claude-code-sdk` from dependencies
 - [ ] Run `poetry lock` and `poetry install`
 - [ ] Verify installation: `poetry show claude-agent-sdk`
@@ -760,7 +761,7 @@ options = ClaudeAgentOptions(
 claude-code-sdk = "^0.0.14"
 
 # After
-claude-agent-sdk = "^0.1.6"
+claude-agent-sdk = ">=0.2.134,<0.3"
 ```
 
 ### Key Commands

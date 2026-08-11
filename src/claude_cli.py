@@ -7,9 +7,76 @@ from typing import AsyncGenerator, Dict, Any, Optional, List
 from pathlib import Path
 import logging
 
-from claude_agent_sdk import query, ClaudeAgentOptions
+from claude_agent_sdk import (
+    query,
+    ClaudeAgentOptions,
+    AssistantMessage,
+    ResultMessage,
+    SystemMessage,
+)
+from src.constants import CLAUDE_CLI_PATH, PASSTHROUGH_MODELS
 
 logger = logging.getLogger(__name__)
+
+
+# Neutral system prompt for passthrough (non-Claude) models such as GLM-5.2,
+# served via an ANTHROPIC_BASE_URL proxy. The claude_code preset is an agentic
+# prompt that primes tool calls; feeding it to such a model makes it emit
+# tool_use on turn 1, tripping the max_turns cap as a hard error instead of
+# returning text.
+NEUTRAL_SYSTEM_PROMPT = "You are a helpful assistant."
+
+
+def _message_to_dict(message: Any) -> Dict[str, Any]:
+    """Normalize an SDK message into the dict shape the downstream parser expects.
+
+    Uses typed isinstance checks against the SDK 0.2.x message classes so a
+    field rename does not silently break extraction. Dicts pass through
+    unchanged (e.g. injected error results). Unknown message types fall back to
+    copying public, non-callable attributes.
+    """
+    if isinstance(message, dict):
+        return message
+
+    if isinstance(message, ResultMessage):
+        return {
+            "type": "result",
+            "subtype": message.subtype,
+            "result": message.result,
+            "total_cost_usd": message.total_cost_usd,
+            "duration_ms": message.duration_ms,
+            "num_turns": message.num_turns,
+            "session_id": message.session_id,
+            "usage": message.usage,
+            "stop_reason": message.stop_reason,
+            "is_error": message.is_error,
+        }
+
+    if isinstance(message, SystemMessage):
+        return {
+            "type": "system",
+            "subtype": message.subtype,
+            "data": message.data,
+        }
+
+    if isinstance(message, AssistantMessage):
+        return {
+            "type": "assistant",
+            "content": list(message.content or []),
+        }
+
+    # Generic fallback for any other SDK message type (UserMessage, etc.).
+    message_dict: Dict[str, Any] = {}
+    for attr_name in dir(message):
+        if attr_name.startswith("_"):
+            continue
+        try:
+            value = getattr(message, attr_name)
+        except Exception:
+            continue
+        if not callable(value):
+            message_dict[attr_name] = value
+    return message_dict or {"type": "unknown"}
 
 
 class ClaudeCodeCLI:
@@ -64,18 +131,13 @@ class ClaudeCodeCLI:
                 options=ClaudeAgentOptions(
                     max_turns=1,
                     cwd=self.cwd,
+                    cli_path=CLAUDE_CLI_PATH,
                     system_prompt={"type": "preset", "preset": "claude_code"},
                 ),
             ):
                 messages.append(message)
                 # Break early on first response to speed up verification
-                # Handle both dict and object types
-                msg_type = (
-                    getattr(message, "type", None)
-                    if hasattr(message, "type")
-                    else message.get("type") if isinstance(message, dict) else None
-                )
-                if msg_type == "assistant":
+                if isinstance(message, AssistantMessage):
                     break
 
             if messages:
@@ -121,13 +183,32 @@ class ClaudeCodeCLI:
 
         try:
             # Build SDK options (default max_turns=10 for tool-enabled context)
-            options = ClaudeAgentOptions(max_turns=10, cwd=self.cwd)
+            options = ClaudeAgentOptions(max_turns=10, cwd=self.cwd, cli_path=CLAUDE_CLI_PATH)
 
-            # Set system prompt - CLAUDE AGENT SDK STRUCTURED FORMAT
+            # Set system prompt. Pass a plain string so the SDK emits
+            # --system-prompt <str>, which REPLACES the CLI default (the full
+            # claude_code agentic prompt — the bulk of the request tokens).
+            #
+            # SDK flag contract (subprocess_cli._build_command): only these shapes
+            # produce a flag — str -> --system-prompt; {"type":"file","path":...}
+            # -> --system-prompt-file; {"type":"preset",...,"append":...} ->
+            # --append-system-prompt. Any OTHER dict (including {"type":"text",...}
+            # and {"type":"preset","preset":"claude_code"} without "append") emits
+            # NO flag and silently falls back to the CLI default. So a literal text
+            # prompt MUST be a str, never a dict.
+            #
+            # An explicit caller-supplied prompt always wins. Without one, real
+            # Claude models keep the claude_code default; passthrough (non-Claude)
+            # models get a neutral prompt so the agentic default does not prime
+            # tool calls they cannot fulfill (which trips the max_turns cap).
+            model_name = (claude_options or {}).get("model")
             if system_prompt:
-                options.system_prompt = {"type": "text", "text": system_prompt}
+                options.system_prompt = system_prompt
+            elif model_name and model_name in PASSTHROUGH_MODELS:
+                options.system_prompt = NEUTRAL_SYSTEM_PROMPT
             else:
-                # Use Claude Code preset to maintain expected behavior
+                # preset dict without "append" is a recognized no-op that leaves
+                # the CLI default (claude_code) in place.
                 options.system_prompt = {"type": "preset", "preset": "claude_code"}
 
             # Handle session continuity
@@ -154,26 +235,7 @@ class ClaudeCodeCLI:
                     # Debug logging
                     logger.debug(f"Raw SDK message type: {type(message)}")
                     logger.debug(f"Raw SDK message: {message}")
-
-                    # Convert message object to dict if needed
-                    if hasattr(message, "__dict__") and not isinstance(message, dict):
-                        # Convert object to dict for consistent handling
-                        message_dict = {}
-
-                        # Get all attributes from the object
-                        for attr_name in dir(message):
-                            if not attr_name.startswith("_"):  # Skip private attributes
-                                try:
-                                    attr_value = getattr(message, attr_name)
-                                    if not callable(attr_value):  # Skip methods
-                                        message_dict[attr_name] = attr_value
-                                except Exception:
-                                    pass
-
-                        logger.debug(f"Converted message dict: {message_dict}")
-                        yield message_dict
-                    else:
-                        yield message
+                    yield _message_to_dict(message)
 
         except Exception as e:
             logger.error(f"Claude Agent SDK error: {e}")
@@ -191,9 +253,17 @@ class ClaudeCodeCLI:
         Prioritizes ResultMessage.result for multi-turn conversations,
         falls back to last AssistantMessage content.
         """
-        # First, check for ResultMessage with 'result' field (multi-turn completion)
+        # First, check for ResultMessage with 'result' field (multi-turn completion).
+        # Skip error results (is_error=True) so upstream API errors such as
+        # 429/500/529 are not returned to the client as if they were a normal
+        # assistant reply — the SDK documents subtype="success" with is_error=True
+        # for these failing API calls.
         for message in messages:
-            if message.get("subtype") == "success" and "result" in message:
+            if (
+                message.get("subtype") == "success"
+                and not message.get("is_error")
+                and "result" in message
+            ):
                 return message["result"]
 
         # Collect all text from AssistantMessages (take the last one with text)
@@ -229,10 +299,6 @@ class ClaudeCodeCLI:
                             last_text = "\n".join(text_parts)
                     elif isinstance(content, str):
                         last_text = content
-
-        # If no text was extracted but we have messages, return the conversational fallback
-        if not last_text and messages:
-            return "I've processed your request. How else can I help you with this project today?"
 
         return last_text
 

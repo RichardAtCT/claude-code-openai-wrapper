@@ -25,6 +25,7 @@ Note:
 """
 
 import os
+from typing import Optional
 
 # Claude Agent SDK Tool Names
 # These are the built-in tools available in the Claude Agent SDK
@@ -66,16 +67,20 @@ DEFAULT_DISALLOWED_TOOLS = [
 ]
 
 # Claude Models
-# Models supported by Claude Agent SDK (as of November 2025)
-# NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x
-CLAUDE_MODELS = [
+# Static fallback models exposed by /v1/models and accepted by validation when
+# the live Anthropic Models API is unavailable or not configured.
+# NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x.
+#
+# Operators can override the advertised model list without rebuilding the image:
+#   CLAUDE_MODELS_OVERRIDE=claude-sonnet-4-6,claude-opus-4-6
+DEFAULT_CLAUDE_MODELS = [
     # Claude 4.6 Family (Latest) - RECOMMENDED
-    "claude-opus-4-6",      # Most capable
-    "claude-sonnet-4-6",    # Recommended - best coding model
-    # Claude 4.5 Family (Latest - Fall 2025)
-    "claude-opus-4-5-20250929",  # Latest Opus 4.5 - Most capable
-    "claude-sonnet-4-5-20250929",  # Recommended - best coding model
-    "claude-haiku-4-5-20251001",  # Fast & cheap
+    "claude-opus-4-6",  # Most capable
+    "claude-sonnet-4-6",  # Recommended - best coding model
+    # Claude 4.5 Family (Fall 2025)
+    "claude-opus-4-5-20250929",  # Opus 4.5 - deep reasoning and coding
+    "claude-sonnet-4-5-20250929",  # Sonnet 4.5 - agents and coding
+    "claude-haiku-4-5-20251001",  # Fast and cheap
     # Claude 4.1
     "claude-opus-4-1-20250805",  # Upgraded Opus 4
     # Claude 4.0 Family (Original - May 2025)
@@ -88,6 +93,13 @@ CLAUDE_MODELS = [
     # "claude-3-5-sonnet-20241022",
     # "claude-3-5-haiku-20241022",
 ]
+
+_models_override = os.getenv("CLAUDE_MODELS_OVERRIDE", "").strip()
+CLAUDE_MODELS = (
+    [model.strip() for model in _models_override.split(",") if model.strip()]
+    if _models_override
+    else DEFAULT_CLAUDE_MODELS
+)
 
 # Gemini Models
 # Models supported by Gemini CLI (as of March 2026)
@@ -103,12 +115,72 @@ GEMINI_MODELS = [
     "auto",       # Alias for gemini-3-pro-preview (recommended)
 ]
 
+# GLM Models
+# Served through Claude Code via a custom ANTHROPIC_BASE_URL proxy. The wrapper
+# only forwards the model name; it never calls a GLM endpoint directly.
+GLM_MODELS = [
+    "glm-5.2",
+    "glm-5.2[1m]",
+]
+
+# Non-Anthropic models advertised in /v1/models in addition to the live list.
+# They never appear in Anthropic's live Models API response, so they are
+# appended at the /v1/models edge (see _append_passthrough in main.py).
+PASSTHROUGH_MODELS = GLM_MODELS + GEMINI_MODELS
+
+# Claude Code CLI binary the SDK invokes. Defaults to the local native install
+# (/Users/gus/.local/bin/claude); override with CLAUDE_CLI_PATH to pin a specific
+# build or version.
+CLAUDE_CLI_PATH = os.getenv("CLAUDE_CLI_PATH", "/Users/gus/.local/bin/claude")
+
 # Default model (recommended for most use cases)
-# Can be overridden via DEFAULT_MODEL environment variable
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6")
+# DEFAULT_MODEL_ENV is the explicit operator override; when unset, the wrapper
+# resolves the latest Sonnet from Anthropic's live Models API at startup and
+# stores it in RESOLVED_DEFAULT_MODEL. DEFAULT_MODEL_FALLBACK is used until/if
+# that resolution succeeds.
+DEFAULT_MODEL_ENV: Optional[str] = os.getenv("DEFAULT_MODEL")
+DEFAULT_MODEL_FALLBACK = "claude-sonnet-4-6"
+DEFAULT_MODEL = DEFAULT_MODEL_ENV or DEFAULT_MODEL_FALLBACK
+RESOLVED_DEFAULT_MODEL: Optional[str] = None
 
 # Fast model (for speed/cost optimization)
-FAST_MODEL = "claude-haiku-4-5-20251001"
+# Can be overridden via FAST_MODEL environment variable
+FAST_MODEL = os.getenv("FAST_MODEL", "claude-haiku-4-5-20251001")
+
+
+def _env_int(name: str, default: int) -> int:
+    """Parse an integer env var, returning `default` on empty/non-numeric input.
+
+    A stray `NAME=` in .env or shell must not prevent the app from starting.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Parse a float env var, returning `default` on empty/non-numeric input."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+# Anthropic Models API configuration for dynamically refreshing /v1/models
+ANTHROPIC_MODELS_URL = os.getenv("ANTHROPIC_MODELS_URL", "https://api.anthropic.com/v1/models")
+ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
+MODEL_LIST_CACHE_TTL_SECONDS = _env_int("MODEL_LIST_CACHE_TTL_SECONDS", 3600)
+# Shorter TTL applied when the live fetch fails so a transient blip doesn't
+# suppress live discovery for a full hour.
+MODEL_LIST_ERROR_TTL_SECONDS = _env_int("MODEL_LIST_ERROR_TTL_SECONDS", 60)
+MODEL_LIST_REQUEST_TIMEOUT_SECONDS = _env_float("MODEL_LIST_REQUEST_TIMEOUT_SECONDS", 5.0)
 
 # System Prompt Types
 SYSTEM_PROMPT_TYPE_TEXT = "text"

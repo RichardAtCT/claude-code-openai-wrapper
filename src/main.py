@@ -1,11 +1,13 @@
 import os
 import json
+import re
 import asyncio
 import logging
 import secrets
 import string
+import time
 import uuid
-from typing import Optional, AsyncGenerator, Dict, Any
+from typing import Optional, AsyncGenerator, Dict, Any, List
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -14,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
+import httpx
 from dotenv import load_dotenv
 
 from src.models import (
@@ -58,8 +61,24 @@ from src.rate_limiter import (
     rate_limit_exceeded_handler,
     rate_limit_endpoint,
 )
-from src.constants import CLAUDE_MODELS, GEMINI_MODELS, CLAUDE_TOOLS, DEFAULT_ALLOWED_TOOLS, DEFAULT_MODEL
+from datetime import datetime, timezone
+
+from src import constants
 from src import __version__
+from src.constants import (
+    ANTHROPIC_MODELS_URL,
+    ANTHROPIC_VERSION,
+    CLAUDE_MODELS,
+    CLAUDE_TOOLS,
+    DEFAULT_ALLOWED_TOOLS,
+    DEFAULT_MODEL,
+    DEFAULT_MODEL_FALLBACK,
+    GLM_MODELS,
+    MODEL_LIST_CACHE_TTL_SECONDS,
+    MODEL_LIST_ERROR_TTL_SECONDS,
+    MODEL_LIST_REQUEST_TIMEOUT_SECONDS,
+    PASSTHROUGH_MODELS,
+)
 
 # Load environment variables
 load_dotenv()
@@ -75,6 +94,224 @@ logger = logging.getLogger(__name__)
 
 # Global variable to store runtime-generated API key
 runtime_api_key = None
+
+# Best-effort cache for Anthropic's live Models API.  The static constants remain
+# the fallback so /v1/models keeps working for Claude CLI, Bedrock, Vertex, local
+# development, and transient Anthropic API outages.
+_model_list_cache: Dict[str, Any] = {"expires_at": 0.0, "models": None}
+# Serializes cache refreshes so concurrent /v1/models requests at TTL expiry
+# don't all stampede the upstream Anthropic API.
+_model_list_lock = asyncio.Lock()
+
+
+def _iso_to_unix(value: Any) -> Optional[int]:
+    """Convert an Anthropic ISO-8601 'created_at' string to a unix timestamp."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+    except (ValueError, OverflowError, OSError):
+        # ValueError: malformed input; OverflowError/OSError: out of platform
+        # time_t range (32-bit / Windows). Returning None keeps the live fetch
+        # from discarding the whole page on one bad date.
+        return None
+
+
+def _openai_model_from_anthropic(model_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert an Anthropic ModelInfo object to OpenAI-compatible model metadata."""
+    created = _iso_to_unix(model_info.get("created_at"))
+    model: Dict[str, Any] = {
+        "id": model_info["id"],
+        "object": "model",
+        "created": created if created is not None else int(datetime.now(timezone.utc).timestamp()),
+        "owned_by": "anthropic",
+    }
+
+    # Preserve useful Anthropic metadata for clients that want it.  OpenAI clients
+    # ignore unknown keys, and the existing id/object/owned_by shape is retained.
+    for key in (
+        "display_name",
+        "created_at",
+        "max_input_tokens",
+        "max_tokens",
+        "capabilities",
+        "type",
+    ):
+        if key in model_info:
+            model[key] = model_info[key]
+
+    return model
+
+
+def _fallback_model_payload() -> List[Dict[str, Any]]:
+    now = int(datetime.now(timezone.utc).timestamp())
+    return [
+        {"id": model_id, "object": "model", "created": now, "owned_by": "anthropic"}
+        for model_id in CLAUDE_MODELS
+    ]
+
+
+async def _fetch_anthropic_models() -> Optional[List[Dict[str, Any]]]:
+    """Fetch all available models from Anthropic, returning None on fallback-worthy errors."""
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+
+    headers = {
+        "anthropic-version": ANTHROPIC_VERSION,
+        "x-api-key": api_key,
+    }
+    beta_header = os.getenv("ANTHROPIC_BETA") or os.getenv("ANTHROPIC_BETA_HEADER")
+    if beta_header:
+        headers["anthropic-beta"] = beta_header
+
+    params: Dict[str, Any] = {"limit": 1000}
+    models: List[Dict[str, Any]] = []
+    # Upper bound on pagination so a misbehaving upstream (proxy/gateway that
+    # keeps reporting has_more=true with a stagnant last_id) cannot hold the
+    # cache lock indefinitely and hang startup or /v1/models. 1000/page * 100
+    # = 100k model cap, far beyond any real catalog.
+    max_pages = 100
+
+    try:
+        async with httpx.AsyncClient(timeout=MODEL_LIST_REQUEST_TIMEOUT_SECONDS) as client:
+            for _page in range(max_pages):
+                response = await client.get(ANTHROPIC_MODELS_URL, headers=headers, params=params)
+                response.raise_for_status()
+                payload = response.json()
+                models.extend(
+                    _openai_model_from_anthropic(model)
+                    for model in payload.get("data", [])
+                    if model.get("id")
+                )
+
+                if not payload.get("has_more") or not payload.get("last_id"):
+                    break
+                params["after_id"] = payload["last_id"]
+            else:
+                logger.warning(
+                    "Anthropic models pagination hit the %d-page cap; truncating", max_pages
+                )
+    except Exception as exc:  # noqa: BLE001 - endpoint should degrade gracefully
+        logger.warning("Failed to fetch Anthropic model list, using fallback: %s", exc)
+        return None
+
+    return models or None
+
+
+async def get_available_models() -> List[Dict[str, Any]]:
+    """Return live Anthropic models when possible, with cached static fallback."""
+    if os.getenv("CLAUDE_MODELS_OVERRIDE", "").strip():
+        return _fallback_model_payload()
+
+    now = time.time()
+    cached_models = _model_list_cache.get("models")
+    if cached_models and now < float(_model_list_cache.get("expires_at", 0)):
+        return cached_models
+
+    async with _model_list_lock:
+        # Recheck inside the lock so the first waiter populates the cache and
+        # subsequent waiters return without re-fetching.
+        now = time.time()
+        cached_models = _model_list_cache.get("models")
+        if cached_models and now < float(_model_list_cache.get("expires_at", 0)):
+            return cached_models
+
+        live_models = await _fetch_anthropic_models()
+        if live_models:
+            _model_list_cache.update(
+                {"models": live_models, "expires_at": now + MODEL_LIST_CACHE_TTL_SECONDS}
+            )
+            return live_models
+
+        fallback_models = _fallback_model_payload()
+        # Use a short TTL on failure so transient outages don't suppress live
+        # discovery for the full MODEL_LIST_CACHE_TTL_SECONDS window.
+        _model_list_cache.update(
+            {"models": fallback_models, "expires_at": now + MODEL_LIST_ERROR_TTL_SECONDS}
+        )
+        return fallback_models
+
+
+def _append_passthrough(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Append non-Anthropic passthrough models (GLM, Gemini) to a model list.
+
+    These models are served through Claude Code or the Gemini proxy and are
+    never returned by Anthropic's live Models API, so they are merged in here
+    at the /v1/models edge. Already-present ids are not duplicated.
+    """
+    existing_ids = {m.get("id") for m in models}
+    augmented = list(models)
+    for model_id in PASSTHROUGH_MODELS:
+        if model_id not in existing_ids:
+            augmented.append(
+                {"id": model_id, "object": "model", "created": 0, "owned_by": "passthrough"}
+            )
+    return augmented
+
+
+def _version_key(model_id: str):
+    """Tuple of integers embedded in the id, for ordering version-suffixed names.
+
+    Lexicographic id comparison mis-orders multi-digit versions
+    (e.g. "claude-sonnet-4-9" > "claude-sonnet-4-10"); this key treats the
+    numeric runs as integers so 4-10 ranks above 4-9.
+    """
+    return tuple(int(x) for x in re.findall(r"\d+", model_id))
+
+
+def _pick_latest_sonnet(models: List[Dict[str, Any]]) -> Optional[str]:
+    """Return the id of the newest Sonnet model in `models`, or None."""
+    sonnets = [m for m in models if isinstance(m.get("id"), str) and "sonnet" in m["id"].lower()]
+    if not sonnets:
+        return None
+    # Prefer Anthropic-provided created_at; fall back to the int `created` we set,
+    # then to a numeric version-key (so 4-10 > 4-9), then the raw id.
+    sonnets.sort(
+        key=lambda m: (
+            _iso_to_unix(m.get("created_at")) or m.get("created") or 0,
+            _version_key(m["id"]),
+            m["id"],
+        )
+    )
+    return sonnets[-1]["id"]
+
+
+async def resolve_default_model() -> Optional[str]:
+    """Pick the latest Sonnet from /v1/models and store it as the default.
+
+    Skipped when the operator pinned DEFAULT_MODEL via env var, or when no
+    ANTHROPIC_API_KEY is configured (live discovery is the only auth-aware
+    path; Bedrock, Vertex, and Claude CLI subscription users get the static
+    DEFAULT_MODEL_FALLBACK).
+    """
+    if constants.DEFAULT_MODEL_ENV:
+        return constants.DEFAULT_MODEL_ENV
+
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        logger.info(
+            "Live model discovery disabled (no ANTHROPIC_API_KEY); " "using fallback default %s",
+            DEFAULT_MODEL_FALLBACK,
+        )
+        return None
+
+    try:
+        models = await get_available_models()
+    except Exception as exc:  # noqa: BLE001 - startup should never abort on this
+        logger.warning("Could not resolve default model from /v1/models: %s", exc)
+        return None
+
+    latest = _pick_latest_sonnet(models)
+    if latest:
+        constants.RESOLVED_DEFAULT_MODEL = latest
+        logger.info("Resolved default model from Anthropic Models API: %s", latest)
+        return latest
+
+    logger.info(
+        "No Sonnet model found in /v1/models response; using fallback %s",
+        DEFAULT_MODEL_FALLBACK,
+    )
+    return None
 
 
 def generate_secure_token(length: int = 32) -> str:
@@ -235,6 +472,14 @@ async def lifespan(app: FastAPI):
         logger.debug(
             f"🔧 API Key protection: {'Enabled' if (os.getenv('API_KEY') or runtime_api_key) else 'Disabled'}"
         )
+
+    # Resolve the default model from the live Anthropic Models API so /v1/chat
+    # uses the latest Sonnet without a code change. Best-effort: any failure
+    # leaves the static fallback in place.
+    try:
+        await resolve_default_model()
+    except Exception as e:
+        logger.warning(f"Default model resolution skipped: {e}")
 
     # Start session cleanup task
     session_manager.start_cleanup_task()
@@ -500,7 +745,11 @@ async def generate_streaming_response(
             # Disable all tools
             if active_cli == claude_cli:
                 options["disallowed_tools"] = CLAUDE_TOOLS
-                options["max_turns"] = 1  # Single turn for Q&A
+                options["tools"] = []  # empty base set: no tool schemas sent to the model
+                options["setting_sources"] = []  # skip CLAUDE.md / memory injection
+                # Leave max_turns at the SDK default: with all tools disallowed
+                # there is nothing to execute, and max_turns=1 turns a stray
+                # passthrough tool_use into a hard "maximum turns" error.
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
             # Enable tools
@@ -821,7 +1070,11 @@ async def generate_anthropic_streaming_response(
         if not request.enable_tools:
             if active_cli == claude_cli:
                 options["disallowed_tools"] = CLAUDE_TOOLS
-                options["max_turns"] = 1
+                options["tools"] = []  # empty base set: no tool schemas sent to the model
+                options["setting_sources"] = []  # skip CLAUDE.md / memory injection
+                # Leave max_turns at the SDK default: with all tools disallowed
+                # there is nothing to execute, and max_turns=1 turns a stray
+                # passthrough tool_use into a hard "maximum turns" error.
         else:
             if active_cli == claude_cli:
                 options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
@@ -1071,7 +1324,11 @@ async def chat_completions(
                 # Disable all tools
                 if active_cli == claude_cli:
                     options["disallowed_tools"] = CLAUDE_TOOLS
-                    options["max_turns"] = 1  # Single turn for Q&A
+                    options["tools"] = []  # empty base set: no tool schemas sent to the model
+                    options["setting_sources"] = []  # skip CLAUDE.md / memory injection
+                    # Leave max_turns at the SDK default: with all tools disallowed
+                    # there is nothing to execute, and max_turns=1 turns a stray
+                    # passthrough tool_use into a hard "maximum turns" error.
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
                 # Enable tools
@@ -1247,7 +1504,11 @@ async def anthropic_messages(
         if not request_body.enable_tools:
             if active_cli == claude_cli:
                 options["disallowed_tools"] = CLAUDE_TOOLS
-                options["max_turns"] = 1
+                options["tools"] = []  # empty base set: no tool schemas sent to the model
+                options["setting_sources"] = []  # skip CLAUDE.md / memory injection
+                # Leave max_turns at the SDK default: with all tools disallowed
+                # there is nothing to execute, and max_turns=1 turns a stray
+                # passthrough tool_use into a hard "maximum turns" error.
         else:
             if active_cli == claude_cli:
                 options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
@@ -1328,24 +1589,11 @@ async def anthropic_messages(
 async def list_models(
     request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
-    """List available models."""
+    """List available models, preferring Anthropic's live Models API when configured."""
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
 
-    # Use constants for single source of truth
-    claude_data = [
-        {"id": model_id, "object": "model", "owned_by": "anthropic"}
-        for model_id in CLAUDE_MODELS
-    ]
-    gemini_data = [
-        {"id": model_id, "object": "model", "owned_by": "google"}
-        for model_id in GEMINI_MODELS
-    ]
-    
-    return {
-        "object": "list",
-        "data": claude_data + gemini_data,
-    }
+    return {"object": "list", "data": _append_passthrough(await get_available_models())}
 
 
 @app.post("/v1/compatibility")
