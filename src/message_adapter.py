@@ -7,44 +7,66 @@ class MessageAdapter:
     """Converts between OpenAI message format and Claude Code prompts."""
 
     @staticmethod
-    def messages_to_prompt(messages: List[Message]) -> tuple[str, Optional[str]]:
+    def messages_to_prompt(messages: List[Message], model: Optional[str] = None) -> tuple[str, Optional[str]]:
         """
         Convert OpenAI messages to Claude Code prompt format.
         Returns (prompt, system_prompt)
         """
         system_prompt = None
         conversation_parts = []
+        
+        # Check if it's a Gemini model
+        is_gemini = model and (
+            model.startswith("gemini") 
+            or model in ["pro", "flash", "flash-lite", "auto"]
+        )
 
         for message in messages:
             if message.role == "system":
                 # Use the last system message as the system prompt
                 system_prompt = message.content
             elif message.role == "user":
-                conversation_parts.append(f"Human: {message.content}")
+                if is_gemini:
+                    conversation_parts.append(message.content)
+                else:
+                    conversation_parts.append(f"Human: {message.content}")
             elif message.role == "assistant":
-                conversation_parts.append(f"Assistant: {message.content}")
+                if is_gemini:
+                    conversation_parts.append(message.content)
+                else:
+                    conversation_parts.append(f"Assistant: {message.content}")
 
         # Join conversation parts
         prompt = "\n\n".join(conversation_parts)
 
         # If the last message wasn't from the user, add a prompt for assistant
         if messages and messages[-1].role != "user":
-            prompt += "\n\nHuman: Please continue."
+            if not is_gemini:
+                prompt += "\n\nHuman: Please continue."
 
         return prompt, system_prompt
 
     @staticmethod
-    def filter_content(content: str) -> str:
+    def filter_content(content: str, prompt_echo: Optional[str] = None) -> str:
         """
         Filter content for unsupported features and tool usage.
         Remove thinking blocks, tool calls, and image references.
         """
-        if not content:
-            return content
+        if content is None:
+            return ""
+
+        # Strip exact prompt echoes if provided (common with some CLI tools)
+
+        if prompt_echo and content.startswith(prompt_echo):
+            content = content[len(prompt_echo):].strip()
+            # Also handle cases where Human: prefix is echoed
+            if content.startswith("Assistant:"):
+                content = content[len("Assistant:"):].strip()
 
         # Remove thinking blocks (common when tools are disabled but Claude tries to think)
-        thinking_pattern = r"<thinking>.*?</thinking>"
-        content = re.sub(thinking_pattern, "", content, flags=re.DOTALL)
+        thinking_patterns = [r"<thinking>.*?</thinking>", r"<thought>.*?</thought>"]
+        for pattern in thinking_patterns:
+            content = re.sub(pattern, "", content, flags=re.DOTALL)
 
         # Extract content from attempt_completion blocks (these contain the actual user response)
         attempt_completion_pattern = r"<attempt_completion>(.*?)</attempt_completion>"
@@ -62,23 +84,24 @@ class MessageAdapter:
             if extracted_content:
                 content = extracted_content
         else:
-            # Remove other tool usage blocks (when tools are disabled but Claude tries to use them)
-            tool_patterns = [
-                r"<read_file>.*?</read_file>",
-                r"<write_file>.*?</write_file>",
-                r"<bash>.*?</bash>",
-                r"<search_files>.*?</search_files>",
-                r"<str_replace_editor>.*?</str_replace_editor>",
-                r"<args>.*?</args>",
-                r"<ask_followup_question>.*?</ask_followup_question>",
-                r"<attempt_completion>.*?</attempt_completion>",
-                r"<question>.*?</question>",
-                r"<follow_up>.*?</follow_up>",
-                r"<suggest>.*?</suggest>",
+            # Instead of deleting all tool blocks, replace them with a short placeholder
+            # This prevents the message from being empty and explains what Claude was doing.
+            tool_tags = [
+                "read_file", "write_file", "bash", "search_files", 
+                "str_replace_editor", "args", "ask_followup_question", 
+                "question", "follow_up", "suggest"
             ]
-
-            for pattern in tool_patterns:
-                content = re.sub(pattern, "", content, flags=re.DOTALL)
+            
+            for tag in tool_tags:
+                pattern = f"<{tag}>(.*?)</{tag}>"
+                # If we find a tool tag, replace it with a shorter placeholder but keep some of the content
+                def replace_tool(match):
+                    inner = match.group(1).strip()
+                    # Only show first 50 chars of the tool command/arg to keep it clean
+                    summary = (inner[:47] + "...") if len(inner) > 50 else inner
+                    return f"\n[Tool: {tag} {summary}]\n"
+                
+                content = re.sub(pattern, replace_tool, content, flags=re.DOTALL)
 
         # Pattern to match image references or base64 data
         image_pattern = r"\[Image:.*?\]|data:image/.*?;base64,.*?(?=\s|$)"
@@ -92,9 +115,10 @@ class MessageAdapter:
         content = re.sub(r"\n\s*\n\s*\n", "\n\n", content)  # Multiple newlines to double
         content = content.strip()
 
-        # If content is now empty or only whitespace, provide a fallback
+        # If content is now empty or only whitespace, and we originally HAD content,
+        # provide a more conversational fallback that indicates we understood but filtered.
         if not content or content.isspace():
-            return "I understand you're testing the system. How can I help you today?"
+            return "I've processed your request. How else can I help you with this project today?"
 
         return content
 

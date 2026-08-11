@@ -5,7 +5,7 @@ Parameter validation and mapping utilities for OpenAI to Claude Code SDK convers
 import logging
 from typing import Dict, Any, List, Optional
 from src.models import ChatCompletionRequest
-from src.constants import CLAUDE_MODELS
+from src.constants import CLAUDE_MODELS, GLM_MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +13,13 @@ logger = logging.getLogger(__name__)
 class ParameterValidator:
     """Validates and maps OpenAI Chat Completions parameters to Claude Code SDK options."""
 
-    # Use models from constants (single source of truth)
-    SUPPORTED_MODELS = set(CLAUDE_MODELS)
+    # Models that route through claude_cli and must pass model validation.
+    # Includes GLM passthrough models because get_cli_for_model() sends them to
+    # claude_cli (served via Claude Code + ANTHROPIC_BASE_URL proxy); without them
+    # here, every GLM request logs a spurious "not in supported list" warning.
+    # Gemini models are absent on purpose: they route to gemini_cli, which skips
+    # validate_model entirely.
+    SUPPORTED_MODELS = set(CLAUDE_MODELS) | set(GLM_MODELS)
 
     # Valid permission modes for Claude Code SDK
     VALID_PERMISSION_MODES = {"default", "acceptEdits", "bypassPermissions", "plan"}

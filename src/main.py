@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import asyncio
 import logging
 import secrets
@@ -40,8 +41,15 @@ from src.models import (
     AnthropicMessagesResponse,
     AnthropicTextBlock,
     AnthropicUsage,
+    AnthropicMessageStartEvent,
+    AnthropicContentBlockStartEvent,
+    AnthropicContentBlockDeltaEvent,
+    AnthropicContentBlockStopEvent,
+    AnthropicMessageDeltaEvent,
+    AnthropicMessageStopEvent,
 )
 from src.claude_cli import ClaudeCodeCLI
+from src.gemini_cli import GeminiCodeCLI
 from src.message_adapter import MessageAdapter
 from src.auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
 from src.parameter_validator import ParameterValidator, CompatibilityReporter
@@ -56,16 +64,20 @@ from src.rate_limiter import (
 from datetime import datetime, timezone
 
 from src import constants
+from src import __version__
 from src.constants import (
     ANTHROPIC_MODELS_URL,
     ANTHROPIC_VERSION,
     CLAUDE_MODELS,
     CLAUDE_TOOLS,
     DEFAULT_ALLOWED_TOOLS,
+    DEFAULT_MODEL,
     DEFAULT_MODEL_FALLBACK,
+    GLM_MODELS,
     MODEL_LIST_CACHE_TTL_SECONDS,
     MODEL_LIST_ERROR_TTL_SECONDS,
     MODEL_LIST_REQUEST_TIMEOUT_SECONDS,
+    PASSTHROUGH_MODELS,
 )
 
 # Load environment variables
@@ -98,7 +110,10 @@ def _iso_to_unix(value: Any) -> Optional[int]:
         return None
     try:
         return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
-    except ValueError:
+    except (ValueError, OverflowError, OSError):
+        # ValueError: malformed input; OverflowError/OSError: out of platform
+        # time_t range (32-bit / Windows). Returning None keeps the live fetch
+        # from discarding the whole page on one bad date.
         return None
 
 
@@ -152,10 +167,15 @@ async def _fetch_anthropic_models() -> Optional[List[Dict[str, Any]]]:
 
     params: Dict[str, Any] = {"limit": 1000}
     models: List[Dict[str, Any]] = []
+    # Upper bound on pagination so a misbehaving upstream (proxy/gateway that
+    # keeps reporting has_more=true with a stagnant last_id) cannot hold the
+    # cache lock indefinitely and hang startup or /v1/models. 1000/page * 100
+    # = 100k model cap, far beyond any real catalog.
+    max_pages = 100
 
     try:
         async with httpx.AsyncClient(timeout=MODEL_LIST_REQUEST_TIMEOUT_SECONDS) as client:
-            while True:
+            for _page in range(max_pages):
                 response = await client.get(ANTHROPIC_MODELS_URL, headers=headers, params=params)
                 response.raise_for_status()
                 payload = response.json()
@@ -168,6 +188,10 @@ async def _fetch_anthropic_models() -> Optional[List[Dict[str, Any]]]:
                 if not payload.get("has_more") or not payload.get("last_id"):
                     break
                 params["after_id"] = payload["last_id"]
+            else:
+                logger.warning(
+                    "Anthropic models pagination hit the %d-page cap; truncating", max_pages
+                )
     except Exception as exc:  # noqa: BLE001 - endpoint should degrade gracefully
         logger.warning("Failed to fetch Anthropic model list, using fallback: %s", exc)
         return None
@@ -209,16 +233,44 @@ async def get_available_models() -> List[Dict[str, Any]]:
         return fallback_models
 
 
+def _append_passthrough(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Append non-Anthropic passthrough models (GLM, Gemini) to a model list.
+
+    These models are served through Claude Code or the Gemini proxy and are
+    never returned by Anthropic's live Models API, so they are merged in here
+    at the /v1/models edge. Already-present ids are not duplicated.
+    """
+    existing_ids = {m.get("id") for m in models}
+    augmented = list(models)
+    for model_id in PASSTHROUGH_MODELS:
+        if model_id not in existing_ids:
+            augmented.append(
+                {"id": model_id, "object": "model", "created": 0, "owned_by": "passthrough"}
+            )
+    return augmented
+
+
+def _version_key(model_id: str):
+    """Tuple of integers embedded in the id, for ordering version-suffixed names.
+
+    Lexicographic id comparison mis-orders multi-digit versions
+    (e.g. "claude-sonnet-4-9" > "claude-sonnet-4-10"); this key treats the
+    numeric runs as integers so 4-10 ranks above 4-9.
+    """
+    return tuple(int(x) for x in re.findall(r"\d+", model_id))
+
+
 def _pick_latest_sonnet(models: List[Dict[str, Any]]) -> Optional[str]:
     """Return the id of the newest Sonnet model in `models`, or None."""
     sonnets = [m for m in models if isinstance(m.get("id"), str) and "sonnet" in m["id"].lower()]
     if not sonnets:
         return None
     # Prefer Anthropic-provided created_at; fall back to the int `created` we set,
-    # then to id-sort (date-suffixed ids sort correctly newest-last).
+    # then to a numeric version-key (so 4-10 > 4-9), then the raw id.
     sonnets.sort(
         key=lambda m: (
             _iso_to_unix(m.get("created_at")) or m.get("created") or 0,
+            _version_key(m["id"]),
             m["id"],
         )
     )
@@ -320,10 +372,26 @@ claude_cli = ClaudeCodeCLI(
     timeout=int(os.getenv("MAX_TIMEOUT", "600000")), cwd=os.getenv("CLAUDE_CWD")
 )
 
+# Initialize Gemini CLI
+gemini_cli = GeminiCodeCLI(
+    timeout=int(os.getenv("MAX_TIMEOUT", "600000")), cwd=os.getenv("CLAUDE_CWD")
+)
+
+# Global semaphore for limiting concurrent CLI processes
+# Default to 3 concurrent processes to avoid resource exhaustion
+MAX_CONCURRENT_PROCESSES = int(os.getenv("MAX_CONCURRENT_PROCESSES", "3"))
+process_semaphore = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Verify Claude Code authentication and CLI on startup."""
+    global process_semaphore
+    
+    # Initialize the semaphore within the event loop
+    process_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)
+    logger.info(f"Initialized process concurrency cap: {MAX_CONCURRENT_PROCESSES}")
+    
     logger.info("Verifying Claude Code authentication and CLI...")
 
     # Validate authentication first
@@ -340,25 +408,49 @@ async def lifespan(app: FastAPI):
     else:
         logger.info(f"✅ Claude Code authentication validated: {auth_info['method']}")
 
-    # Verify Claude Agent SDK with timeout for graceful degradation
+    # Verify both CLI backends in parallel to reduce startup latency
+    # and ensure they are both prewarmed for the first request
+    tasks = []
+    
+    # Prewarm prompt can be customized via environment variable
+    prewarm_prompt = os.getenv("PREWARM_PROMPT", "Hello")
+    
+    # Task for Claude Agent SDK
+    logger.info(f"Prewarming Claude Agent SDK with prompt: '{prewarm_prompt}'...")
+    tasks.append(asyncio.wait_for(claude_cli.verify_cli(prompt=prewarm_prompt), timeout=45.0))
+    
+    # Task for Gemini CLI if configured
+    is_gemini_configured = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_CLI_PATH") == "gemini"
+    if is_gemini_configured:
+        logger.info(f"Prewarming Gemini CLI with prompt: '{prewarm_prompt}'...")
+        tasks.append(asyncio.wait_for(gemini_cli.verify_cli(prompt=prewarm_prompt), timeout=45.0))
+    
     try:
-        logger.info("Testing Claude Agent SDK connection...")
-        # Use asyncio.wait_for to enforce timeout (30 seconds)
-        cli_verified = await asyncio.wait_for(claude_cli.verify_cli(), timeout=30.0)
-
-        if cli_verified:
-            logger.info("✅ Claude Agent SDK verified successfully")
+        # Run both prewarm queries in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Check Claude result (always index 0)
+        claude_result = results[0]
+        if isinstance(claude_result, Exception):
+            logger.error(f"⚠️ Claude prewarm failed: {claude_result}")
+        elif not claude_result:
+            logger.warning("⚠️ Claude prewarm returned False")
         else:
-            logger.warning("⚠️  Claude Agent SDK verification returned False")
-            logger.warning("The server will start, but requests may fail.")
-    except asyncio.TimeoutError:
-        logger.warning("⚠️  Claude Agent SDK verification timed out (30s)")
-        logger.warning("This may indicate network issues or SDK configuration problems.")
-        logger.warning("The server will start, but first request may be slow.")
+            logger.info("✅ Claude prewarm complete")
+            
+        # Check Gemini result if it was requested (index 1)
+        if is_gemini_configured and len(results) > 1:
+            gemini_result = results[1]
+            if isinstance(gemini_result, Exception):
+                logger.error(f"⚠️ Gemini prewarm failed: {gemini_result}")
+            elif not gemini_result:
+                logger.warning("⚠️ Gemini prewarm returned False")
+            else:
+                logger.info("✅ Gemini prewarm complete")
+                
     except Exception as e:
-        logger.error(f"⚠️  Claude Agent SDK verification failed: {e}")
-        logger.warning("The server will start, but requests may fail.")
-        logger.warning("Check that Claude Code CLI is properly installed and authenticated.")
+        logger.error(f"⚠️ Error during parallel prewarming: {e}")
+        logger.warning("The server will start, but first requests might be slow.")
 
     # Log debug information if debug mode is enabled
     if DEBUG_MODE or VERBOSE:
@@ -396,14 +488,14 @@ async def lifespan(app: FastAPI):
 
     # Cleanup on shutdown
     logger.info("Shutting down session manager...")
-    session_manager.shutdown()
+    await session_manager.shutdown()
 
 
 # Create FastAPI app
 app = FastAPI(
     title="Claude Code OpenAI API Wrapper",
     description="OpenAI-compatible API for Claude Code",
-    version="1.0.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -499,7 +591,7 @@ class DebugLoggingMiddleware(BaseHTTPMiddleware):
                                 f"🔍 Request body: {json_lib.dumps(parsed_body, indent=2)}"
                             )
                             body_logged = True
-                        except:
+                        except Exception:
                             logger.debug(f"🔍 Request body (raw): {body.decode()[:500]}...")
                             body_logged = True
             except Exception as e:
@@ -561,7 +653,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             body = await request.body()
             if body:
                 debug_info["raw_request_body"] = body.decode()
-        except:
+        except Exception:
             debug_info["raw_request_body"] = "Could not read request body"
 
     error_response = {
@@ -589,18 +681,44 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content=error_response)
 
 
+def get_cli_for_model(model_name: Optional[str]):
+    """Determine which CLI to use based on the model name."""
+    if model_name and (
+        model_name.startswith("gemini")
+        or model_name in ["pro", "flash", "flash-lite", "auto"]
+    ):
+        return gemini_cli
+    return claude_cli
+
+
+def get_prompt_messages(all_messages: List[Message], is_resuming: bool) -> List[Message]:
+    """
+    Get the messages to send as the prompt.
+
+    Wrapper-managed `session_id` values are not native Claude/Gemini resume tokens,
+    so session continuity is preserved by replaying the full conversation history.
+    """
+    return all_messages
+
+
 async def generate_streaming_response(
     request: ChatCompletionRequest, request_id: str, claude_headers: Optional[Dict[str, Any]] = None
 ) -> AsyncGenerator[str, None]:
     """Generate SSE formatted streaming response."""
     try:
+        # Determine which CLI to use
+        active_cli = get_cli_for_model(request.model)
+
         # Process messages with session management
-        all_messages, actual_session_id = session_manager.process_messages(
+        all_messages, actual_session_id = await session_manager.process_messages(
             request.messages, request.session_id
         )
+        
+        # Only send last message if we are resuming an existing session
+        prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
 
-        # Convert messages to prompt
-        prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+        # Convert messages to prompt (pass model for optimized formatting)
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request.model)
 
         # Add sampling instructions from temperature/top_p if present
         sampling_instructions = request.get_sampling_instructions()
@@ -611,106 +729,192 @@ async def generate_streaming_response(
                 system_prompt = sampling_instructions
             logger.debug(f"Added sampling instructions: {sampling_instructions}")
 
-        # Filter content for unsupported features
-        prompt = MessageAdapter.filter_content(prompt)
-        if system_prompt:
-            system_prompt = MessageAdapter.filter_content(system_prompt)
+        # Get options from request
+        options = request.to_claude_options()
 
-        # Get Claude Agent SDK options from request
-        claude_options = request.to_claude_options()
-
-        # Merge with Claude-specific headers if provided
+        # Merge with specific headers if provided
         if claude_headers:
-            claude_options.update(claude_headers)
+            options.update(claude_headers)
 
-        # Validate model
-        if claude_options.get("model"):
-            ParameterValidator.validate_model(claude_options["model"])
+        # Validate model (only for Claude)
+        if active_cli == claude_cli and options.get("model"):
+            ParameterValidator.validate_model(options["model"])
 
-        # Handle tools - disabled by default for OpenAI compatibility
+        # Handle tools
         if not request.enable_tools:
-            # Disable all tools by using CLAUDE_TOOLS constant
-            claude_options["disallowed_tools"] = CLAUDE_TOOLS
-            claude_options["max_turns"] = 1  # Single turn for Q&A
+            # Disable all tools
+            if active_cli == claude_cli:
+                options["disallowed_tools"] = CLAUDE_TOOLS
+                options["tools"] = []  # empty base set: no tool schemas sent to the model
+                options["setting_sources"] = []  # skip CLAUDE.md / memory injection
+                # Leave max_turns at the SDK default: with all tools disallowed
+                # there is nothing to execute, and max_turns=1 turns a stray
+                # passthrough tool_use into a hard "maximum turns" error.
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
-            # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
-            claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
-            # Set permission mode to bypass prompts (required for API/headless usage)
-            claude_options["permission_mode"] = "bypassPermissions"
+            # Enable tools
+            if active_cli == claude_cli:
+                options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
+                # Set permission mode to bypass prompts (required for API/headless usage)
+                options["permission_mode"] = "bypassPermissions"
             logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
 
-        # Run Claude Code
+        # Run CLI
         chunks_buffer = []
         role_sent = False  # Track if we've sent the initial role chunk
         content_sent = False  # Track if we've sent any content
+        
+        # Buffering for echo detection
+        streaming_content_buffer = ""
+        prompt_stripped = False
+        is_gemini = active_cli == gemini_cli
 
-        async for chunk in claude_cli.run_completion(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            model=claude_options.get("model"),
-            max_turns=claude_options.get("max_turns", 10),
-            allowed_tools=claude_options.get("allowed_tools"),
-            disallowed_tools=claude_options.get("disallowed_tools"),
-            permission_mode=claude_options.get("permission_mode"),
-            stream=True,
-        ):
-            chunks_buffer.append(chunk)
+        # Call the appropriate CLI within the process semaphore to limit concurrency
+        async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+            if active_cli == gemini_cli:
+                completion_gen = gemini_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=True,
+                    session_id=None,
+                    gemini_options=options,
+                )
+            else:
+                completion_gen = claude_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=True,
+                    session_id=None,
+                    claude_options=options,
+                )
 
-            # Check if we have an assistant message
-            # Handle both old format (type/message structure) and new format (direct content)
-            content = None
-            if chunk.get("type") == "assistant" and "message" in chunk:
-                # Old format: {"type": "assistant", "message": {"content": [...]}}
-                message = chunk["message"]
-                if isinstance(message, dict) and "content" in message:
-                    content = message["content"]
-            elif "content" in chunk and isinstance(chunk["content"], list):
-                # New format: {"content": [TextBlock(...)]}  (converted AssistantMessage)
-                content = chunk["content"]
+            async for chunk in completion_gen:
+                chunks_buffer.append(chunk)
+                
+                if DEBUG_MODE or VERBOSE:
+                    logger.debug(f"Streaming chunk: type={chunk.get('type')}, subtype={chunk.get('subtype')}, keys={list(chunk.keys())}")
 
-            if content is not None:
-                # Send initial role chunk if we haven't already
-                if not role_sent:
-                    initial_chunk = ChatCompletionStreamResponse(
-                        id=request_id,
-                        model=request.model,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta={"role": "assistant", "content": ""},
-                                finish_reason=None,
-                            )
-                        ],
-                    )
-                    yield f"data: {initial_chunk.model_dump_json()}\n\n"
-                    role_sent = True
+                # Check if we have an assistant message
+                # Handle both Claude and Gemini formats
+                content = None
+                if (chunk.get("type") == "assistant" or chunk.get("type") == "assistant_message") and "message" in chunk:
+                    # Claude format: {"type": "assistant", "message": {"content": [...]}}
+                    message = chunk["message"]
+                    if isinstance(message, dict) and "content" in message:
+                        content = message["content"]
+                elif chunk.get("type") == "content_block_delta" and "delta" in chunk:
+                    # Claude SDK delta format: {"type": "content_block_delta", "delta": {"text": "..."}}
+                    delta = chunk["delta"]
+                    if isinstance(delta, dict) and "text" in delta:
+                        content = delta["text"]
+                elif "content" in chunk and isinstance(chunk["content"], list):
+                    # Claude SDK format: {"content": [TextBlock(...)]}
+                    content = chunk["content"]
+                elif chunk.get("type") == "message" and "content" in chunk:
+                    # Gemini format: {"type": "message", "content": "..."}
+                    content = chunk["content"]
+                elif chunk.get("type") == "result" and "content" in chunk:
+                    # Gemini final result format
+                    content = chunk["content"]
 
-                # Handle content blocks
-                if isinstance(content, list):
-                    for block in content:
-                        # Handle TextBlock objects from Claude Agent SDK
-                        if hasattr(block, "text"):
-                            raw_text = block.text
-                        # Handle dictionary format for backward compatibility
-                        elif isinstance(block, dict) and block.get("type") == "text":
-                            raw_text = block.get("text", "")
-                        else:
-                            continue
+                if content is not None:
+                    # Send initial role chunk if we haven't already
+                    if not role_sent:
+                        initial_chunk = ChatCompletionStreamResponse(
+                            id=request_id,
+                            model=request.model,
+                            choices=[
+                                StreamChoice(
+                                    index=0,
+                                    delta={"role": "assistant", "content": ""},
+                                    finish_reason=None,
+                                )
+                            ],
+                        )
+                        yield f"data: {initial_chunk.model_dump_json()}\n\n"
+                        role_sent = True
 
+                    # Handle content blocks
+                    if isinstance(content, list):
+                        for block in content:
+                            # Handle TextBlock objects from Claude Agent SDK
+                            if hasattr(block, "text"):
+                                raw_text = block.text
+                            # Handle dictionary format for backward compatibility
+                            elif isinstance(block, dict) and block.get("type") == "text":
+                                raw_text = block.get("text", "")
+                            else:
+                                continue
+
+                            if DEBUG_MODE or VERBOSE:
+                                logger.debug(f"Raw content block: {raw_text[:200]}...")
+
+                            # Filter out tool usage and thinking blocks
+                            filtered_text = MessageAdapter.filter_content(raw_text)
+
+                            if filtered_text and not filtered_text.isspace():
+                                # Echo stripping logic for Gemini
+                                if is_gemini and not prompt_stripped:
+                                    streaming_content_buffer += filtered_text
+                                    if len(streaming_content_buffer) > len(prompt) + 20:
+                                        # We have enough to check for echo
+                                        if streaming_content_buffer.startswith(prompt):
+                                            filtered_text = streaming_content_buffer[len(prompt):].lstrip()
+                                            # Also handle potential Assistant: prefix
+                                            if filtered_text.startswith("Assistant:"):
+                                                filtered_text = filtered_text[len("Assistant:"):].lstrip()
+                                        else:
+                                            filtered_text = streaming_content_buffer
+                                        prompt_stripped = True
+                                    else:
+                                        # Keep buffering
+                                        continue
+                                
+                                # Create streaming chunk
+                                stream_chunk = ChatCompletionStreamResponse(
+                                    id=request_id,
+                                    model=request.model,
+                                    choices=[
+                                        StreamChoice(
+                                            index=0,
+                                            delta={"content": filtered_text},
+                                            finish_reason=None,
+                                        )
+                                    ],
+                                )
+
+                                yield f"data: {stream_chunk.model_dump_json()}\n\n"
+                                content_sent = True
+
+                    elif isinstance(content, str):
+                        if DEBUG_MODE or VERBOSE:
+                            logger.debug(f"Raw content string: {content[:200]}...")
+                            
                         # Filter out tool usage and thinking blocks
-                        filtered_text = MessageAdapter.filter_content(raw_text)
+                        filtered_content = MessageAdapter.filter_content(content)
 
-                        if filtered_text and not filtered_text.isspace():
+                        if filtered_content and not filtered_content.isspace():
+                            # Echo stripping logic for Gemini
+                            if is_gemini and not prompt_stripped:
+                                streaming_content_buffer += filtered_content
+                                if len(streaming_content_buffer) > len(prompt) + 20:
+                                    if streaming_content_buffer.startswith(prompt):
+                                        filtered_content = streaming_content_buffer[len(prompt):].lstrip()
+                                        if filtered_content.startswith("Assistant:"):
+                                            filtered_content = filtered_content[len("Assistant:"):].lstrip()
+                                    else:
+                                        filtered_content = streaming_content_buffer
+                                    prompt_stripped = True
+                                else:
+                                    continue
+
                             # Create streaming chunk
                             stream_chunk = ChatCompletionStreamResponse(
                                 id=request_id,
                                 model=request.model,
                                 choices=[
                                     StreamChoice(
-                                        index=0,
-                                        delta={"content": filtered_text},
-                                        finish_reason=None,
+                                        index=0, delta={"content": filtered_content}, finish_reason=None
                                     )
                                 ],
                             )
@@ -718,25 +922,22 @@ async def generate_streaming_response(
                             yield f"data: {stream_chunk.model_dump_json()}\n\n"
                             content_sent = True
 
-                elif isinstance(content, str):
-                    # Filter out tool usage and thinking blocks
-                    filtered_content = MessageAdapter.filter_content(content)
-
-                    if filtered_content and not filtered_content.isspace():
-                        # Create streaming chunk
-                        stream_chunk = ChatCompletionStreamResponse(
-                            id=request_id,
-                            model=request.model,
-                            choices=[
-                                StreamChoice(
-                                    index=0, delta={"content": filtered_content}, finish_reason=None
-                                )
-                            ],
-                        )
-
-                        yield f"data: {stream_chunk.model_dump_json()}\n\n"
-                        content_sent = True
-
+        # Handle buffered content if prompt_stripped was never set to True
+        if is_gemini and not prompt_stripped and streaming_content_buffer:
+            final_content = streaming_content_buffer
+            if final_content.startswith(prompt):
+                final_content = final_content[len(prompt):].lstrip()
+                if final_content.startswith("Assistant:"):
+                    final_content = final_content[len("Assistant:"):].lstrip()
+            
+            if final_content:
+                stream_chunk = ChatCompletionStreamResponse(
+                    id=request_id,
+                    model=request.model,
+                    choices=[StreamChoice(index=0, delta={"content": final_content}, finish_reason=None)],
+                )
+                yield f"data: {stream_chunk.model_dump_json()}\n\n"
+                content_sent = True
         # Handle case where no role was sent (send at least role chunk)
         if not role_sent:
             # Send role chunk with empty content if we never got any assistant messages
@@ -754,6 +955,7 @@ async def generate_streaming_response(
 
         # If we sent role but no content, send a minimal response
         if role_sent and not content_sent:
+            logger.warning(f"No content generated for request {request_id} (role_sent={role_sent})")
             fallback_chunk = ChatCompletionStreamResponse(
                 id=request_id,
                 model=request.model,
@@ -770,31 +972,46 @@ async def generate_streaming_response(
         # Extract assistant response from all chunks
         assistant_content = None
         if chunks_buffer:
-            assistant_content = claude_cli.parse_claude_message(chunks_buffer)
+            assistant_content = active_cli.parse_message(chunks_buffer) if active_cli == gemini_cli else active_cli.parse_claude_message(chunks_buffer)
 
             # Store in session if applicable
             if actual_session_id and assistant_content:
                 assistant_message = Message(role="assistant", content=assistant_content)
-                session_manager.add_assistant_response(actual_session_id, assistant_message)
+                await session_manager.add_assistant_response(actual_session_id, assistant_message)
+
+        # Extract real metadata (usage + stop_reason) from SDK messages
+        metadata = active_cli.extract_metadata(chunks_buffer)
 
         # Prepare usage data if requested
         usage_data = None
         if request.stream_options and request.stream_options.include_usage:
-            # Estimate token usage based on prompt and completion
-            completion_text = assistant_content or ""
-            token_usage = claude_cli.estimate_token_usage(prompt, completion_text, request.model)
-            usage_data = Usage(
-                prompt_tokens=token_usage["prompt_tokens"],
-                completion_tokens=token_usage["completion_tokens"],
-                total_tokens=token_usage["total_tokens"],
-            )
-            logger.debug(f"Estimated usage: {usage_data}")
+            sdk_usage = metadata.get("usage")
+            if sdk_usage and isinstance(sdk_usage, dict):
+                # Handle both Anthropic and Gemini usage formats
+                pt = sdk_usage.get("input_tokens", sdk_usage.get("prompt_tokens", 0))
+                ct = sdk_usage.get("output_tokens", sdk_usage.get("completion_tokens", 0))
+                usage_data = Usage(
+                    prompt_tokens=pt,
+                    completion_tokens=ct,
+                    total_tokens=pt + ct,
+                )
+            else:
+                # Fall back to estimate
+                completion_text = assistant_content or ""
+                token_usage = active_cli.estimate_token_usage(prompt, completion_text, request.model)
+                usage_data = Usage(
+                    prompt_tokens=token_usage["prompt_tokens"],
+                    completion_tokens=token_usage["completion_tokens"],
+                    total_tokens=token_usage["total_tokens"],
+                )
+            logger.debug(f"Usage: {usage_data}")
 
-        # Send final chunk with finish reason and optionally usage data
+        # Send final chunk with mapped finish_reason and optionally usage data
+        finish_reason = active_cli.map_stop_reason_openai(metadata.get("stop_reason"))
         final_chunk = ChatCompletionStreamResponse(
             id=request_id,
             model=request.model,
-            choices=[StreamChoice(index=0, delta={}, finish_reason="stop")],
+            choices=[StreamChoice(index=0, delta={}, finish_reason=finish_reason)],  # type: ignore[arg-type]
             usage=usage_data,
         )
         yield f"data: {final_chunk.model_dump_json()}\n\n"
@@ -802,6 +1019,213 @@ async def generate_streaming_response(
 
     except Exception as e:
         logger.error(f"Streaming error: {e}")
+        error_chunk = {"error": {"message": str(e), "type": "streaming_error"}}
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+
+
+async def generate_anthropic_streaming_response(
+    request: AnthropicMessagesRequest,
+    request_id: str,
+    claude_headers: Optional[Dict[str, Any]] = None,
+) -> AsyncGenerator[str, None]:
+    """Generate Anthropic SSE formatted streaming response."""
+    try:
+        # Convert messages and prepend system message
+        messages = request.to_openai_messages()
+        if request.system:
+            messages = [Message(role="system", content=request.system)] + messages
+
+        # Process messages with session management
+        all_messages, actual_session_id = await session_manager.process_messages(
+            messages, request.session_id
+        )
+
+        # Only send new messages if we are resuming an existing session
+        prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
+
+        # Convert messages to prompt (pass model for optimized formatting)
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request.model)
+
+        # Add sampling instructions
+        sampling_instructions = request.get_sampling_instructions()
+        if sampling_instructions:
+            if system_prompt:
+                system_prompt = f"{system_prompt}\n\n{sampling_instructions}"
+            else:
+                system_prompt = sampling_instructions
+
+        # Build options
+        options: Dict[str, Any] = {"model": request.model}
+        if claude_headers:
+            options.update(claude_headers)
+
+        # Determine which CLI to use
+        active_cli = get_cli_for_model(request.model)
+
+        # Validate model (only for Claude)
+        if active_cli == claude_cli and options.get("model"):
+            ParameterValidator.validate_model(options["model"])
+
+        # Configure tools
+        if not request.enable_tools:
+            if active_cli == claude_cli:
+                options["disallowed_tools"] = CLAUDE_TOOLS
+                options["tools"] = []  # empty base set: no tool schemas sent to the model
+                options["setting_sources"] = []  # skip CLAUDE.md / memory injection
+                # Leave max_turns at the SDK default: with all tools disallowed
+                # there is nothing to execute, and max_turns=1 turns a stray
+                # passthrough tool_use into a hard "maximum turns" error.
+        else:
+            if active_cli == claude_cli:
+                options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
+                options["permission_mode"] = "bypassPermissions"
+
+        # Emit message_start
+        start_event = AnthropicMessageStartEvent(
+            message={
+                "id": request_id,
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": request.model,
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            }
+        )
+        yield f"event: message_start\ndata: {start_event.model_dump_json()}\n\n"
+
+        # Emit content_block_start
+        block_start = AnthropicContentBlockStartEvent(
+            index=0, content_block={"type": "text", "text": ""}
+        )
+        yield f"event: content_block_start\ndata: {block_start.model_dump_json()}\n\n"
+
+        chunks_buffer = []
+        content_sent = False
+
+        # Call the appropriate CLI within the process semaphore to limit concurrency
+        async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+            if active_cli == gemini_cli:
+                completion_gen = gemini_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=True,
+                    session_id=None,
+                    gemini_options=options,
+                )
+            else:
+                completion_gen = claude_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=True,
+                    session_id=None,
+                    claude_options=options,
+                )
+
+            async for chunk in completion_gen:
+                chunks_buffer.append(chunk)
+                
+                if DEBUG_MODE or VERBOSE:
+                    logger.debug(f"Anthropic streaming chunk: type={chunk.get('type')}, subtype={chunk.get('subtype')}, keys={list(chunk.keys())}")
+
+                content = None
+                if (chunk.get("type") == "assistant" or chunk.get("type") == "assistant_message") and "message" in chunk:
+                    message = chunk["message"]
+                    if isinstance(message, dict) and "content" in message:
+                        content = message["content"]
+                elif chunk.get("type") == "content_block_delta" and "delta" in chunk:
+                    # Claude SDK delta format: {"type": "content_block_delta", "delta": {"text": "..."}}
+                    delta = chunk["delta"]
+                    if isinstance(delta, dict) and "text" in delta:
+                        content = delta["text"]
+                elif "content" in chunk and isinstance(chunk["content"], list):
+                    content = chunk["content"]
+                elif chunk.get("type") == "message" and "content" in chunk:
+                    content = chunk["content"]
+                elif chunk.get("type") == "result" and "content" in chunk:
+                    content = chunk["content"]
+
+                if content is not None:
+                    if isinstance(content, list):
+                        for block in content:
+                            if hasattr(block, "text"):
+                                raw_text = block.text
+                            elif isinstance(block, dict) and block.get("type") == "text":
+                                raw_text = block.get("text", "")
+                            else:
+                                continue
+
+                            if DEBUG_MODE or VERBOSE:
+                                logger.debug(f"Raw anthropic content block: {raw_text[:200]}...")
+
+                            filtered_text = MessageAdapter.filter_content(raw_text)
+                            if filtered_text and not filtered_text.isspace():
+                                delta_event = AnthropicContentBlockDeltaEvent(
+                                    index=0,
+                                    delta={"type": "text_delta", "text": filtered_text},
+                                )
+                                yield f"event: content_block_delta\ndata: {delta_event.model_dump_json()}\n\n"
+                                content_sent = True
+
+                    elif isinstance(content, str):
+                        if DEBUG_MODE or VERBOSE:
+                            logger.debug(f"Raw anthropic content string: {content[:200]}...")
+
+                        filtered_content = MessageAdapter.filter_content(content)
+                        if filtered_content and not filtered_content.isspace():
+                            delta_event = AnthropicContentBlockDeltaEvent(
+                                index=0,
+                                delta={"type": "text_delta", "text": filtered_content},
+                            )
+                            yield f"event: content_block_delta\ndata: {delta_event.model_dump_json()}\n\n"
+                            content_sent = True
+
+            # If no content was sent, send a minimal response
+            if not content_sent:
+                delta_event = AnthropicContentBlockDeltaEvent(
+                    index=0,
+                    delta={"type": "text_delta", "text": "I'm unable to provide a response at the moment."},
+                )
+                yield f"event: content_block_delta\ndata: {delta_event.model_dump_json()}\n\n"
+
+        # Emit content_block_stop
+        block_stop = AnthropicContentBlockStopEvent(index=0)
+        yield f"event: content_block_stop\ndata: {block_stop.model_dump_json()}\n\n"
+
+        # Extract and store assistant content
+        assistant_content = None
+        if chunks_buffer:
+            assistant_content = active_cli.parse_message(chunks_buffer) if active_cli == gemini_cli else active_cli.parse_claude_message(chunks_buffer)
+            if actual_session_id and assistant_content:
+                assistant_message = Message(role="assistant", content=assistant_content)
+                await session_manager.add_assistant_response(actual_session_id, assistant_message)
+
+        # Use real token counts from SDK metadata when available
+        metadata = active_cli.extract_metadata(chunks_buffer)
+        sdk_usage = metadata.get("usage")
+        if sdk_usage and isinstance(sdk_usage, dict):
+            output_tokens = sdk_usage.get("output_tokens", sdk_usage.get("completion_tokens", 0))
+        else:
+            completion_text = assistant_content or ""
+            output_tokens = MessageAdapter.estimate_tokens(completion_text)
+
+        # Real stop_reason from SDK (Anthropic format: "end_turn", "max_tokens", etc.)
+        stop_reason = metadata.get("stop_reason") or "end_turn"
+
+        # Emit message_delta
+        msg_delta = AnthropicMessageDeltaEvent(
+            delta={"type": "message_delta", "stop_reason": stop_reason, "stop_sequence": None},
+            usage={"output_tokens": output_tokens},
+        )
+        yield f"event: message_delta\ndata: {msg_delta.model_dump_json()}\n\n"
+
+        # Emit message_stop
+        msg_stop = AnthropicMessageStopEvent()
+        yield f"event: message_stop\ndata: {msg_stop.model_dump_json()}\n\n"
+
+    except Exception as e:
+        logger.error(f"Anthropic streaming error: {e}")
         error_chunk = {"error": {"message": str(e), "type": "streaming_error"}}
         yield f"data: {json.dumps(error_chunk)}\n\n"
 
@@ -853,16 +1277,19 @@ async def chat_completions(
         else:
             # Non-streaming response
             # Process messages with session management
-            all_messages, actual_session_id = session_manager.process_messages(
+            all_messages, actual_session_id = await session_manager.process_messages(
                 request_body.messages, request_body.session_id
             )
 
+            # Only send new messages if we are resuming an existing session
+            prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
+
             logger.info(
-                f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}"
+                f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}, prompt_messages={len(prompt_messages)}"
             )
 
-            # Convert messages to prompt
-            prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+            # Convert messages to prompt (pass model for optimized formatting)
+            prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request_body.model)
 
             # Add sampling instructions from temperature/top_p if present
             sampling_instructions = request_body.get_sampling_instructions()
@@ -878,61 +1305,92 @@ async def chat_completions(
             if system_prompt:
                 system_prompt = MessageAdapter.filter_content(system_prompt)
 
-            # Get Claude Agent SDK options from request
-            claude_options = request_body.to_claude_options()
+            # Determine which CLI to use
+            active_cli = get_cli_for_model(request_body.model)
 
-            # Merge with Claude-specific headers
+            # Get options from request
+            options = request_body.to_claude_options()
+
+            # Merge with headers
             if claude_headers:
-                claude_options.update(claude_headers)
+                options.update(claude_headers)
 
-            # Validate model
-            if claude_options.get("model"):
-                ParameterValidator.validate_model(claude_options["model"])
+            # Validate model (only for Claude)
+            if active_cli == claude_cli and options.get("model"):
+                ParameterValidator.validate_model(options["model"])
 
-            # Handle tools - disabled by default for OpenAI compatibility
+            # Handle tools
             if not request_body.enable_tools:
-                # Disable all tools by using CLAUDE_TOOLS constant
-                claude_options["disallowed_tools"] = CLAUDE_TOOLS
-                claude_options["max_turns"] = 1  # Single turn for Q&A
+                # Disable all tools
+                if active_cli == claude_cli:
+                    options["disallowed_tools"] = CLAUDE_TOOLS
+                    options["tools"] = []  # empty base set: no tool schemas sent to the model
+                    options["setting_sources"] = []  # skip CLAUDE.md / memory injection
+                    # Leave max_turns at the SDK default: with all tools disallowed
+                    # there is nothing to execute, and max_turns=1 turns a stray
+                    # passthrough tool_use into a hard "maximum turns" error.
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
-                # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
-                claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
-                # Set permission mode to bypass prompts (required for API/headless usage)
-                claude_options["permission_mode"] = "bypassPermissions"
+                # Enable tools
+                if active_cli == claude_cli:
+                    options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
+                    # Set permission mode to bypass prompts (required for API/headless usage)
+                    options["permission_mode"] = "bypassPermissions"
                 logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
 
             # Collect all chunks
             chunks = []
-            async for chunk in claude_cli.run_completion(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                model=claude_options.get("model"),
-                max_turns=claude_options.get("max_turns", 10),
-                allowed_tools=claude_options.get("allowed_tools"),
-                disallowed_tools=claude_options.get("disallowed_tools"),
-                permission_mode=claude_options.get("permission_mode"),
-                stream=False,
-            ):
-                chunks.append(chunk)
+            
+            # Call the appropriate CLI within the process semaphore to limit concurrency
+            # We wrap the entire execution generator to ensure the process cap is respected
+            async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+                if active_cli == gemini_cli:
+                    completion_gen = gemini_cli.run_completion(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        stream=False,
+                        session_id=None,
+                        gemini_options=options,
+                    )
+                else:
+                    completion_gen = claude_cli.run_completion(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        stream=False,
+                        session_id=None,
+                        claude_options=options,
+                    )
+
+                async for chunk in completion_gen:
+                    chunks.append(chunk)
 
             # Extract assistant message
-            raw_assistant_content = claude_cli.parse_claude_message(chunks)
+            raw_assistant_content = active_cli.parse_message(chunks) if active_cli == gemini_cli else active_cli.parse_claude_message(chunks)
 
             if not raw_assistant_content:
                 raise HTTPException(status_code=500, detail="No response from Claude Code")
 
-            # Filter out tool usage and thinking blocks
-            assistant_content = MessageAdapter.filter_content(raw_assistant_content)
+            # Filter out tool usage and thinking blocks, also handle potential echoes
+            assistant_content = MessageAdapter.filter_content(raw_assistant_content, prompt_echo=prompt)
 
             # Add assistant response to session if using session mode
             if actual_session_id:
                 assistant_message = Message(role="assistant", content=assistant_content)
-                session_manager.add_assistant_response(actual_session_id, assistant_message)
+                await session_manager.add_assistant_response(actual_session_id, assistant_message)
 
-            # Estimate tokens (rough approximation)
-            prompt_tokens = MessageAdapter.estimate_tokens(prompt)
-            completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+            # Use real token counts from SDK metadata when available
+            metadata = active_cli.extract_metadata(chunks)
+            sdk_usage = metadata.get("usage")
+            if sdk_usage and isinstance(sdk_usage, dict):
+                # Handle both Anthropic and Gemini usage formats
+                prompt_tokens = sdk_usage.get("input_tokens", sdk_usage.get("prompt_tokens", 0))
+                completion_tokens = sdk_usage.get("output_tokens", sdk_usage.get("completion_tokens", 0))
+            else:
+                prompt_tokens = MessageAdapter.estimate_tokens(prompt)
+                completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+
+            # Map stop_reason to OpenAI finish_reason
+            finish_reason = active_cli.map_stop_reason_openai(metadata.get("stop_reason"))
 
             # Create response
             response = ChatCompletionResponse(
@@ -942,7 +1400,7 @@ async def chat_completions(
                     Choice(
                         index=0,
                         message=Message(role="assistant", content=assistant_content),
-                        finish_reason="stop",
+                        finish_reason=finish_reason,  # type: ignore[arg-type]
                     )
                 ],
                 usage=Usage(
@@ -988,67 +1446,137 @@ async def anthropic_messages(
         }
         raise HTTPException(status_code=503, detail=error_detail)
 
+    print(f"[/v1/messages] Handler entered, model={request_body.model}", flush=True)
     try:
+        request_id = f"msg_{os.urandom(12).hex()}"
         logger.info(f"Anthropic Messages API request: model={request_body.model}")
 
-        # Convert Anthropic messages to internal format
+        # Extract Claude-specific parameters from headers
+        claude_headers = ParameterValidator.extract_claude_headers(dict(request.headers))
+
+        if request_body.stream:
+            return StreamingResponse(
+                generate_anthropic_streaming_response(request_body, request_id, claude_headers),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                },
+            )
+
+        # Non-streaming: convert messages and prepend system
         messages = request_body.to_openai_messages()
+        if request_body.system:
+            messages = [Message(role="system", content=request_body.system)] + messages
 
-        # Build prompt from messages
-        prompt_parts = []
-        for msg in messages:
-            if msg.role == "user":
-                prompt_parts.append(msg.content)
-            elif msg.role == "assistant":
-                prompt_parts.append(f"Assistant: {msg.content}")
+        # Process with session management
+        all_messages, actual_session_id = await session_manager.process_messages(
+            messages, request_body.session_id
+        )
 
-        prompt = "\n\n".join(prompt_parts)
-        system_prompt = request_body.system
+        # Only send new messages if we are resuming an existing session
+        prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
 
-        # Filter content
-        prompt = MessageAdapter.filter_content(prompt)
-        if system_prompt:
-            system_prompt = MessageAdapter.filter_content(system_prompt)
+        # Convert to prompt (pass model for optimized formatting)
+        prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request_body.model)
 
-        # Run Claude Code - tools enabled by default for Anthropic SDK clients
-        # (they're typically using this for agentic workflows)
+        # Add sampling instructions
+        sampling_instructions = request_body.get_sampling_instructions()
+        if sampling_instructions:
+            if system_prompt:
+                system_prompt = f"{system_prompt}\n\n{sampling_instructions}"
+            else:
+                system_prompt = sampling_instructions
+
+        # Build options
+        options: Dict[str, Any] = {"model": request_body.model}
+        if claude_headers:
+            options.update(claude_headers)
+
+        # Determine which CLI to use
+        active_cli = get_cli_for_model(request_body.model)
+
+        # Validate model (only for Claude)
+        if active_cli == claude_cli and options.get("model"):
+            ParameterValidator.validate_model(options["model"])
+
+        # Configure tools
+        if not request_body.enable_tools:
+            if active_cli == claude_cli:
+                options["disallowed_tools"] = CLAUDE_TOOLS
+                options["tools"] = []  # empty base set: no tool schemas sent to the model
+                options["setting_sources"] = []  # skip CLAUDE.md / memory injection
+                # Leave max_turns at the SDK default: with all tools disallowed
+                # there is nothing to execute, and max_turns=1 turns a stray
+                # passthrough tool_use into a hard "maximum turns" error.
+        else:
+            if active_cli == claude_cli:
+                options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
+                options["permission_mode"] = "bypassPermissions"
+
+        # Run CLI
+        print(f"[/v1/messages] Calling run_completion, enable_tools={request_body.enable_tools}", flush=True)
         chunks = []
-        async for chunk in claude_cli.run_completion(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            model=request_body.model,
-            max_turns=10,
-            allowed_tools=DEFAULT_ALLOWED_TOOLS,
-            permission_mode="bypassPermissions",
-            stream=False,
-        ):
-            chunks.append(chunk)
+        
+        # Call the appropriate CLI within the process semaphore to limit concurrency
+        async with (process_semaphore or asyncio.Semaphore(MAX_CONCURRENT_PROCESSES)):
+            if active_cli == gemini_cli:
+                completion_gen = gemini_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=False,
+                    session_id=None,
+                    gemini_options=options,
+                )
+            else:
+                completion_gen = claude_cli.run_completion(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    stream=False,
+                    session_id=None,
+                    claude_options=options,
+                )
+
+            async for chunk in completion_gen:
+                chunks.append(chunk)
 
         # Extract assistant message
-        raw_assistant_content = claude_cli.parse_claude_message(chunks)
+        raw_assistant_content = active_cli.parse_message(chunks) if active_cli == gemini_cli else active_cli.parse_claude_message(chunks)
 
         if not raw_assistant_content:
-            raise HTTPException(status_code=500, detail="No response from Claude Code")
+            raise HTTPException(status_code=500, detail="No response from CLI")
 
-        # Filter out tool usage and thinking blocks
-        assistant_content = MessageAdapter.filter_content(raw_assistant_content)
+        # Filter out tool usage and thinking blocks, also handle potential echoes
+        assistant_content = MessageAdapter.filter_content(raw_assistant_content, prompt_echo=prompt)
 
-        # Estimate tokens
-        prompt_tokens = MessageAdapter.estimate_tokens(prompt)
-        completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+        # Store in session
+        if actual_session_id:
+            assistant_message = Message(role="assistant", content=assistant_content)
+            await session_manager.add_assistant_response(actual_session_id, assistant_message)
 
-        # Create Anthropic-format response
-        response = AnthropicMessagesResponse(
+        # Use real token counts from metadata when available
+        metadata = active_cli.extract_metadata(chunks)
+        sdk_usage = metadata.get("usage")
+        if sdk_usage and isinstance(sdk_usage, dict):
+            # Handle both Anthropic and Gemini usage formats
+            prompt_tokens = sdk_usage.get("input_tokens", sdk_usage.get("prompt_tokens", 0))
+            completion_tokens = sdk_usage.get("output_tokens", sdk_usage.get("completion_tokens", 0))
+        else:
+            prompt_tokens = MessageAdapter.estimate_tokens(prompt)
+            completion_tokens = MessageAdapter.estimate_tokens(assistant_content)
+
+        # Real stop_reason from SDK
+        stop_reason = metadata.get("stop_reason") or "end_turn"
+
+        return AnthropicMessagesResponse(
             model=request_body.model,
             content=[AnthropicTextBlock(text=assistant_content)],
-            stop_reason="end_turn",
+            stop_reason=stop_reason,  # type: ignore[arg-type]
             usage=AnthropicUsage(
                 input_tokens=prompt_tokens,
                 output_tokens=completion_tokens,
             ),
         )
-
-        return response
 
     except HTTPException:
         raise
@@ -1065,7 +1593,7 @@ async def list_models(
     # Check FastAPI API key if configured
     await verify_api_key(request, credentials)
 
-    return {"object": "list", "data": await get_available_models()}
+    return {"object": "list", "data": _append_passthrough(await get_available_models())}
 
 
 @app.post("/v1/compatibility")
@@ -1555,7 +2083,7 @@ async def root():
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
                         </svg>
                     </button>
-                    <a href="https://github.com/aaronlippold/claude-code-openai-wrapper" target="_blank" rel="noopener noreferrer" class="icon-btn" title="View on GitHub">
+                    <a href="https://github.com/RichardAtCT/claude-code-openai-wrapper" target="_blank" rel="noopener noreferrer" class="icon-btn" title="View on GitHub">
                         <svg fill="currentColor" viewBox="0 0 24 24">
                             <path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd"/>
                         </svg>
@@ -1775,7 +2303,7 @@ async def debug_request_validation(request: Request):
                 "validation_result": validation_result,
                 "debug_mode_enabled": DEBUG_MODE or VERBOSE,
                 "example_valid_request": {
-                    "model": "claude-3-sonnet-20240229",
+                    "model": DEFAULT_MODEL,
                     "messages": [{"role": "user", "content": "Hello, world!"}],
                     "stream": False,
                 },
@@ -1795,8 +2323,13 @@ async def debug_request_validation(request: Request):
 
 @app.get("/v1/auth/status")
 @rate_limit_endpoint("auth")
-async def get_auth_status(request: Request):
+async def get_auth_status(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
     """Get Claude Code authentication status."""
+    await verify_api_key(request, credentials)
+
     from src.auth import auth_manager
 
     auth_info = get_claude_code_auth_info()
@@ -1811,7 +2344,7 @@ async def get_auth_status(request: Request):
                 if os.getenv("API_KEY")
                 else ("runtime" if runtime_api_key else "none")
             ),
-            "version": "1.0.0",
+            "version": __version__,
         },
     }
 
@@ -1821,7 +2354,7 @@ async def get_session_stats(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ):
     """Get session manager statistics."""
-    stats = session_manager.get_stats()
+    stats = await session_manager.get_stats()
     return {
         "session_stats": stats,
         "cleanup_interval_minutes": session_manager.cleanup_interval_minutes,
@@ -1832,7 +2365,7 @@ async def get_session_stats(
 @app.get("/v1/sessions")
 async def list_sessions(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
     """List all active sessions."""
-    sessions = session_manager.list_sessions()
+    sessions = await session_manager.list_sessions()
     return SessionListResponse(sessions=sessions, total=len(sessions))
 
 
@@ -1841,7 +2374,7 @@ async def get_session(
     session_id: str, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Get information about a specific session."""
-    session = session_manager.get_session(session_id)
+    session = await session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1853,7 +2386,7 @@ async def delete_session(
     session_id: str, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """Delete a specific session."""
-    deleted = session_manager.delete_session(session_id)
+    deleted = await session_manager.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
 

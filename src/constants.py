@@ -101,6 +101,38 @@ CLAUDE_MODELS = (
     else DEFAULT_CLAUDE_MODELS
 )
 
+# Gemini Models
+# Models supported by Gemini CLI (as of March 2026)
+GEMINI_MODELS = [
+    "gemini-3-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "pro",        # Alias for gemini-3-pro-preview
+    "flash",      # Alias for gemini-2.5-flash
+    "flash-lite", # Alias for gemini-2.5-flash-lite
+    "auto",       # Alias for gemini-3-pro-preview (recommended)
+]
+
+# GLM Models
+# Served through Claude Code via a custom ANTHROPIC_BASE_URL proxy. The wrapper
+# only forwards the model name; it never calls a GLM endpoint directly.
+GLM_MODELS = [
+    "glm-5.2",
+    "glm-5.2[1m]",
+]
+
+# Non-Anthropic models advertised in /v1/models in addition to the live list.
+# They never appear in Anthropic's live Models API response, so they are
+# appended at the /v1/models edge (see _append_passthrough in main.py).
+PASSTHROUGH_MODELS = GLM_MODELS + GEMINI_MODELS
+
+# Claude Code CLI binary the SDK invokes. Defaults to the local native install
+# (/Users/gus/.local/bin/claude); override with CLAUDE_CLI_PATH to pin a specific
+# build or version.
+CLAUDE_CLI_PATH = os.getenv("CLAUDE_CLI_PATH", "/Users/gus/.local/bin/claude")
+
 # Default model (recommended for most use cases)
 # DEFAULT_MODEL_ENV is the explicit operator override; when unset, the wrapper
 # resolves the latest Sonnet from Anthropic's live Models API at startup and
@@ -115,14 +147,40 @@ RESOLVED_DEFAULT_MODEL: Optional[str] = None
 # Can be overridden via FAST_MODEL environment variable
 FAST_MODEL = os.getenv("FAST_MODEL", "claude-haiku-4-5-20251001")
 
+
+def _env_int(name: str, default: int) -> int:
+    """Parse an integer env var, returning `default` on empty/non-numeric input.
+
+    A stray `NAME=` in .env or shell must not prevent the app from starting.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Parse a float env var, returning `default` on empty/non-numeric input."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 # Anthropic Models API configuration for dynamically refreshing /v1/models
 ANTHROPIC_MODELS_URL = os.getenv("ANTHROPIC_MODELS_URL", "https://api.anthropic.com/v1/models")
 ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
-MODEL_LIST_CACHE_TTL_SECONDS = int(os.getenv("MODEL_LIST_CACHE_TTL_SECONDS", "3600"))
+MODEL_LIST_CACHE_TTL_SECONDS = _env_int("MODEL_LIST_CACHE_TTL_SECONDS", 3600)
 # Shorter TTL applied when the live fetch fails so a transient blip doesn't
 # suppress live discovery for a full hour.
-MODEL_LIST_ERROR_TTL_SECONDS = int(os.getenv("MODEL_LIST_ERROR_TTL_SECONDS", "60"))
-MODEL_LIST_REQUEST_TIMEOUT_SECONDS = float(os.getenv("MODEL_LIST_REQUEST_TIMEOUT_SECONDS", "5"))
+MODEL_LIST_ERROR_TTL_SECONDS = _env_int("MODEL_LIST_ERROR_TTL_SECONDS", 60)
+MODEL_LIST_REQUEST_TIMEOUT_SECONDS = _env_float("MODEL_LIST_REQUEST_TIMEOUT_SECONDS", 5.0)
 
 # System Prompt Types
 SYSTEM_PROMPT_TYPE_TEXT = "text"

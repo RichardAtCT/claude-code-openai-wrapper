@@ -7,7 +7,7 @@ These are pure unit tests that don't require a running server.
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 import asyncio
 
@@ -30,7 +30,7 @@ class TestSession:
     def test_session_expiry_in_future(self):
         """Newly created session expires in the future."""
         session = Session(session_id="test-123")
-        assert session.expires_at > datetime.utcnow()
+        assert session.expires_at > datetime.now(timezone.utc)
 
     def test_touch_updates_last_accessed(self):
         """touch() updates last_accessed time."""
@@ -101,7 +101,7 @@ class TestSession:
 
     def test_is_expired_true_for_past_expiry(self):
         """Session with past expiry is expired."""
-        session = Session(session_id="test-123", expires_at=datetime.utcnow() - timedelta(hours=1))
+        session = Session(session_id="test-123", expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
         assert session.is_expired() is True
 
     def test_to_session_info_returns_correct_model(self):
@@ -132,173 +132,190 @@ class TestSessionManager:
         assert manager.default_ttl_hours == 1
         assert manager.cleanup_interval_minutes == 5
 
-    def test_get_or_create_session_creates_new(self, manager):
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_creates_new(self, manager):
         """get_or_create_session() creates new session if not exists."""
-        session = manager.get_or_create_session("new-session")
+        session = await manager.get_or_create_session("new-session")
 
         assert session is not None
         assert session.session_id == "new-session"
         assert "new-session" in manager.sessions
 
-    def test_get_or_create_session_returns_existing(self, manager):
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_returns_existing(self, manager):
         """get_or_create_session() returns existing session."""
-        session1 = manager.get_or_create_session("existing")
+        session1 = await manager.get_or_create_session("existing")
         session1.add_messages([Message(role="user", content="Test")])
 
-        session2 = manager.get_or_create_session("existing")
+        session2 = await manager.get_or_create_session("existing")
 
         assert session2 is session1
         assert len(session2.messages) == 1
 
-    def test_get_or_create_replaces_expired_session(self, manager):
+    @pytest.mark.asyncio
+    async def test_get_or_create_replaces_expired_session(self, manager):
         """get_or_create_session() replaces expired session with new one."""
         # Create session and add messages first
-        session1 = manager.get_or_create_session("expiring")
+        session1 = await manager.get_or_create_session("expiring")
         session1.add_messages([Message(role="user", content="Old")])
         # Expire AFTER adding messages (add_messages calls touch() which extends expiry)
-        session1.expires_at = datetime.utcnow() - timedelta(hours=1)
+        session1.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
 
         # Should get a new session since the old one is expired
-        session2 = manager.get_or_create_session("expiring")
+        session2 = await manager.get_or_create_session("expiring")
 
         assert len(session2.messages) == 0  # New session has no messages
 
-    def test_get_session_returns_none_for_nonexistent(self, manager):
+    @pytest.mark.asyncio
+    async def test_get_session_returns_none_for_nonexistent(self, manager):
         """get_session() returns None for non-existent session."""
-        result = manager.get_session("nonexistent")
+        result = await manager.get_session("nonexistent")
         assert result is None
 
-    def test_get_session_returns_existing(self, manager):
+    @pytest.mark.asyncio
+    async def test_get_session_returns_existing(self, manager):
         """get_session() returns existing active session."""
-        manager.get_or_create_session("existing")
-        result = manager.get_session("existing")
+        await manager.get_or_create_session("existing")
+        result = await manager.get_session("existing")
 
         assert result is not None
         assert result.session_id == "existing"
 
-    def test_get_session_returns_none_for_expired(self, manager):
+    @pytest.mark.asyncio
+    async def test_get_session_returns_none_for_expired(self, manager):
         """get_session() returns None and cleans up expired session."""
-        session = manager.get_or_create_session("expiring")
-        session.expires_at = datetime.utcnow() - timedelta(hours=1)
+        session = await manager.get_or_create_session("expiring")
+        session.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
 
-        result = manager.get_session("expiring")
+        result = await manager.get_session("expiring")
 
         assert result is None
         assert "expiring" not in manager.sessions
 
-    def test_delete_session_removes_session(self, manager):
+    @pytest.mark.asyncio
+    async def test_delete_session_removes_session(self, manager):
         """delete_session() removes existing session."""
-        manager.get_or_create_session("to-delete")
+        await manager.get_or_create_session("to-delete")
         assert "to-delete" in manager.sessions
 
-        result = manager.delete_session("to-delete")
+        result = await manager.delete_session("to-delete")
 
         assert result is True
         assert "to-delete" not in manager.sessions
 
-    def test_delete_session_returns_false_for_nonexistent(self, manager):
+    @pytest.mark.asyncio
+    async def test_delete_session_returns_false_for_nonexistent(self, manager):
         """delete_session() returns False for non-existent session."""
-        result = manager.delete_session("nonexistent")
+        result = await manager.delete_session("nonexistent")
         assert result is False
 
-    def test_list_sessions_returns_active_sessions(self, manager):
+    @pytest.mark.asyncio
+    async def test_list_sessions_returns_active_sessions(self, manager):
         """list_sessions() returns list of active sessions."""
-        manager.get_or_create_session("session-1")
-        manager.get_or_create_session("session-2")
+        await manager.get_or_create_session("session-1")
+        await manager.get_or_create_session("session-2")
 
-        sessions = manager.list_sessions()
+        sessions = await manager.list_sessions()
 
         assert len(sessions) == 2
         session_ids = [s.session_id for s in sessions]
         assert "session-1" in session_ids
         assert "session-2" in session_ids
 
-    def test_list_sessions_excludes_expired(self, manager):
+    @pytest.mark.asyncio
+    async def test_list_sessions_excludes_expired(self, manager):
         """list_sessions() excludes and cleans up expired sessions."""
-        manager.get_or_create_session("active")
-        expired = manager.get_or_create_session("expired")
-        expired.expires_at = datetime.utcnow() - timedelta(hours=1)
+        await manager.get_or_create_session("active")
+        expired = await manager.get_or_create_session("expired")
+        expired.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
 
-        sessions = manager.list_sessions()
+        sessions = await manager.list_sessions()
 
         assert len(sessions) == 1
         assert sessions[0].session_id == "active"
 
-    def test_process_messages_stateless_mode(self, manager):
+    @pytest.mark.asyncio
+    async def test_process_messages_stateless_mode(self, manager):
         """process_messages() in stateless mode returns messages as-is."""
         messages = [Message(role="user", content="Hello")]
 
-        result_msgs, session_id = manager.process_messages(messages, session_id=None)
+        result_msgs, session_id = await manager.process_messages(messages, session_id=None)
 
         assert result_msgs == messages
         assert session_id is None
 
-    def test_process_messages_session_mode(self, manager):
-        """process_messages() in session mode accumulates messages."""
+    @pytest.mark.asyncio
+    async def test_process_messages_session_mode(self, manager):
+        """process_messages() in session mode replaces history with client-provided messages."""
         msg1 = Message(role="user", content="First")
         msg2 = Message(role="user", content="Second")
 
         # First call
-        result1, sid1 = manager.process_messages([msg1], session_id="my-session")
+        result1, sid1 = await manager.process_messages([msg1], session_id="my-session")
         assert len(result1) == 1
         assert sid1 == "my-session"
 
-        # Second call - should have both messages
-        result2, sid2 = manager.process_messages([msg2], session_id="my-session")
+        # Second call - client sends full history (both messages)
+        result2, sid2 = await manager.process_messages([msg1, msg2], session_id="my-session")
         assert len(result2) == 2
         assert sid2 == "my-session"
 
-    def test_add_assistant_response_in_session_mode(self, manager):
+    @pytest.mark.asyncio
+    async def test_add_assistant_response_in_session_mode(self, manager):
         """add_assistant_response() adds response to session."""
-        manager.get_or_create_session("my-session")
+        await manager.get_or_create_session("my-session")
         assistant_msg = Message(role="assistant", content="Hello!")
 
-        manager.add_assistant_response("my-session", assistant_msg)
+        await manager.add_assistant_response("my-session", assistant_msg)
 
-        session = manager.get_session("my-session")
+        session = await manager.get_session("my-session")
         assert len(session.messages) == 1
         assert session.messages[0].role == "assistant"
 
-    def test_add_assistant_response_stateless_mode_noop(self, manager):
+    @pytest.mark.asyncio
+    async def test_add_assistant_response_stateless_mode_noop(self, manager):
         """add_assistant_response() does nothing in stateless mode."""
         assistant_msg = Message(role="assistant", content="Hello!")
 
         # Should not raise, just do nothing
-        manager.add_assistant_response(None, assistant_msg)
+        await manager.add_assistant_response(None, assistant_msg)
 
-    def test_get_stats_returns_correct_counts(self, manager):
+    @pytest.mark.asyncio
+    async def test_get_stats_returns_correct_counts(self, manager):
         """get_stats() returns correct statistics."""
-        manager.get_or_create_session("session-1")
-        session2 = manager.get_or_create_session("session-2")
+        await manager.get_or_create_session("session-1")
+        session2 = await manager.get_or_create_session("session-2")
         session2.add_messages([Message(role="user", content="Test")])
 
         # Create expired session
-        expired = manager.get_or_create_session("expired")
-        expired.expires_at = datetime.utcnow() - timedelta(hours=1)
+        expired = await manager.get_or_create_session("expired")
+        expired.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
 
-        stats = manager.get_stats()
+        stats = await manager.get_stats()
 
         assert stats["active_sessions"] == 2
         assert stats["expired_sessions"] == 1
         assert stats["total_messages"] == 1
 
-    def test_shutdown_clears_sessions(self, manager):
+    @pytest.mark.asyncio
+    async def test_shutdown_clears_sessions(self, manager):
         """shutdown() clears all sessions."""
-        manager.get_or_create_session("session-1")
-        manager.get_or_create_session("session-2")
+        await manager.get_or_create_session("session-1")
+        await manager.get_or_create_session("session-2")
         assert len(manager.sessions) == 2
 
-        manager.shutdown()
+        await manager.shutdown()
 
         assert len(manager.sessions) == 0
 
-    def test_cleanup_expired_sessions(self, manager):
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_sessions(self, manager):
         """_cleanup_expired_sessions() removes only expired sessions."""
-        manager.get_or_create_session("active")
-        expired = manager.get_or_create_session("expired")
-        expired.expires_at = datetime.utcnow() - timedelta(hours=1)
+        await manager.get_or_create_session("active")
+        expired = await manager.get_or_create_session("expired")
+        expired.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
 
-        manager._cleanup_expired_sessions()
+        await manager._cleanup_expired_sessions()
 
         assert "active" in manager.sessions
         assert "expired" not in manager.sessions
@@ -322,7 +339,7 @@ class TestSessionManagerAsync:
         assert manager._cleanup_task is not None
 
         # Clean up
-        manager.shutdown()
+        await manager.shutdown()
 
     @pytest.mark.asyncio
     async def test_start_cleanup_task_idempotent(self, manager):
@@ -336,39 +353,32 @@ class TestSessionManagerAsync:
         assert first_task is second_task
 
         # Clean up
-        manager.shutdown()
+        await manager.shutdown()
 
 
-class TestSessionManagerThreadSafety:
-    """Test thread safety of SessionManager operations."""
+class TestSessionManagerConcurrency:
+    """Test async concurrency safety of SessionManager operations."""
 
     @pytest.fixture
     def manager(self):
         """Create a fresh SessionManager for each test."""
         return SessionManager()
 
-    def test_concurrent_session_creation(self, manager):
-        """Multiple threads can create sessions concurrently."""
-        import threading
-
+    @pytest.mark.asyncio
+    async def test_concurrent_session_creation(self, manager):
+        """Multiple async tasks can create sessions concurrently."""
         results = []
         errors = []
 
-        def create_session(session_id):
+        async def create_session(session_id):
             try:
-                session = manager.get_or_create_session(session_id)
+                session = await manager.get_or_create_session(session_id)
                 results.append(session.session_id)
             except Exception as e:
                 errors.append(str(e))
 
-        threads = []
-        for i in range(10):
-            t = threading.Thread(target=create_session, args=(f"session-{i}",))
-            threads.append(t)
-            t.start()
-
-        for t in threads:
-            t.join()
+        tasks = [create_session(f"session-{i}") for i in range(10)]
+        await asyncio.gather(*tasks)
 
         assert len(errors) == 0
         assert len(results) == 10

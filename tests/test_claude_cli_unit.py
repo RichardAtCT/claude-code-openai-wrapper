@@ -548,7 +548,8 @@ class TestClaudeCodeCLIRunCompletion:
 
             assert len(captured_options) == 1
             opts = captured_options[0]
-            assert opts.system_prompt == {"type": "text", "text": "You are helpful"}
+            # Plain str, not a dict: the SDK only emits --system-prompt for str.
+            assert opts.system_prompt == "You are helpful"
 
     @pytest.mark.asyncio
     async def test_run_completion_with_model(self, cli_instance):
@@ -561,7 +562,9 @@ class TestClaudeCodeCLIRunCompletion:
             yield mock_message
 
         with patch("src.claude_cli.query", mock_query):
-            async for _ in cli_instance.run_completion("Hello", model="claude-3-opus"):
+            async for _ in cli_instance.run_completion(
+                "Hello", claude_options={"model": "claude-3-opus"}
+            ):
                 pass
 
             assert captured_options[0].model == "claude-3-opus"
@@ -579,8 +582,7 @@ class TestClaudeCodeCLIRunCompletion:
         with patch("src.claude_cli.query", mock_query):
             async for _ in cli_instance.run_completion(
                 "Hello",
-                allowed_tools=["Bash", "Read"],
-                disallowed_tools=["Task"],
+                claude_options={"allowed_tools": ["Bash", "Read"], "disallowed_tools": ["Task"]},
             ):
                 pass
 
@@ -598,7 +600,9 @@ class TestClaudeCodeCLIRunCompletion:
             yield mock_message
 
         with patch("src.claude_cli.query", mock_query):
-            async for _ in cli_instance.run_completion("Hello", permission_mode="acceptEdits"):
+            async for _ in cli_instance.run_completion(
+                "Hello", claude_options={"permission_mode": "acceptEdits"}
+            ):
                 pass
 
             assert captured_options[0].permission_mode == "acceptEdits"
@@ -617,7 +621,7 @@ class TestClaudeCodeCLIRunCompletion:
             async for _ in cli_instance.run_completion("Hello", continue_session=True):
                 pass
 
-            assert captured_options[0].continue_session is True
+            assert captured_options[0].continue_conversation is True
 
     @pytest.mark.asyncio
     async def test_run_completion_resume_session(self, cli_instance):
