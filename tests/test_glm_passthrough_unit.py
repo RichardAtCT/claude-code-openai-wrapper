@@ -27,3 +27,15 @@ def test_append_passthrough_dedupes():
 def test_glm_routes_to_claude_cli():
     assert get_cli_for_model("glm-5.2") is claude_cli
     assert get_cli_for_model("glm-5.2") is not gemini_cli
+
+
+def test_glm_in_supported_models():
+    """GLM routes through claude_cli, so validate_model must recognize it.
+
+    Without GLM in SUPPORTED_MODELS every GLM request logs a spurious
+    "not in the known supported models list" warning.
+    """
+    from src.parameter_validator import ParameterValidator
+
+    for model in GLM_MODELS:
+        assert model in ParameterValidator.SUPPORTED_MODELS

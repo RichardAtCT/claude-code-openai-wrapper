@@ -204,5 +204,67 @@ class TestClaudeCliPermissionMode:
         assert captured_options[0].cli_path == CLAUDE_CLI_PATH
 
 
+class TestSystemPromptRouting:
+    """System-prompt selection by model type (claude_code preset vs neutral)."""
+
+    @pytest.fixture
+    def cli_instance(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("src.auth.validate_claude_code_auth") as mock_validate:
+                with patch("src.auth.auth_manager") as mock_auth:
+                    mock_validate.return_value = (True, {"method": "anthropic"})
+                    mock_auth.get_claude_code_env_vars.return_value = {}
+
+                    from src.claude_cli import ClaudeCodeCLI
+
+                    cli = ClaudeCodeCLI(cwd=temp_dir)
+                    yield cli
+
+    @staticmethod
+    async def _capture(cli, **kwargs):
+        captured = []
+
+        async def mock_query(prompt, options):
+            captured.append(options)
+            yield {"type": "assistant"}
+
+        with patch("src.claude_cli.query", mock_query):
+            async for _ in cli.run_completion("Hello", **kwargs):
+                pass
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_passthrough_model_gets_neutral_prompt(self, cli_instance):
+        """A passthrough model (glm-5.2) with no system prompt gets the neutral prompt."""
+        from src.claude_cli import NEUTRAL_SYSTEM_PROMPT
+
+        captured = await self._capture(cli_instance, claude_options={"model": "glm-5.2"})
+
+        assert len(captured) == 1
+        assert captured[0].system_prompt == {"type": "text", "text": NEUTRAL_SYSTEM_PROMPT}
+
+    @pytest.mark.asyncio
+    async def test_claude_model_keeps_claude_code_preset(self, cli_instance):
+        """A Claude model with no system prompt keeps the claude_code preset."""
+        captured = await self._capture(
+            cli_instance, claude_options={"model": "claude-sonnet-4-6"}
+        )
+
+        assert len(captured) == 1
+        assert captured[0].system_prompt == {"type": "preset", "preset": "claude_code"}
+
+    @pytest.mark.asyncio
+    async def test_explicit_system_prompt_wins(self, cli_instance):
+        """A caller-supplied system_prompt overrides model-based routing."""
+        captured = await self._capture(
+            cli_instance,
+            system_prompt="Answer in haiku only.",
+            claude_options={"model": "glm-5.2"},
+        )
+
+        assert len(captured) == 1
+        assert captured[0].system_prompt == {"type": "text", "text": "Answer in haiku only."}
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

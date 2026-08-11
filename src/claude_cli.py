@@ -14,9 +14,17 @@ from claude_agent_sdk import (
     ResultMessage,
     SystemMessage,
 )
-from src.constants import CLAUDE_CLI_PATH
+from src.constants import CLAUDE_CLI_PATH, PASSTHROUGH_MODELS
 
 logger = logging.getLogger(__name__)
+
+
+# Neutral system prompt for passthrough (non-Claude) models such as GLM-5.2,
+# served via an ANTHROPIC_BASE_URL proxy. The claude_code preset is an agentic
+# prompt that primes tool calls; feeding it to such a model makes it emit
+# tool_use on turn 1, tripping the max_turns cap as a hard error instead of
+# returning text.
+NEUTRAL_SYSTEM_PROMPT = "You are a helpful assistant."
 
 
 def _message_to_dict(message: Any) -> Dict[str, Any]:
@@ -177,9 +185,16 @@ class ClaudeCodeCLI:
             # Build SDK options (default max_turns=10 for tool-enabled context)
             options = ClaudeAgentOptions(max_turns=10, cwd=self.cwd, cli_path=CLAUDE_CLI_PATH)
 
-            # Set system prompt - CLAUDE AGENT SDK STRUCTURED FORMAT
+            # Set system prompt - CLAUDE AGENT SDK STRUCTURED FORMAT.
+            # An explicit caller-supplied prompt always wins. Without one, real
+            # Claude models get the claude_code preset; passthrough (non-Claude)
+            # models get a neutral prompt so the agentic preset does not prime
+            # tool calls they cannot fulfill (which trips the max_turns cap).
+            model_name = (claude_options or {}).get("model")
             if system_prompt:
                 options.system_prompt = {"type": "text", "text": system_prompt}
+            elif model_name and model_name in PASSTHROUGH_MODELS:
+                options.system_prompt = {"type": "text", "text": NEUTRAL_SYSTEM_PROMPT}
             else:
                 # Use Claude Code preset to maintain expected behavior
                 options.system_prompt = {"type": "preset", "preset": "claude_code"}

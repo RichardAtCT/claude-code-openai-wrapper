@@ -745,7 +745,9 @@ async def generate_streaming_response(
             # Disable all tools
             if active_cli == claude_cli:
                 options["disallowed_tools"] = CLAUDE_TOOLS
-                options["max_turns"] = 1  # Single turn for Q&A
+                # Leave max_turns at the SDK default: with all tools disallowed
+                # there is nothing to execute, and max_turns=1 turns a stray
+                # passthrough tool_use into a hard "maximum turns" error.
             logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
             # Enable tools
@@ -1066,7 +1068,9 @@ async def generate_anthropic_streaming_response(
         if not request.enable_tools:
             if active_cli == claude_cli:
                 options["disallowed_tools"] = CLAUDE_TOOLS
-                options["max_turns"] = 1
+                # Leave max_turns at the SDK default: with all tools disallowed
+                # there is nothing to execute, and max_turns=1 turns a stray
+                # passthrough tool_use into a hard "maximum turns" error.
         else:
             if active_cli == claude_cli:
                 options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
@@ -1316,7 +1320,9 @@ async def chat_completions(
                 # Disable all tools
                 if active_cli == claude_cli:
                     options["disallowed_tools"] = CLAUDE_TOOLS
-                    options["max_turns"] = 1  # Single turn for Q&A
+                    # Leave max_turns at the SDK default: with all tools disallowed
+                    # there is nothing to execute, and max_turns=1 turns a stray
+                    # passthrough tool_use into a hard "maximum turns" error.
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
                 # Enable tools
@@ -1492,7 +1498,9 @@ async def anthropic_messages(
         if not request_body.enable_tools:
             if active_cli == claude_cli:
                 options["disallowed_tools"] = CLAUDE_TOOLS
-                options["max_turns"] = 1
+                # Leave max_turns at the SDK default: with all tools disallowed
+                # there is nothing to execute, and max_turns=1 turns a stray
+                # passthrough tool_use into a hard "maximum turns" error.
         else:
             if active_cli == claude_cli:
                 options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
