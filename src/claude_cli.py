@@ -185,18 +185,30 @@ class ClaudeCodeCLI:
             # Build SDK options (default max_turns=10 for tool-enabled context)
             options = ClaudeAgentOptions(max_turns=10, cwd=self.cwd, cli_path=CLAUDE_CLI_PATH)
 
-            # Set system prompt - CLAUDE AGENT SDK STRUCTURED FORMAT.
+            # Set system prompt. Pass a plain string so the SDK emits
+            # --system-prompt <str>, which REPLACES the CLI default (the full
+            # claude_code agentic prompt — the bulk of the request tokens).
+            #
+            # SDK flag contract (subprocess_cli._build_command): only these shapes
+            # produce a flag — str -> --system-prompt; {"type":"file","path":...}
+            # -> --system-prompt-file; {"type":"preset",...,"append":...} ->
+            # --append-system-prompt. Any OTHER dict (including {"type":"text",...}
+            # and {"type":"preset","preset":"claude_code"} without "append") emits
+            # NO flag and silently falls back to the CLI default. So a literal text
+            # prompt MUST be a str, never a dict.
+            #
             # An explicit caller-supplied prompt always wins. Without one, real
-            # Claude models get the claude_code preset; passthrough (non-Claude)
-            # models get a neutral prompt so the agentic preset does not prime
+            # Claude models keep the claude_code default; passthrough (non-Claude)
+            # models get a neutral prompt so the agentic default does not prime
             # tool calls they cannot fulfill (which trips the max_turns cap).
             model_name = (claude_options or {}).get("model")
             if system_prompt:
-                options.system_prompt = {"type": "text", "text": system_prompt}
+                options.system_prompt = system_prompt
             elif model_name and model_name in PASSTHROUGH_MODELS:
-                options.system_prompt = {"type": "text", "text": NEUTRAL_SYSTEM_PROMPT}
+                options.system_prompt = NEUTRAL_SYSTEM_PROMPT
             else:
-                # Use Claude Code preset to maintain expected behavior
+                # preset dict without "append" is a recognized no-op that leaves
+                # the CLI default (claude_code) in place.
                 options.system_prompt = {"type": "preset", "preset": "claude_code"}
 
             # Handle session continuity

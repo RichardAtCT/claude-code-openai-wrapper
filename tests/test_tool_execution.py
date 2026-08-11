@@ -235,13 +235,16 @@ class TestSystemPromptRouting:
 
     @pytest.mark.asyncio
     async def test_passthrough_model_gets_neutral_prompt(self, cli_instance):
-        """A passthrough model (glm-5.2) with no system prompt gets the neutral prompt."""
+        """A passthrough model (glm-5.2) gets the neutral prompt as a plain str."""
         from src.claude_cli import NEUTRAL_SYSTEM_PROMPT
 
         captured = await self._capture(cli_instance, claude_options={"model": "glm-5.2"})
 
         assert len(captured) == 1
-        assert captured[0].system_prompt == {"type": "text", "text": NEUTRAL_SYSTEM_PROMPT}
+        # Must be a plain str, NOT a dict: the SDK only emits --system-prompt for
+        # str (and file/append-preset dict shapes). A {"type":"text",...} dict is
+        # ignored and silently falls back to the CLI default (system-prompt bloat).
+        assert captured[0].system_prompt == NEUTRAL_SYSTEM_PROMPT
 
     @pytest.mark.asyncio
     async def test_claude_model_keeps_claude_code_preset(self, cli_instance):
@@ -255,7 +258,7 @@ class TestSystemPromptRouting:
 
     @pytest.mark.asyncio
     async def test_explicit_system_prompt_wins(self, cli_instance):
-        """A caller-supplied system_prompt overrides model-based routing."""
+        """A caller-supplied system_prompt overrides model-based routing (as str)."""
         captured = await self._capture(
             cli_instance,
             system_prompt="Answer in haiku only.",
@@ -263,7 +266,49 @@ class TestSystemPromptRouting:
         )
 
         assert len(captured) == 1
-        assert captured[0].system_prompt == {"type": "text", "text": "Answer in haiku only."}
+        assert captured[0].system_prompt == "Answer in haiku only."
+
+
+class TestSystemPromptFlagContract:
+    """Lock the SDK CLI flag contract we depend on for system-prompt bloat.
+
+    The SDK's subprocess flag builder emits --system-prompt only for a plain str
+    (or --system-prompt-file / --append-system-preset for those specific dict
+    shapes). Any other dict — including {"type":"text",...} — emits no flag and
+    silently falls back to the CLI default (the full claude_code prompt). These
+    tests guard against re-introducing the dict form.
+    """
+
+    @staticmethod
+    def _cmd(system_prompt, **kwargs):
+        from claude_agent_sdk import ClaudeAgentOptions
+        from claude_agent_sdk._internal.transport.subprocess_cli import (
+            SubprocessCLITransport,
+        )
+
+        opts = ClaudeAgentOptions(
+            cli_path="/usr/local/bin/claude", system_prompt=system_prompt, **kwargs
+        )
+        return SubprocessCLITransport("hi", opts)._build_command()
+
+    def test_str_system_prompt_emits_flag(self):
+        cmd = self._cmd("You are a helpful assistant.")
+        i = cmd.index("--system-prompt")
+        assert cmd[i + 1] == "You are a helpful assistant."
+
+    def test_text_dict_is_ignored_by_sdk(self):
+        # Documents the bug we fixed: {"type":"text",...} produces NO flag.
+        cmd = self._cmd({"type": "text", "text": "You are a helpful assistant."})
+        assert "--system-prompt" not in cmd
+
+    def test_empty_tools_emits_empty_tools_flag(self):
+        cmd = self._cmd("x", tools=[])
+        i = cmd.index("--tools")
+        assert cmd[i + 1] == ""
+
+    def test_empty_setting_sources_emits_flag(self):
+        cmd = self._cmd("x", setting_sources=[])
+        assert any(f.startswith("--setting-sources") for f in cmd)
 
 
 if __name__ == "__main__":

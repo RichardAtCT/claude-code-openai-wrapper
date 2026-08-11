@@ -745,6 +745,8 @@ async def generate_streaming_response(
             # Disable all tools
             if active_cli == claude_cli:
                 options["disallowed_tools"] = CLAUDE_TOOLS
+                options["tools"] = []  # empty base set: no tool schemas sent to the model
+                options["setting_sources"] = []  # skip CLAUDE.md / memory injection
                 # Leave max_turns at the SDK default: with all tools disallowed
                 # there is nothing to execute, and max_turns=1 turns a stray
                 # passthrough tool_use into a hard "maximum turns" error.
@@ -1068,6 +1070,8 @@ async def generate_anthropic_streaming_response(
         if not request.enable_tools:
             if active_cli == claude_cli:
                 options["disallowed_tools"] = CLAUDE_TOOLS
+                options["tools"] = []  # empty base set: no tool schemas sent to the model
+                options["setting_sources"] = []  # skip CLAUDE.md / memory injection
                 # Leave max_turns at the SDK default: with all tools disallowed
                 # there is nothing to execute, and max_turns=1 turns a stray
                 # passthrough tool_use into a hard "maximum turns" error.
@@ -1320,6 +1324,8 @@ async def chat_completions(
                 # Disable all tools
                 if active_cli == claude_cli:
                     options["disallowed_tools"] = CLAUDE_TOOLS
+                    options["tools"] = []  # empty base set: no tool schemas sent to the model
+                    options["setting_sources"] = []  # skip CLAUDE.md / memory injection
                     # Leave max_turns at the SDK default: with all tools disallowed
                     # there is nothing to execute, and max_turns=1 turns a stray
                     # passthrough tool_use into a hard "maximum turns" error.
@@ -1498,6 +1504,8 @@ async def anthropic_messages(
         if not request_body.enable_tools:
             if active_cli == claude_cli:
                 options["disallowed_tools"] = CLAUDE_TOOLS
+                options["tools"] = []  # empty base set: no tool schemas sent to the model
+                options["setting_sources"] = []  # skip CLAUDE.md / memory injection
                 # Leave max_turns at the SDK default: with all tools disallowed
                 # there is nothing to execute, and max_turns=1 turns a stray
                 # passthrough tool_use into a hard "maximum turns" error.
