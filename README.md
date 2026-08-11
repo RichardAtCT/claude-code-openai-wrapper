@@ -1,6 +1,6 @@
 # Claude Code OpenAI API Wrapper
 
-An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Code with any OpenAI client library. **Now powered by the official Claude Agent SDK v0.1.18** with enhanced authentication and features.
+An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Code with any OpenAI client library. **Now powered by the official Claude Agent SDK v0.2.134+** with enhanced authentication and features.
 
 ## Version
 
@@ -27,7 +27,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 ## Status
 
 🎉 **Production Ready** - All core features working and tested:
-- ✅ Chat completions endpoint with **official Claude Agent SDK v0.1.18**
+- ✅ Chat completions endpoint with **official Claude Agent SDK v0.2.134+**
 - ✅ **Anthropic Messages API** (`/v1/messages`) for native compatibility
 - ✅ Streaming and non-streaming responses
 - ✅ Full OpenAI SDK compatibility
@@ -55,7 +55,7 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - Automatic model validation and selection
 
 ### 🛠 **Claude Agent SDK Integration**
-- **Official Claude Agent SDK** integration (v0.1.18) 🆕
+- **Official Claude Agent SDK** integration (v0.2.134+) 🆕
 - **Real-time cost tracking** - actual costs from SDK metadata
 - **Real token counting** - input/output tokens directly from SDK (no estimation)
 - **Accurate finish_reason** - mapped from SDK `stop_reason` (`end_turn` → `stop`, `max_tokens` → `length`)
@@ -134,7 +134,7 @@ poetry run python test_endpoints.py
      ```
    - **Option C**: Use AWS Bedrock or Google Vertex AI (see Configuration section)
 
-> **Note:** The Claude Code CLI is bundled with the SDK (v0.1.18+). No separate Node.js or npm installation required!
+> **Note:** The Claude Code CLI is bundled with the SDK (v0.2.134+). No separate Node.js or npm installation required!
 
 ## Installation
 
@@ -571,6 +571,30 @@ The wrapper exposes Claude's full model catalog. When `ANTHROPIC_API_KEY` is set
 
 **Note:** Claude 3.x models are not supported by the Claude Agent SDK. The model parameter is passed to Claude Code via the SDK's model selection.
 
+## Using non-Claude models via passthrough (e.g. GLM-5.2)
+
+The wrapper can serve any model that your Claude Code installation can reach,
+including non-Anthropic models such as **GLM-5.2**. The wrapper does not call
+the model provider directly — it forwards the model name to Claude Code, which
+must already be configured to reach the provider.
+
+**Prerequisite — point Claude Code at the provider.** Set these on the Claude
+Code process (your environment, not wrapper code):
+- `ANTHROPIC_BASE_URL` — your proxy that speaks the Anthropic API format and
+  forwards to the provider (e.g. a GLM endpoint).
+- `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` — the credential your proxy
+  requires, if any.
+
+**Use it through the wrapper.** Send the model name in the request:
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"glm-5.2","messages":[{"role":"user","content":"hello"}]}'
+```
+
+To make GLM the default, set `DEFAULT_MODEL=glm-5.2` for the wrapper. `glm-5.2`
+is advertised in `GET /v1/models`.
+
 ## Session Continuity 🆕
 
 The wrapper now supports **session continuity**, allowing you to maintain conversation context across multiple requests. This is a powerful feature that goes beyond the standard OpenAI API.
@@ -708,7 +732,7 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 - Tool Execution Fix: `enable_tools: true` now works correctly
 
 ### ✅ **v2.0.0 - v2.1.0 Features**
-- Claude Agent SDK v0.1.18 with bundled CLI
+- Claude Agent SDK v0.2.134+ with bundled CLI
 - Multi-provider auth (CLI, API key, Bedrock, Vertex AI)
 - Session continuity and management
 - System prompt support
