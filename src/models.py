@@ -22,26 +22,44 @@ def get_default_model():
 class ContentPart(BaseModel):
     """Content part for multimodal messages (OpenAI format)."""
 
-    type: Literal["text"]
-    text: str
+    type: str
+    text: Optional[str] = None
+
+    model_config = {"extra": "ignore"}
 
 
 class Message(BaseModel):
-    role: Literal["system", "user", "assistant"]
-    content: Union[str, List[ContentPart]]
+    role: Literal["system", "user", "assistant", "tool"]
+    content: Optional[Union[str, List[Any]]] = None
     name: Optional[str] = None
+
+    model_config = {"extra": "ignore"}
 
     @model_validator(mode="after")
     def normalize_content(self):
         """Convert array content to string for Claude Code compatibility."""
+        if self.content is None:
+            self.content = ""
+            return self
+
         if isinstance(self.content, list):
             # Extract text from content parts and concatenate
             text_parts = []
             for part in self.content:
-                if isinstance(part, ContentPart) and part.type == "text":
+                if isinstance(part, ContentPart) and part.text:
                     text_parts.append(part.text)
-                elif isinstance(part, dict) and part.get("type") == "text":
-                    text_parts.append(part.get("text", ""))
+                elif isinstance(part, dict):
+                    if part.get("type") == "text" and part.get("text"):
+                        text_parts.append(part["text"])
+                    elif part.get("type") == "tool_result":
+                        # Extract text from tool result content
+                        inner = part.get("content", "")
+                        if isinstance(inner, str):
+                            text_parts.append(inner)
+                        elif isinstance(inner, list):
+                            for block in inner:
+                                if isinstance(block, dict) and block.get("text"):
+                                    text_parts.append(block["text"])
 
             # Join all text parts with newlines
             self.content = "\n".join(text_parts) if text_parts else ""
