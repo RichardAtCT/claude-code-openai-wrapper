@@ -21,6 +21,7 @@ Note:
 
 import os
 import tempfile
+from typing import Optional
 
 # Claude Agent SDK Tool Names
 # These are the built-in tools available in the Claude Agent SDK
@@ -62,55 +63,56 @@ DEFAULT_ALLOWED_TOOLS = [
 _disallowed_raw = os.getenv("DISALLOWED_TOOLS", "").strip()
 DEFAULT_DISALLOWED_TOOLS = [t.strip() for t in _disallowed_raw.split(",") if t.strip()]
 
-# Claude models exposed by /v1/models. Order matters — first entry is what
-# clients (e.g. Open WebUI) pick as the default.
-#
+# Claude Models
+# Static fallback models exposed by /v1/models and accepted by validation when
+# the live Anthropic Models API is unavailable or not configured.
 # NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x.
 #
-# The default list below is curated. If you just need to add or swap models
-# without a fork edit + image rebuild, set CLAUDE_MODELS_OVERRIDE to a
-# comma-separated list of slugs (e.g. in the Helm values):
-#   CLAUDE_MODELS_OVERRIDE=claude-opus-4-7,claude-sonnet-4-6,claude-haiku-4-5
-#
-# TODO: /v1/models returns this list verbatim instead of proxying
-# ${ANTHROPIC_BASE_URL}/v1/models. Future: proxy with a TTL cache and a
-# filter (OpenRouter returns ~100 models; we want id.startswith("anthropic/")),
-# falling back to this list when upstream is unreachable.
+# Operators can override the advertised model list without rebuilding the image:
+#   CLAUDE_MODELS_OVERRIDE=claude-sonnet-4-6,claude-opus-4-6
 DEFAULT_CLAUDE_MODELS = [
-    # Claude 4.7 Family (Latest - 2026) - RECOMMENDED
+    # Claude 4.7 Family (Latest) - RECOMMENDED
     "claude-opus-4-7",  # Most capable
     # Claude 4.6 Family
     "claude-opus-4-6",
-    "claude-sonnet-4-6",  # Best speed/intelligence balance; best coding model
+    "claude-sonnet-4-6",  # Recommended - best coding model
     # Claude 4.5 Family (Fall 2025)
-    "claude-opus-4-5-20250929",
-    "claude-sonnet-4-5-20250929",
-    "claude-haiku-4-5-20251001",  # Fastest, near-frontier
+    "claude-opus-4-5-20250929",  # Opus 4.5 - deep reasoning and coding
+    "claude-sonnet-4-5-20250929",  # Sonnet 4.5 - agents and coding
+    "claude-haiku-4-5-20251001",  # Fast and cheap
     # Claude 4.1
-    "claude-opus-4-1-20250805",
-    # Claude 4.0 Family (Original - May 2025)
-    "claude-opus-4-20250514",
-    "claude-sonnet-4-20250514",
-    # Claude 3.x Family - NOT SUPPORTED by Claude Agent SDK
-    # These models work with Anthropic API but NOT with Claude Code
-    # Uncomment only if using direct Anthropic API (not Claude Agent SDK)
-    # "claude-3-7-sonnet-20250219",
-    # "claude-3-5-sonnet-20241022",
-    # "claude-3-5-haiku-20241022",
+    "claude-opus-4-1-20250805",  # Upgraded Opus 4
 ]
 
 _models_override = os.getenv("CLAUDE_MODELS_OVERRIDE", "").strip()
 CLAUDE_MODELS = (
-    [m.strip() for m in _models_override.split(",") if m.strip()]
+    [model.strip() for model in _models_override.split(",") if model.strip()]
     if _models_override
     else DEFAULT_CLAUDE_MODELS
 )
 
-# Default model used when a request omits `model`. Overridable via env.
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "claude-sonnet-4-6")
+# Default model (recommended for most use cases)
+# DEFAULT_MODEL_ENV is the explicit operator override; when unset, the wrapper
+# resolves the latest Sonnet from Anthropic's live Models API at startup and
+# stores it in RESOLVED_DEFAULT_MODEL. DEFAULT_MODEL_FALLBACK is used until/if
+# that resolution succeeds.
+DEFAULT_MODEL_ENV: Optional[str] = os.getenv("DEFAULT_MODEL")
+DEFAULT_MODEL_FALLBACK = "claude-sonnet-4-6"
+DEFAULT_MODEL = DEFAULT_MODEL_ENV or DEFAULT_MODEL_FALLBACK
+RESOLVED_DEFAULT_MODEL: Optional[str] = None
 
-# Fast model (for speed/cost optimization). Overridable via env.
+# Fast model (for speed/cost optimization)
+# Can be overridden via FAST_MODEL environment variable
 FAST_MODEL = os.getenv("FAST_MODEL", "claude-haiku-4-5-20251001")
+
+# Anthropic Models API configuration for dynamically refreshing /v1/models
+ANTHROPIC_MODELS_URL = os.getenv("ANTHROPIC_MODELS_URL", "https://api.anthropic.com/v1/models")
+ANTHROPIC_VERSION = os.getenv("ANTHROPIC_VERSION", "2023-06-01")
+MODEL_LIST_CACHE_TTL_SECONDS = int(os.getenv("MODEL_LIST_CACHE_TTL_SECONDS", "3600"))
+# Shorter TTL applied when the live fetch fails so a transient blip doesn't
+# suppress live discovery for a full hour.
+MODEL_LIST_ERROR_TTL_SECONDS = int(os.getenv("MODEL_LIST_ERROR_TTL_SECONDS", "60"))
+MODEL_LIST_REQUEST_TIMEOUT_SECONDS = float(os.getenv("MODEL_LIST_REQUEST_TIMEOUT_SECONDS", "5"))
 
 # System Prompt Types
 SYSTEM_PROMPT_TYPE_TEXT = "text"

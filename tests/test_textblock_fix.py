@@ -17,7 +17,7 @@ def test_textblock_fix():
 
     # Simple request that should trigger Claude to respond with normal text
     request_data = {
-        "model": "claude-3-7-sonnet-20250219",
+        "model": "claude-sonnet-5",
         "messages": [{"role": "user", "content": "Hello! Can you briefly introduce yourself?"}],
         "max_tokens": 4096,
         "stream": True,

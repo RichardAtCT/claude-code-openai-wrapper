@@ -174,7 +174,7 @@ class CompatibilityReporter:
         if request.temperature != 1.0:
             report["unsupported_parameters"].append("temperature")
             report["suggestions"].append(
-                "Claude Code SDK does not support temperature control. Consider using different models for varied response styles (e.g., claude-3-5-haiku for more focused responses)."
+                "Claude Code SDK does not support temperature control. Consider using different models for varied response styles (e.g., claude-haiku-4-5 for more focused responses)."
             )
 
         if request.top_p != 1.0:

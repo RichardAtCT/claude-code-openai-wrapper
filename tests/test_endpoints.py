@@ -60,7 +60,7 @@ def test_chat_completion():
     print("\nTesting /v1/messages endpoint...")
     try:
         payload = {
-            "model": "claude-3-5-haiku-20241022",  # Use fastest model
+            "model": "claude-haiku-4-5",  # Use fastest model
             "messages": [
                 {
                     "role": "user",

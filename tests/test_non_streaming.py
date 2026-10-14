@@ -21,7 +21,7 @@ def test_non_streaming():
 
     # Simple request with streaming disabled
     request_data = {
-        "model": "claude-3-7-sonnet-20250219",
+        "model": "claude-sonnet-5",
         "messages": [{"role": "user", "content": "What is 2+2?"}],
         "max_tokens": MAX_TOKENS,
         "temperature": 0.0,

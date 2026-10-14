@@ -33,7 +33,7 @@ async def test_simple_query():
         async for message in query(
             prompt="Say 'Hello!' and nothing else.",
             options=ClaudeAgentOptions(
-                max_turns=1, model="claude-3-5-haiku-20241022"  # Fastest model for testing
+                max_turns=1, model="claude-haiku-4-5"  # Fastest model for testing
             ),
         ):
             messages.append(message)
