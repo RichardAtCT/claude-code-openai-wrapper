@@ -107,10 +107,63 @@ class ClaudeCodeCLI:
         session_id: Optional[str] = None,
         continue_session: bool = False,
         claude_options: Optional[Dict] = None,
+        fallback_prompt: Optional[str] = None,
+        session_store: Optional[Any] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Run Claude Agent using the Python SDK and yield response chunks."""
+        """Run Claude Agent using the Python SDK and yield response chunks.
+
+        When resuming `session_id` with a `fallback_prompt`, a resume that fails
+        before producing any output (e.g. the SDK session no longer exists) is
+        retried once as a fresh session with `fallback_prompt`.
+        """
+        if not session_id or fallback_prompt is None:
+            async for chunk in self._run_completion_inner(
+                prompt,
+                system_prompt,
+                stream,
+                session_id,
+                continue_session,
+                claude_options,
+                session_store,
+            ):
+                yield chunk
+            return
+
+        pending: List[Dict[str, Any]] = []
+        resumed = False
+        failed = False
+        gen = self._run_completion_inner(
+            prompt, system_prompt, stream, session_id, False, claude_options, session_store
+        )
+        try:
+            async for chunk in gen:
+                if resumed:
+                    yield chunk
+                elif chunk.get("is_error"):
+                    failed = True
+                    logger.warning(
+                        f"Resuming SDK session {session_id} failed "
+                        f"({chunk.get('error_message') or chunk.get('subtype')}); replaying history"
+                    )
+                    break
+                elif chunk.get("subtype") == "init":
+                    pending.append(chunk)
+                else:
+                    resumed = True
+                    for held in pending:
+                        yield held
+                    yield chunk
+        finally:
+            await gen.aclose()
+
+        if not failed:
+            if not resumed:
+                for held in pending:
+                    yield held
+            return
+
         async for chunk in self._run_completion_inner(
-            prompt, system_prompt, stream, session_id, continue_session, claude_options
+            fallback_prompt, system_prompt, stream, None, False, claude_options, session_store
         ):
             yield chunk
 
@@ -122,6 +175,7 @@ class ClaudeCodeCLI:
         session_id: Optional[str] = None,
         continue_session: bool = False,
         claude_options: Optional[Dict] = None,
+        session_store: Optional[Any] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Inner implementation of run_completion."""
 
@@ -148,6 +202,10 @@ class ClaudeCodeCLI:
             for key, value in (claude_options or {}).items():
                 if value is not None and hasattr(options, key):
                     setattr(options, key, value)
+
+            # Mirror transcripts to persistent storage so `resume` works after restarts
+            if session_store is not None:
+                options.session_store = session_store
 
             # Set authentication env vars directly on options (avoids os.environ mutation
             # and the serializing lock that came with it — requests are now fully concurrent)

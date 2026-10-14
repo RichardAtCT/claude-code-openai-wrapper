@@ -654,8 +654,9 @@ curl -X DELETE http://localhost:8000/v1/sessions/my-session
 
 - **Automatic Expiration**: Sessions expire after 1 hour of inactivity
 - **Streaming Support**: Session continuity works with both streaming and non-streaming requests
-- **Memory Persistence**: Full conversation history is maintained within the session
-- **Efficient Storage**: Only active sessions are kept in memory
+- **SQLite Persistence**: Sessions are stored in `SESSION_DB_PATH` (default `~/.claude-wrapper/sessions.db`) and survive restarts. Set `SESSION_DB_PATH=:memory:` to keep them in memory only. In Docker, mount a volume at the path to persist across container recreation.
+- **Native SDK Resume**: Each session is backed by a real Claude Agent SDK session. When a request's history extends the previous turn, the wrapper resumes that SDK session and sends only the new messages instead of replaying the whole conversation. SDK transcripts are mirrored into the same SQLite file, so resume works after a restart even with a fresh temp workspace.
+- **Automatic Fallback**: If the history was edited or regenerated, the system prompt changed, or the SDK session can't be resumed, the wrapper replays the full history into a fresh SDK session.
 
 ### Examples
 

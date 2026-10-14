@@ -2,8 +2,13 @@
 Pytest configuration and fixtures for claude-code-openai-wrapper tests.
 """
 
-import pytest
-import requests
+import os
+
+# Keep the global session manager off the real on-disk session database.
+os.environ.setdefault("SESSION_DB_PATH", ":memory:")
+
+import pytest  # noqa: E402
+import requests  # noqa: E402
 
 MAX_TOKENS = 4096
 

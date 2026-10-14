@@ -133,6 +133,12 @@ SESSION_MAX_AGE_MINUTES = 60
 # Security Configuration
 MAX_SESSIONS = int(os.getenv("MAX_SESSIONS", "1000"))
 MAX_SESSION_MESSAGES = int(os.getenv("MAX_SESSION_MESSAGES", "100"))
+# SQLite file holding wrapper sessions and mirrored Claude SDK transcripts, so
+# sessions (and native SDK resume) survive restarts. ":memory:" disables
+# persistence.
+SESSION_DB_PATH = os.path.expanduser(
+    os.getenv("SESSION_DB_PATH", os.path.join("~", ".claude-wrapper", "sessions.db"))
+)
 _trusted_proxies_raw = os.getenv("TRUSTED_PROXIES", "")
 TRUSTED_PROXIES = [p.strip() for p in _trusted_proxies_raw.split(",") if p.strip()]
 CLAUDE_CWD_ALLOWED_BASE = os.getenv("CLAUDE_CWD_ALLOWED_BASE", tempfile.gettempdir())

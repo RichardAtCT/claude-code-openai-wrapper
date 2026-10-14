@@ -7,7 +7,7 @@ import string
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional, AsyncGenerator, Dict, Any
+from typing import List, Optional, AsyncGenerator, Dict, Any, Tuple
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -52,7 +52,7 @@ from src.claude_cli import ClaudeCodeCLI
 from src.message_adapter import MessageAdapter
 from src.auth import verify_api_key, security, validate_claude_code_auth, get_claude_code_auth_info
 from src.parameter_validator import ParameterValidator, CompatibilityReporter
-from src.session_manager import session_manager, SessionLimitExceeded
+from src.session_manager import session_manager, Turn, SessionLimitExceeded
 from src.tool_manager import tool_manager
 from src.mcp_client import mcp_client, MCPServerConfig
 from src.rate_limiter import (
@@ -651,14 +651,20 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content=error_response)
 
 
-def get_prompt_messages(all_messages: List[Message], is_resuming: bool) -> List[Message]:
+def build_turn_prompt(turn: Turn, model: Optional[str]) -> Tuple[str, Optional[str], Optional[str]]:
     """
-    Get the messages to send as the prompt.
+    Build the prompt for a turn.
 
-    Wrapper-managed `session_id` values are not native Claude resume tokens,
-    so session continuity is preserved by replaying the full conversation history.
+    Returns (prompt, system_prompt, fallback_prompt). When resuming a native SDK
+    session, `prompt` holds only the new messages and `fallback_prompt` the full
+    history, used if the resume fails. The system prompt always comes from the
+    full history since every SDK call is configured from scratch.
     """
-    return all_messages
+    full_prompt, system_prompt = MessageAdapter.messages_to_prompt(turn.all_messages, model)
+    if turn.resume_id and turn.new_messages:
+        prompt, _ = MessageAdapter.messages_to_prompt(turn.new_messages, model)
+        return prompt, system_prompt, full_prompt
+    return full_prompt, system_prompt, None
 
 
 async def generate_streaming_response(
@@ -667,15 +673,11 @@ async def generate_streaming_response(
     """Generate SSE formatted streaming response."""
     try:
         # Process messages with session management
-        all_messages, actual_session_id = await session_manager.process_messages(
-            request.messages, request.session_id
-        )
+        turn = await session_manager.prepare_turn(request.messages, request.session_id)
+        actual_session_id = turn.session_id
 
-        # Only send last message if we are resuming an existing session
-        prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
-
-        # Convert messages to prompt (pass model for optimized formatting)
-        prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request.model)
+        # Convert messages to prompt (only new messages when resuming an SDK session)
+        prompt, system_prompt, fallback_prompt = build_turn_prompt(turn, request.model)
 
         # Add sampling instructions from temperature/top_p if present
         sampling_instructions = request.get_sampling_instructions()
@@ -721,8 +723,10 @@ async def generate_streaming_response(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 stream=True,
-                session_id=None,
+                session_id=turn.resume_id,
                 claude_options=options,
+                fallback_prompt=fallback_prompt,
+                session_store=session_manager.transcript_store if actual_session_id else None,
             )
 
             async for chunk in completion_gen:
@@ -866,7 +870,11 @@ async def generate_streaming_response(
             # Store in session if applicable
             if actual_session_id and assistant_content:
                 assistant_message = Message(role="assistant", content=assistant_content)
-                await session_manager.add_assistant_response(actual_session_id, assistant_message)
+                await session_manager.add_assistant_response(
+                    actual_session_id,
+                    assistant_message,
+                    sdk_session_id=claude_cli.extract_metadata(chunks_buffer).get("session_id"),
+                )
 
         # Extract real metadata (usage + stop_reason) from SDK messages
         metadata = claude_cli.extract_metadata(chunks_buffer)
@@ -935,15 +943,11 @@ async def generate_anthropic_streaming_response(
             messages = [Message(role="system", content=request.system)] + messages
 
         # Process messages with session management
-        all_messages, actual_session_id = await session_manager.process_messages(
-            messages, request.session_id
-        )
+        turn = await session_manager.prepare_turn(messages, request.session_id)
+        actual_session_id = turn.session_id
 
-        # Only send new messages if we are resuming an existing session
-        prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
-
-        # Convert messages to prompt (pass model for optimized formatting)
-        prompt, system_prompt = MessageAdapter.messages_to_prompt(prompt_messages, request.model)
+        # Convert messages to prompt (only new messages when resuming an SDK session)
+        prompt, system_prompt, fallback_prompt = build_turn_prompt(turn, request.model)
 
         # Add sampling instructions
         sampling_instructions = request.get_sampling_instructions()
@@ -1000,8 +1004,10 @@ async def generate_anthropic_streaming_response(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 stream=True,
-                session_id=None,
+                session_id=turn.resume_id,
                 claude_options=options,
+                fallback_prompt=fallback_prompt,
+                session_store=session_manager.transcript_store if actual_session_id else None,
             )
 
             async for chunk in completion_gen:
@@ -1083,7 +1089,11 @@ async def generate_anthropic_streaming_response(
             assistant_content = claude_cli.parse_claude_message(chunks_buffer)
             if actual_session_id and assistant_content:
                 assistant_message = Message(role="assistant", content=assistant_content)
-                await session_manager.add_assistant_response(actual_session_id, assistant_message)
+                await session_manager.add_assistant_response(
+                    actual_session_id,
+                    assistant_message,
+                    sdk_session_id=claude_cli.extract_metadata(chunks_buffer).get("session_id"),
+                )
 
         # Use real token counts from SDK metadata when available
         metadata = claude_cli.extract_metadata(chunks_buffer)
@@ -1181,21 +1191,18 @@ async def chat_completions(
         else:
             # Non-streaming response
             # Process messages with session management
-            all_messages, actual_session_id = await session_manager.process_messages(
+            turn = await session_manager.prepare_turn(
                 request_body.messages, request_body.session_id
             )
-
-            # Only send new messages if we are resuming an existing session
-            prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
+            actual_session_id = turn.session_id
 
             logger.info(
-                f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}, prompt_messages={len(prompt_messages)}"
+                f"Chat completion: session_id={actual_session_id}, "
+                f"total_messages={len(turn.all_messages)}, resume={turn.resume_id}"
             )
 
-            # Convert messages to prompt (pass model for optimized formatting)
-            prompt, system_prompt = MessageAdapter.messages_to_prompt(
-                prompt_messages, request_body.model
-            )
+            # Convert messages to prompt (only new messages when resuming an SDK session)
+            prompt, system_prompt, fallback_prompt = build_turn_prompt(turn, request_body.model)
 
             # Add sampling instructions from temperature/top_p if present
             sampling_instructions = request_body.get_sampling_instructions()
@@ -1208,6 +1215,8 @@ async def chat_completions(
 
             # Filter content
             prompt = MessageAdapter.filter_content(prompt)
+            if fallback_prompt:
+                fallback_prompt = MessageAdapter.filter_content(fallback_prompt)
             if system_prompt:
                 system_prompt = MessageAdapter.filter_content(system_prompt)
 
@@ -1242,8 +1251,10 @@ async def chat_completions(
                     prompt=prompt,
                     system_prompt=system_prompt,
                     stream=False,
-                    session_id=None,
+                    session_id=turn.resume_id,
                     claude_options=options,
+                    fallback_prompt=fallback_prompt,
+                    session_store=session_manager.transcript_store if actual_session_id else None,
                 )
 
                 async for chunk in completion_gen:
@@ -1263,7 +1274,11 @@ async def chat_completions(
             # Add assistant response to session if using session mode
             if actual_session_id:
                 assistant_message = Message(role="assistant", content=assistant_content)
-                await session_manager.add_assistant_response(actual_session_id, assistant_message)
+                await session_manager.add_assistant_response(
+                    actual_session_id,
+                    assistant_message,
+                    sdk_session_id=claude_cli.extract_metadata(chunks).get("session_id"),
+                )
 
             # Use real token counts from SDK metadata when available
             metadata = claude_cli.extract_metadata(chunks)
@@ -1371,17 +1386,11 @@ async def anthropic_messages(
             messages = [Message(role="system", content=request_body.system)] + messages
 
         # Process with session management
-        all_messages, actual_session_id = await session_manager.process_messages(
-            messages, request_body.session_id
-        )
+        turn = await session_manager.prepare_turn(messages, request_body.session_id)
+        actual_session_id = turn.session_id
 
-        # Only send new messages if we are resuming an existing session
-        prompt_messages = get_prompt_messages(all_messages, bool(actual_session_id))
-
-        # Convert to prompt (pass model for optimized formatting)
-        prompt, system_prompt = MessageAdapter.messages_to_prompt(
-            prompt_messages, request_body.model
-        )
+        # Convert messages to prompt (only new messages when resuming an SDK session)
+        prompt, system_prompt, fallback_prompt = build_turn_prompt(turn, request_body.model)
 
         # Add sampling instructions
         sampling_instructions = request_body.get_sampling_instructions()
@@ -1420,8 +1429,10 @@ async def anthropic_messages(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 stream=False,
-                session_id=None,
+                session_id=turn.resume_id,
                 claude_options=options,
+                fallback_prompt=fallback_prompt,
+                session_store=session_manager.transcript_store if actual_session_id else None,
             )
 
             async for chunk in completion_gen:
@@ -1439,7 +1450,11 @@ async def anthropic_messages(
         # Store in session
         if actual_session_id:
             assistant_message = Message(role="assistant", content=assistant_content)
-            await session_manager.add_assistant_response(actual_session_id, assistant_message)
+            await session_manager.add_assistant_response(
+                actual_session_id,
+                assistant_message,
+                sdk_session_id=claude_cli.extract_metadata(chunks).get("session_id"),
+            )
 
         # Use real token counts from metadata when available
         metadata = claude_cli.extract_metadata(chunks)
