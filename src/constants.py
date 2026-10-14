@@ -69,19 +69,26 @@ DEFAULT_DISALLOWED_TOOLS = [t.strip() for t in _disallowed_raw.split(",") if t.s
 # NOTE: Claude Agent SDK only supports Claude 4+ models, not Claude 3.x.
 #
 # Operators can override the advertised model list without rebuilding the image:
-#   CLAUDE_MODELS_OVERRIDE=claude-sonnet-4-6,claude-opus-4-6
+#   CLAUDE_MODELS_OVERRIDE=claude-opus-5-5,claude-sonnet-5-5
 DEFAULT_CLAUDE_MODELS = [
-    # Claude 4.7 Family (Latest) - RECOMMENDED
-    "claude-opus-4-7",  # Most capable
-    # Claude 4.6 Family
+    # Claude 5.5 Family (Latest) - RECOMMENDED
+    "claude-opus-5-5",  # Most capable Opus
+    "claude-sonnet-5-5",  # Best speed/intelligence balance
+    "claude-haiku-5-5",  # Fastest, cheapest
+    # Claude Fable 5.x (highest capability tier)
+    "claude-fable-5-1",
+    "claude-fable-5",
+    # Claude 5 Family
+    "claude-opus-5",
+    "claude-sonnet-5",
+    # Claude 4.x Family
+    "claude-opus-4-8",
+    "claude-opus-4-7",
     "claude-opus-4-6",
-    "claude-sonnet-4-6",  # Recommended - best coding model
-    # Claude 4.5 Family (Fall 2025)
-    "claude-opus-4-5-20250929",  # Opus 4.5 - deep reasoning and coding
-    "claude-sonnet-4-5-20250929",  # Sonnet 4.5 - agents and coding
-    "claude-haiku-4-5-20251001",  # Fast and cheap
-    # Claude 4.1
-    "claude-opus-4-1-20250805",  # Upgraded Opus 4
+    "claude-sonnet-4-6",
+    "claude-opus-4-5",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
 ]
 
 _models_override = os.getenv("CLAUDE_MODELS_OVERRIDE", "").strip()
@@ -97,13 +104,13 @@ CLAUDE_MODELS = (
 # stores it in RESOLVED_DEFAULT_MODEL. DEFAULT_MODEL_FALLBACK is used until/if
 # that resolution succeeds.
 DEFAULT_MODEL_ENV: Optional[str] = os.getenv("DEFAULT_MODEL")
-DEFAULT_MODEL_FALLBACK = "claude-sonnet-4-6"
+DEFAULT_MODEL_FALLBACK = "claude-sonnet-5-5"
 DEFAULT_MODEL = DEFAULT_MODEL_ENV or DEFAULT_MODEL_FALLBACK
 RESOLVED_DEFAULT_MODEL: Optional[str] = None
 
 # Fast model (for speed/cost optimization)
 # Can be overridden via FAST_MODEL environment variable
-FAST_MODEL = os.getenv("FAST_MODEL", "claude-haiku-4-5-20251001")
+FAST_MODEL = os.getenv("FAST_MODEL", "claude-haiku-5-5")
 
 # Anthropic Models API configuration for dynamically refreshing /v1/models
 ANTHROPIC_MODELS_URL = os.getenv("ANTHROPIC_MODELS_URL", "https://api.anthropic.com/v1/models")

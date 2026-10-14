@@ -609,36 +609,23 @@ class TestClaude46ModelSupport:
             f"Current models: {CLAUDE_MODELS}"
         )
 
-    def test_default_model_is_4_6_family(self):
-        """FR-11.2: DEFAULT_MODEL resolves to a 4.6 model when env var is not set.
-
-        The default (env-unset) value must contain '4-6' so that clients
-        automatically use the new model generation without additional config.
-        """
+    def test_default_model_is_sonnet_5_5(self):
+        """DEFAULT_MODEL falls back to the current Sonnet when the env var is not set."""
         import os
 
-        # Only meaningful when DEFAULT_MODEL env var is not overridden by caller.
-        # We test the hardcoded fallback, not the os.getenv result, by importing
-        # the raw default from the module source via the already-imported constant.
-        # If the operator has set DEFAULT_MODEL in their environment this test
-        # is skipped so it doesn't false-positive against a deliberate override.
-        env_override = os.environ.get("DEFAULT_MODEL")
-        if env_override is not None:
+        if os.environ.get("DEFAULT_MODEL") is not None:
             pytest.skip("DEFAULT_MODEL env var is set; skipping hardcoded-default check")
 
-        assert "4-6" in DEFAULT_MODEL, (
-            f"DEFAULT_MODEL should contain '4-6' when no env var is set. " f"Got: '{DEFAULT_MODEL}'"
-        )
+        assert DEFAULT_MODEL == "claude-sonnet-5-5"
 
-    def test_fast_model_is_haiku_4_5(self):
-        """FR-11.2 (stability): FAST_MODEL remains claude-haiku-4-5 after the upgrade.
+    def test_fast_model_is_haiku_5_5(self):
+        """FAST_MODEL defaults to the current Haiku."""
+        import os
 
-        The fast/cheap model alias must not silently change — consumers who
-        opt into FAST_MODEL for speed/cost reasons depend on it staying haiku-4-5.
-        """
-        assert (
-            "haiku-4-5" in FAST_MODEL
-        ), f"FAST_MODEL must still be the haiku-4-5 variant. Got: '{FAST_MODEL}'"
+        if os.environ.get("FAST_MODEL") is not None:
+            pytest.skip("FAST_MODEL env var is set; skipping hardcoded-default check")
+
+        assert FAST_MODEL == "claude-haiku-5-5"
 
     def test_constants_module_docstring_references_4_6_family(self):
         """FR-11.3: constants.py module-level comments/docstring reference 4.6 models.

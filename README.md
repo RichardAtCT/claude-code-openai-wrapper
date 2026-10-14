@@ -11,9 +11,9 @@ An OpenAI API-compatible wrapper for Claude Code, allowing you to use Claude Cod
 - **Async session manager:** `threading.Lock` replaced with `asyncio.Lock` for proper async safety
 - **SDK options refactor:** `run_completion` simplified to accept a `claude_options` dict, enabling generic passthrough of any SDK field
 - **Live `/v1/models` discovery:** When `ANTHROPIC_API_KEY` is set, the wrapper fetches Anthropic's live model list (cached) instead of serving the static fallback
-- **Dynamic default Sonnet:** `DEFAULT_MODEL` resolves to the latest Sonnet at startup when `ANTHROPIC_API_KEY` is configured; falls back to `claude-sonnet-4-6` otherwise
+- **Dynamic default Sonnet:** `DEFAULT_MODEL` resolves to the latest Sonnet at startup when `ANTHROPIC_API_KEY` is configured; falls back to `claude-sonnet-5-5` otherwise
 - **Operator overrides:** New `CLAUDE_MODELS_OVERRIDE`, `FAST_MODEL`, and `MODEL_LIST_*` env vars
-- **Updated catalog:** Claude 4.6 family added to the static fallback list
+- **Updated catalog:** static fallback list covers the Claude 5.5, Fable 5.x, 5 and 4.x families
 
 **Upgrading from v2.2.0:**
 1. Pull latest code: `git pull origin main`
@@ -292,7 +292,7 @@ RATE_LIMIT_HEALTH_PER_MINUTE=30
 1. Verify Claude Code is installed and working:
    ```bash
    claude --version
-   claude --print --model claude-haiku-4-5-20251001 "Hello"  # Test with fastest model
+   claude --print --model claude-haiku-5-5 "Hello"  # Test with fastest model
    ```
 
 2. Start the server:
@@ -380,8 +380,8 @@ Run: `docker-compose up -d` | Stop: `docker-compose down`
 | `CLAUDE_AUTH_METHOD` | Auth method: `cli`, `api_key`, `bedrock`, `vertex` | auto-detect |
 | `ANTHROPIC_API_KEY` | Direct Anthropic API key. Optional — also unlocks live `/v1/models` discovery and dynamic latest-Sonnet default. Not required when using Bedrock, Vertex, or Claude CLI subscription auth. | - |
 | `API_KEYS` | Comma-separated client API keys | - |
-| `DEFAULT_MODEL` | Override the default model. When unset and `ANTHROPIC_API_KEY` is configured, the wrapper resolves the latest Sonnet at startup; otherwise falls back to `claude-sonnet-4-6`. | auto |
-| `FAST_MODEL` | Speed/cost-optimized model alias. | `claude-haiku-4-5-20251001` |
+| `DEFAULT_MODEL` | Override the default model. When unset and `ANTHROPIC_API_KEY` is configured, the wrapper resolves the latest Sonnet at startup; otherwise falls back to `claude-sonnet-5-5`. | auto |
+| `FAST_MODEL` | Speed/cost-optimized model alias. | `claude-haiku-5-5` |
 | `CLAUDE_MODELS_OVERRIDE` | Comma-separated model IDs to advertise via `/v1/models`. Takes precedence over both live and static lists. | - |
 | `MODEL_LIST_CACHE_TTL_SECONDS` | Cache TTL for live `/v1/models` results. | `3600` |
 | `MODEL_LIST_ERROR_TTL_SECONDS` | Short cache TTL applied when the live fetch fails, so transient outages don't suppress live discovery for the full hour. | `60` |
@@ -412,7 +412,7 @@ curl http://localhost:8000/v1/models
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-sonnet-4-6",
+    "model": "claude-sonnet-5-5",
     "messages": [
       {"role": "user", "content": "What is 2 + 2?"}
     ]
@@ -423,7 +423,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-generated-api-key" \
   -d '{
-    "model": "claude-sonnet-4-6",
+    "model": "claude-sonnet-5-5",
     "messages": [
       {"role": "user", "content": "Write a Python hello world script"}
     ],
@@ -447,7 +447,7 @@ client = OpenAI(
 
 # Basic chat completion
 response = client.chat.completions.create(
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What files are in the current directory?"}
@@ -459,7 +459,7 @@ print(response.choices[0].message.content)
 
 # Enable tools when you need them (e.g., to read files)
 response = client.chat.completions.create(
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     messages=[
         {"role": "user", "content": "What files are in the current directory?"}
     ],
@@ -474,7 +474,7 @@ print(f"Tokens: {response.usage.total_tokens} ({response.usage.prompt_tokens} + 
 
 # Streaming
 stream = client.chat.completions.create(
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     messages=[
         {"role": "user", "content": "Explain quantum computing"}
     ],
@@ -496,7 +496,7 @@ Controls the depth of Claude's thinking. Maps to the SDK `effort` field.
 
 ```python
 response = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-5-5",
     messages=[{"role": "user", "content": "Solve this math problem..."}],
     extra_body={"reasoning_effort": "high"}  # "low" | "medium" | "high"
 )
@@ -508,7 +508,7 @@ Request structured output. Passed through as SDK `output_format`.
 
 ```python
 response = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-5-5",
     messages=[{"role": "user", "content": "Return JSON with name and age fields."}],
     extra_body={"response_format": {"type": "json_object"}}
 )
@@ -520,7 +520,7 @@ Explicit thinking configuration — takes precedence over the `max_tokens → ma
 
 ```python
 response = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-5-5",
     messages=[{"role": "user", "content": "Hard reasoning task"}],
     extra_body={"thinking": {"type": "enabled", "budget_tokens": 8000}}
 )
@@ -533,7 +533,7 @@ Cap per-request cost in USD. The SDK will stop generation when the budget is rea
 
 ```python
 response = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-5-5",
     messages=[{"role": "user", "content": "Long task..."}],
     extra_body={"max_budget_usd": 0.05}  # stop at $0.05
 )
@@ -545,7 +545,7 @@ Maps to the SDK's `max_thinking_tokens` (best-effort). For precise control use `
 
 ```python
 response = client.chat.completions.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-5-5",
     messages=[{"role": "user", "content": "Brief answer please"}],
     max_tokens=512
 )
@@ -553,19 +553,19 @@ response = client.chat.completions.create(
 
 ## Supported Models
 
-The wrapper exposes Claude's full model catalog. When `ANTHROPIC_API_KEY` is set, `/v1/models` returns Anthropic's live list (cached for 1 hour) and the wrapper picks the latest Sonnet as `DEFAULT_MODEL` at startup. When the key is absent — for example, when running with Bedrock, Vertex, or Claude CLI subscription auth — the static list below is served and `claude-sonnet-4-6` is used as the fallback default. Operators who want a curated list regardless of auth can set `CLAUDE_MODELS_OVERRIDE`.
+The wrapper exposes Claude's full model catalog. When `ANTHROPIC_API_KEY` is set, `/v1/models` returns Anthropic's live list (cached for 1 hour) and the wrapper picks the latest Sonnet as `DEFAULT_MODEL` at startup. When the key is absent — for example, when running with Bedrock, Vertex, or Claude CLI subscription auth — the static list below is served and `claude-sonnet-5-5` is used as the fallback default. Operators who want a curated list regardless of auth can set `CLAUDE_MODELS_OVERRIDE`.
 
-### Claude 4.6 Family (Latest)
-- **`claude-opus-4-6`** 🎯 Most capable
-- **`claude-sonnet-4-6`** ⭐ Recommended — best coding model
+### Claude 5.5 Family (Latest)
+- **`claude-opus-5-5`** 🎯 Most capable Opus
+- **`claude-sonnet-5-5`** ⭐ Recommended: best speed/intelligence balance
+- **`claude-haiku-5-5`** ⚡ Fast & cheap
 
-### Claude 4.5 Family (Fall 2025)
-- `claude-opus-4-5-20250929` — deep reasoning and coding
-- `claude-sonnet-4-5-20250929` — agents and coding
-- **`claude-haiku-4-5-20251001`** ⚡ Fast & cheap
+### Claude Fable 5.x (highest capability tier)
+- `claude-fable-5-1`, `claude-fable-5`
 
-### Claude 4.1 Family
-- `claude-opus-4-1-20250805` — upgraded Opus 4
+### Older, still served
+- Claude 5: `claude-opus-5`, `claude-sonnet-5`
+- Claude 4.x: `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-opus-4-5`, `claude-sonnet-4-5`, `claude-haiku-4-5`
 
 **Note:** Claude 3.x models are not supported by the Claude Agent SDK. The model parameter is passed to Claude Code via the SDK's model selection.
 
@@ -590,7 +590,7 @@ client = openai.OpenAI(
 
 # Start a conversation with session continuity
 response1 = client.chat.completions.create(
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     messages=[
         {"role": "user", "content": "Hello! My name is Alice and I'm learning Python."}
     ],
@@ -599,7 +599,7 @@ response1 = client.chat.completions.create(
 
 # Continue the conversation - Claude remembers the context
 response2 = client.chat.completions.create(
-    model="claude-sonnet-4-6",
+    model="claude-sonnet-5-5",
     messages=[
         {"role": "user", "content": "What's my name and what am I learning?"}
     ],
@@ -615,7 +615,7 @@ response2 = client.chat.completions.create(
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-sonnet-4-6",
+    "model": "claude-sonnet-5-5",
     "messages": [{"role": "user", "content": "My favourite color is blue."}],
     "session_id": "my-session"
   }'
@@ -624,7 +624,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-sonnet-4-6",
+    "model": "claude-sonnet-5-5",
     "messages": [{"role": "user", "content": "What's my favourite color?"}],
     "session_id": "my-session"
   }'
@@ -724,7 +724,7 @@ See `examples/session_continuity.py` for comprehensive Python examples and `exam
 2. **Authentication errors**:
    ```bash
    # Test authentication with fastest model
-   claude --print --model claude-haiku-4-5-20251001 "Hello"
+   claude --print --model claude-haiku-5-5 "Hello"
    # If this fails, re-authenticate if needed
    ```
 

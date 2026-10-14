@@ -3,6 +3,7 @@ Parameter validation and mapping utilities for OpenAI to Claude Code SDK convers
 """
 
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from src.models import ChatCompletionRequest
 from src.constants import CLAUDE_MODELS
@@ -21,13 +22,19 @@ class ParameterValidator:
 
     @classmethod
     def is_model_recognized(cls, model: str) -> bool:
-        """Check if a model is in the known supported models list."""
-        return model in cls.SUPPORTED_MODELS
+        """Check if a model is in the known supported models list.
+
+        Dated snapshots of a listed alias (e.g. `claude-sonnet-4-5-20250929` for
+        `claude-sonnet-4-5`) count as recognized.
+        """
+        return model in cls.SUPPORTED_MODELS or (
+            re.sub(r"-\d{8}$", "", model) in cls.SUPPORTED_MODELS
+        )
 
     @classmethod
     def validate_model(cls, model: str) -> bool:
         """Validate that the model is supported by Claude Code SDK."""
-        if model not in cls.SUPPORTED_MODELS:
+        if not cls.is_model_recognized(model):
             logger.warning(
                 f"Model '{model}' is not in the known supported models list. It will still be attempted but may fail. Supported models: {sorted(cls.SUPPORTED_MODELS)}"
             )
