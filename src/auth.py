@@ -3,10 +3,8 @@ import logging
 from typing import Optional, Dict, Any, Tuple
 from fastapi import HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
-load_dotenv()
 
 
 class ClaudeCodeAuthManager:

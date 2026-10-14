@@ -17,7 +17,6 @@ from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 import httpx
-from dotenv import load_dotenv
 
 from src.models import (
     ChatCompletionRequest,
@@ -77,8 +76,6 @@ from src.constants import (
 )
 from src import __version__
 
-# Load environment variables
-load_dotenv()
 
 # Configure logging based on debug mode
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() in ("true", "1", "yes", "on")
