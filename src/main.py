@@ -68,6 +68,7 @@ from src.constants import (
     CLAUDE_MODELS,
     CLAUDE_TOOLS,
     DEFAULT_ALLOWED_TOOLS,
+    DEFAULT_DISALLOWED_TOOLS,
     DEFAULT_MODEL,
     DEFAULT_MODEL_FALLBACK,
     MODEL_LIST_CACHE_TTL_SECONDS,
@@ -664,6 +665,30 @@ def build_turn_prompt(turn: Turn, model: Optional[str]) -> Tuple[str, Optional[s
     return full_prompt, system_prompt, None
 
 
+def apply_tool_options(options: Dict[str, Any], enable_tools: Optional[bool]) -> None:
+    """
+    Configure tool access on SDK options already merged with X-Claude-* headers.
+
+    With tools disabled, Q&A mode is forced and headers cannot re-enable tools.
+    With tools enabled, the X-Claude-Allowed-Tools, X-Claude-Disallowed-Tools and
+    X-Claude-Permission-Mode headers take precedence over the defaults.
+    """
+    if not enable_tools:
+        options["disallowed_tools"] = CLAUDE_TOOLS
+        options["max_turns"] = 1
+        logger.info("Tools disabled (default behavior for OpenAI compatibility)")
+        return
+    options.setdefault("allowed_tools", list(DEFAULT_ALLOWED_TOOLS))
+    options.setdefault("disallowed_tools", list(DEFAULT_DISALLOWED_TOOLS))
+    # Bypass prompts by default (required for API/headless usage)
+    options.setdefault("permission_mode", "bypassPermissions")
+    logger.info(
+        f"Tools enabled: allowed={options['allowed_tools']}, "
+        f"disallowed={options['disallowed_tools']}, "
+        f"permission_mode={options['permission_mode']}"
+    )
+
+
 async def generate_streaming_response(
     request: ChatCompletionRequest, request_id: str, claude_headers: Optional[Dict[str, Any]] = None
 ) -> AsyncGenerator[str, None]:
@@ -696,18 +721,7 @@ async def generate_streaming_response(
         if options.get("model"):
             ParameterValidator.validate_model(options["model"])
 
-        # Handle tools
-        if not request.enable_tools:
-            # Disable all tools
-            options["disallowed_tools"] = CLAUDE_TOOLS
-            options["max_turns"] = 1  # Single turn for Q&A
-            logger.info("Tools disabled (default behavior for OpenAI compatibility)")
-        else:
-            # Enable tools
-            options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
-            # Set permission mode to bypass prompts (required for API/headless usage)
-            options["permission_mode"] = "bypassPermissions"
-            logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
+        apply_tool_options(options, request.enable_tools)
 
         # Run CLI
         chunks_buffer = []
@@ -963,13 +977,7 @@ async def generate_anthropic_streaming_response(
         if options.get("model"):
             ParameterValidator.validate_model(options["model"])
 
-        # Configure tools
-        if not request.enable_tools:
-            options["disallowed_tools"] = CLAUDE_TOOLS
-            options["max_turns"] = 1
-        else:
-            options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
-            options["permission_mode"] = "bypassPermissions"
+        apply_tool_options(options, request.enable_tools)
 
         # Emit message_start
         start_event = AnthropicMessageStartEvent(
@@ -1228,16 +1236,7 @@ async def chat_completions(
             if options.get("model"):
                 ParameterValidator.validate_model(options["model"])
 
-            # Handle tools
-            if not request_body.enable_tools:
-                options["disallowed_tools"] = CLAUDE_TOOLS
-                options["max_turns"] = 1  # Single turn for Q&A
-                logger.info("Tools disabled (default behavior for OpenAI compatibility)")
-            else:
-                options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
-                # Set permission mode to bypass prompts (required for API/headless usage)
-                options["permission_mode"] = "bypassPermissions"
-                logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
+            apply_tool_options(options, request_body.enable_tools)
 
             # Collect all chunks
             chunks = []
@@ -1406,13 +1405,7 @@ async def anthropic_messages(
         if options.get("model"):
             ParameterValidator.validate_model(options["model"])
 
-        # Configure tools
-        if not request_body.enable_tools:
-            options["disallowed_tools"] = CLAUDE_TOOLS
-            options["max_turns"] = 1
-        else:
-            options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
-            options["permission_mode"] = "bypassPermissions"
+        apply_tool_options(options, request_body.enable_tools)
 
         # Run CLI
         print(
