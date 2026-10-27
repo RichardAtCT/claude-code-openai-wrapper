@@ -5,6 +5,21 @@ All notable changes to the Claude Code OpenAI Wrapper project will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.2] - 2026-10-27
+
+### Fixed
+
+- Chat messages from agentic clients no longer fail with 422. Content arrays
+  may carry `tool_use`, `tool_result` and image parts next to text; the
+  non-text parts are accepted and skipped, and the text inside a
+  `tool_result` is kept. Ported from #41.
+
+### Security
+
+- `mcp` raised to 1.30.0 for GHSA-84m7-p3x7-pcfv (unbounded session
+  accumulation in the StreamableHTTP transport). `anyio`, `pyjwt` and
+  `urllib3` moved to their current releases in the same lock refresh.
+
 ## [2.13.1] - 2026-10-10
 
 ### Fixed

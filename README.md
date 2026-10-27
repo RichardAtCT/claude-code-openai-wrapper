@@ -125,7 +125,7 @@ docker run -d -p 8000:8000 \
 docker run -d -p 8000:8000 \
   -v ~/.claude:/root/.claude \
   --name claude-wrapper \
-  ttlequals0/claude-code-openai-wrapper:2.13.1
+  ttlequals0/claude-code-openai-wrapper:2.13.2
 
 # Or build locally (prod stage is the default target)
 docker build --platform linux/amd64 -t claude-wrapper:local .
