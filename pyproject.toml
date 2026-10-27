@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "claude-code-openai-wrapper"
-version = "2.13.1"
+version = "2.13.2"
 description = "OpenAI API-compatible wrapper for Claude Code"
 authors = ["Richard Atkinson <richardatk01@gmail.com>"]
 readme = "README.md"
@@ -52,7 +52,8 @@ slowapi = "^0.1.9"
 #   JWS payloads bypass payload-size limits, medium). Transitive via authlib.
 #   Dependabot #25.
 # - Authlib: via claude-agent-sdk
-# - mcp: >=1.28.1 closes Dependabot #26-28 (GHSA-hvrp-rf83-w775,
+# - mcp: >=1.30.0 closes Dependabot #55 (GHSA-84m7-p3x7-pcfv, unbounded
+#   StreamableHTTP sessions) on top of #26-28 (GHSA-hvrp-rf83-w775,
 #   GHSA-jpw9-pfvf-9f58, GHSA-vj7q-gjh5-988w)
 # - nltk: gone from the graph since 2.12.0, when the unused dev-only `safety`
 #   (its only parent) was dropped. CI scans deps with pip-audit.
@@ -66,7 +67,7 @@ cryptography = ">=50.0.0"
 pyjwt = ">=2.14.0"
 joserfc = ">=1.6.7"
 authlib = ">=1.6.9"
-mcp = ">=1.28.1"
+mcp = ">=1.30.0,<2.0.0"
 anyio = ">=4.14.2"
 
 [tool.poetry.group.dev.dependencies]
